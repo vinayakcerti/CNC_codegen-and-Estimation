@@ -18,7 +18,7 @@ from modules.operation_planner import plan_operations
 from modules.time_estimator import estimate_time
 from modules.gcode_generator import generate_gcode
 from modules.visual_preview import build_top_view, build_3d_view
-from modules.step_parser import parse_step_bounding_box, parse_step_geometry
+from modules.step_parser import parse_step_bounding_box, parse_step_geometry, parse_step_auto
 from modules.setup_sheet import generate_setup_sheet
 from modules.speeds_feeds import (
     material_list, coating_list, get_vc_range, get_chip_load_range,
@@ -197,7 +197,7 @@ def page_upload_step():
         col_info2.info(f"Size: **{len(file_bytes) / 1024:.1f} KB**")
 
         with st.spinner("Parsing STEP file geometry..."):
-            parse_result = parse_step_bounding_box(file_bytes)
+            parse_result = parse_step_auto(file_bytes)
             geo_result   = parse_step_geometry(file_bytes)
 
         if parse_result["success"]:
@@ -227,6 +227,9 @@ def page_upload_step():
                 )
             for w in r.get("warnings", []):
                 st.warning(w)
+            cadquery_warning = r.get("cadquery_warning")
+            if cadquery_warning:
+                st.warning(f"**CadQuery fallback:** {cadquery_warning}")
         else:
             st.warning(f"**STEP parse failed:** {parse_result['message']}")
             detail     = parse_result.get("detail")
@@ -313,19 +316,26 @@ def page_upload_step():
         st.dataframe(pd.DataFrame(range_data), use_container_width=True, hide_index=True)
 
         # Summary strip
-        u_col1, u_col2, u_col3 = st.columns(3)
-        u_col1.metric("Points Parsed", f"{r['point_count']:,}")
+        u_col1, u_col2, u_col3, u_col4 = st.columns(4)
+        _pt_count = r.get("point_count")
+        u_col1.metric(
+            "Points Parsed",
+            f"{_pt_count:,}" if _pt_count is not None else "N/A",
+        )
         u_col2.metric("Detected Units", r["detected_unit_label"].split("(")[0].strip())
         u_col3.metric(
             "Conversion Factor",
             f"× {r['conversion_factor']}" if r["converted"] else "None (already mm)",
         )
+        u_col4.metric("Parser", r.get("parser_used", "lightweight"))
 
-        st.caption(
-            f"Detection method: {r['detection_method']}. "
-            "Part volume is estimated as 60 % of bounding-box volume — "
-            "adjust if your part has significantly different geometry."
+        _vol_note = (
+            "Real part volume from CadQuery/OCC solid geometry."
+            if r.get("parser_used") == "cadquery"
+            else "Part volume estimated as 60 % of bounding-box volume — "
+                 "adjust if your part has significantly different geometry."
         )
+        st.caption(f"Detection method: {r['detection_method']}. {_vol_note}")
 
     st.session_state.stock = stock
 
