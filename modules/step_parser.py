@@ -1,5 +1,20 @@
 import re
 import math
+import os
+import tempfile
+
+# ---------------------------------------------------------------------------
+# Optional CadQuery import — must not raise if cadquery is not installed
+# ---------------------------------------------------------------------------
+
+try:
+    import cadquery as cq
+    _CADQUERY_AVAILABLE = True
+except ImportError:
+    _CADQUERY_AVAILABLE = False
+except Exception:
+    # Catch any other import-time error (e.g. missing OCC shared libs)
+    _CADQUERY_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Unit detection helpers
@@ -461,3 +476,139 @@ def parse_step_geometry(file_bytes: bytes) -> dict:
         "circle_count": len(circle_traces),
         "factor": factor,
     }
+
+
+# ---------------------------------------------------------------------------
+# CadQuery-based bounding box + volume parser (optional — requires cadquery)
+# ---------------------------------------------------------------------------
+
+def parse_step_with_cadquery(file_path: str) -> dict:
+    """
+    Parse a STEP file using CadQuery / OpenCASCADE.
+
+    Returns a dict with the same keys expected by app.py from
+    parse_step_bounding_box, plus parser_used and removed_volume_cm3.
+    Does NOT catch exceptions — callers handle fallback.
+
+    Requires: cadquery installed (not in requirements.txt for Cloud deploy).
+    Units: OCC always works in mm for STEP, so no unit conversion is needed.
+    """
+    import cadquery as cq  # local import to make the dependency explicit
+
+    result = cq.importers.importStep(file_path)
+    bb = result.val().BoundingBox()
+
+    length = round(bb.xmax - bb.xmin, 3)
+    width  = round(bb.ymax - bb.ymin, 3)
+    height = round(bb.zmax - bb.zmin, 3)
+
+    if length < 0.001 and width < 0.001 and height < 0.001:
+        raise ValueError(
+            f"CadQuery bounding box is effectively zero: "
+            f"{length} × {width} × {height} mm. "
+            "The file may be empty or contain only 2D geometry."
+        )
+
+    stock_vol_cm3 = round(length * width * height / 1000.0, 3)
+
+    warnings = []
+
+    # Real solid volume — OCC returns mm³; zero means a surface shell, not a solid
+    raw_vol_mm3 = result.val().Volume()
+    part_vol_cm3 = round(raw_vol_mm3 / 1000.0, 3)
+
+    if part_vol_cm3 <= 0:
+        part_vol_cm3 = round(stock_vol_cm3 * 0.60, 3)
+        warnings.append(
+            "CadQuery reported zero part volume — the file may be a surface/shell "
+            "model rather than a closed solid. "
+            f"Part volume estimated as 60% of bounding box ({part_vol_cm3} cm³). "
+            "Adjust manually if your part geometry is significantly different."
+        )
+
+    removed_vol_cm3 = round(max(stock_vol_cm3 - part_vol_cm3, 0.0), 3)
+
+    message = (
+        f"CadQuery parsed: {length} × {width} × {height} mm · "
+        f"Stock {stock_vol_cm3} cm³ · Part {part_vol_cm3} cm³ · "
+        f"Removed {removed_vol_cm3} cm³."
+    )
+
+    return {
+        "success": True,
+        "message": message,
+        "parser_used": "cadquery",
+        # Core dimensions
+        "length_mm": length,
+        "width_mm":  width,
+        "height_mm": height,
+        # Volumes
+        "stock_volume_cm3":   stock_vol_cm3,
+        "part_volume_cm3":    part_vol_cm3,
+        "removed_volume_cm3": removed_vol_cm3,
+        # Coordinate ranges derived from bounding box (mm)
+        "x_range": (round(bb.xmin, 3), round(bb.xmax, 3)),
+        "y_range": (round(bb.ymin, 3), round(bb.ymax, 3)),
+        "z_range": (round(bb.zmin, 3), round(bb.zmax, 3)),
+        # Raw ranges same as converted (no unit conversion needed)
+        "x_range_raw": (round(bb.xmin, 6), round(bb.xmax, 6)),
+        "y_range_raw": (round(bb.ymin, 6), round(bb.ymax, 6)),
+        "z_range_raw": (round(bb.zmin, 6), round(bb.zmax, 6)),
+        # Unit / conversion metadata (OCC always returns mm)
+        "converted":           False,
+        "detection_method":    "cadquery",
+        "detected_unit_label": "mm (CadQuery/OpenCASCADE)",
+        "conversion_factor":   1.0,
+        # Not applicable for CadQuery path
+        "point_count": None,
+        "warnings": warnings,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auto-dispatcher: try CadQuery, fall back to lightweight parser
+# ---------------------------------------------------------------------------
+
+def parse_step_auto(file_bytes: bytes) -> dict:
+    """
+    Primary entry point for STEP parsing in app.py (future).
+
+    Strategy:
+    - CadQuery not installed → lightweight parser (unchanged behaviour)
+    - CadQuery installed, succeeds → cadquery result
+    - CadQuery installed, raises → lightweight parser + cadquery_warning key
+
+    The returned dict is always compatible with parse_step_bounding_box output.
+    Extra keys (parser_used, removed_volume_cm3, cadquery_warning) are additive.
+    """
+    if not _CADQUERY_AVAILABLE:
+        result = parse_step_bounding_box(file_bytes)
+        result["parser_used"] = "lightweight"
+        return result
+
+    tmp_path = None
+    try:
+        # Windows requires delete=False: CadQuery opens the file itself and
+        # the OS blocks deletion of an open file handle.
+        with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        result = parse_step_with_cadquery(tmp_path)
+        return result
+
+    except Exception as exc:
+        result = parse_step_bounding_box(file_bytes)
+        result["parser_used"] = "lightweight_fallback"
+        result["cadquery_warning"] = (
+            f"CadQuery parsing failed ({type(exc).__name__}: {exc}). "
+            "Fell back to lightweight regex parser."
+        )
+        return result
+
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass  # Non-fatal: temp file cleanup failure on Windows
