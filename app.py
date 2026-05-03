@@ -225,9 +225,22 @@ def page_upload_step():
                     f"Units confirmed as **mm** "
                     f"(detected via {r['detection_method']}) — no conversion needed."
                 )
+            for w in r.get("warnings", []):
+                st.warning(w)
         else:
-            st.warning(f"Could not auto-extract dimensions: {parse_result['message']}")
-            st.info("Please enter dimensions manually below.")
+            st.warning(f"**STEP parse failed:** {parse_result['message']}")
+            detail     = parse_result.get("detail")
+            suggestion = parse_result.get("suggestion")
+            if detail or suggestion:
+                with st.expander("Why did this happen? / Suggested action", expanded=True):
+                    if detail:
+                        st.markdown(f"**Why:** {detail}")
+                    if suggestion:
+                        st.markdown(f"**Action:** {suggestion}")
+            st.info(
+                "Stock dimensions have not been auto-filled. "
+                "Enter them manually in the fields below to continue planning."
+            )
 
     st.subheader("Stock & Part Dimensions")
 

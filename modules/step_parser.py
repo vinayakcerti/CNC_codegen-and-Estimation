@@ -130,18 +130,96 @@ def _circle_points(cx, cy, cz, r, nx, ny, nz, steps=48):
 # ---------------------------------------------------------------------------
 
 def parse_step_bounding_box(file_bytes: bytes) -> dict:
+    # ── Binary file guard ────────────────────────────────────────────────────
+    # Scan a sample of the file for null bytes; ASCII STEP never contains them.
+    sample = file_bytes[:8192]
+    if b'\x00' in sample:
+        return {
+            "success": False,
+            "failure_reason": "BINARY_FILE",
+            "message": "This file appears to be binary-encoded, not an ASCII STEP file.",
+            "detail": (
+                "Binary P21-encoded STEP files and other non-text formats cannot be "
+                "read by this lightweight text-based parser. "
+                "Null bytes were detected in the first 8 KB of the file."
+            ),
+            "suggestion": (
+                "Re-export from your CAD software using ASCII STEP encoding "
+                "(look for 'Save as ASCII', 'AP214 ASCII', or 'AP242 ASCII' in export options). "
+                "In SolidWorks: File → Save As → STEP AP214, ensure 'ASCII' is selected. "
+                "In Fusion 360: Export → STEP, default is ASCII. "
+                "Alternatively, enter stock dimensions manually below."
+            ),
+        }
+
     try:
         text = file_bytes.decode("utf-8", errors="replace")
     except Exception as exc:
-        return {"success": False, "message": f"Could not decode file: {exc}"}
+        return {
+            "success": False,
+            "failure_reason": "DECODE_ERROR",
+            "message": f"Could not read file as text: {exc}",
+            "detail": "The file could not be decoded as UTF-8 text.",
+            "suggestion": (
+                "Ensure the file is a valid ASCII STEP file (.step / .stp). "
+                "Try re-saving the file and uploading again, or enter stock dimensions manually."
+            ),
+        }
+
+    # ── STEP identity check ──────────────────────────────────────────────────
+    header_sample = text[:1000].upper()
+    looks_like_step = (
+        "ISO-10303" in header_sample
+        or "STEP" in header_sample
+        or "DATA;" in header_sample
+        or _COORD3_RE.search(text[:5000]) is not None
+    )
 
     factor, unit_label, method = _detect_unit_factor(text)
 
     matches = _COORD3_RE.findall(text)
     if not matches:
-        return {"success": False, "message": (
-            "No CARTESIAN_POINT data found. File may be non-standard or 2D only. "
-            "Please enter dimensions manually.")}
+        if not looks_like_step:
+            return {
+                "success": False,
+                "failure_reason": "NOT_STEP_FILE",
+                "message": "This file does not appear to be a valid STEP file.",
+                "detail": (
+                    "No standard STEP markers (ISO-10303 header, DATA section, or "
+                    "CARTESIAN_POINT entities) were found in the file. "
+                    "It may be a different CAD format (IGES, DXF, STL, OBJ, etc.)."
+                ),
+                "suggestion": (
+                    "Upload a file with a .step or .stp extension exported from a CAD tool. "
+                    "Accepted formats: STEP AP203, AP214, AP242 in ASCII encoding. "
+                    "Other formats (IGES, DXF, STL) are not supported by this parser."
+                ),
+            }
+        return {
+            "success": False,
+            "failure_reason": "NO_CARTESIAN_POINTS",
+            "message": (
+                "Could not extract valid 3D geometry from this STEP file. "
+                "The file may use B-spline/NURBS surfaces or a STEP structure "
+                "not supported by the lightweight parser."
+            ),
+            "detail": (
+                "The file was identified as a STEP file but contains no inline "
+                "CARTESIAN_POINT entities in the expected form: "
+                "CARTESIAN_POINT('', (x, y, z)). "
+                "This typically means the file uses B-spline or NURBS surfaces, "
+                "stores coordinates via complex entity references, or was exported "
+                "with a schema that this parser does not support."
+            ),
+            "suggestion": (
+                "Try re-exporting from your CAD software as STEP AP214 or AP242 "
+                "with 'B-Rep solid geometry' (not surface/mesh). "
+                "In SolidWorks: File → Save As → STEP AP214. "
+                "In CATIA: Export as STEP with 'Exact geometry'. "
+                "In Rhino: File → Export → STEP, choose 'Solids' not 'Surfaces'. "
+                "You can also enter stock dimensions manually below and continue planning."
+            ),
+        }
 
     xs, ys, zs = [], [], []
     for _, x_str, y_str, z_str in matches:
@@ -151,7 +229,21 @@ def parse_step_bounding_box(file_bytes: bytes) -> dict:
             continue
 
     if not xs:
-        return {"success": False, "message": "Could not parse coordinate values."}
+        return {
+            "success": False,
+            "failure_reason": "NO_VALID_COORDS",
+            "message": "CARTESIAN_POINT entities were found but their coordinates could not be parsed.",
+            "detail": (
+                f"{len(matches):,} CARTESIAN_POINT pattern matches were found, but all "
+                "coordinate values failed to convert to numbers. "
+                "The file may use a non-standard number format or contain corrupted data."
+            ),
+            "suggestion": (
+                "Try re-exporting the STEP file from the original CAD tool. "
+                "If the problem persists, the file may be corrupted. "
+                "Enter stock dimensions manually below to continue."
+            ),
+        }
 
     raw_max_span = max(max(xs)-min(xs), max(ys)-min(ys), max(zs)-min(zs))
     if factor is None:
@@ -166,8 +258,61 @@ def parse_step_bounding_box(file_bytes: bytes) -> dict:
     height = round(z_max - z_min, 3)
 
     if length < 0.001 and width < 0.001 and height < 0.001:
-        return {"success": False, "message": "All points coincident — file may be empty or 2D only."}
+        return {
+            "success": False,
+            "failure_reason": "ZERO_BBOX",
+            "message": "All extracted points are coincident — bounding box has zero size.",
+            "detail": (
+                f"{len(xs):,} coordinate points were found but all resolve to the same "
+                "location after unit conversion. "
+                "This can happen with 2D drawings, empty STEP shells, or files that "
+                "contain only reference geometry (axis systems, datum points, construction lines)."
+            ),
+            "suggestion": (
+                "Confirm the STEP file contains a 3D solid body by opening it in a CAD viewer. "
+                "If it is a 2D drawing, you will need to enter stock dimensions manually. "
+                "If it is a 3D part, try re-exporting with 'Save solid bodies' enabled."
+            ),
+        }
 
+    # ── Soft warnings for successful parse ───────────────────────────────────
+    soft_warnings = []
+
+    if method == "heuristic":
+        raw_label = unit_label.split("(")[0].strip()
+        soft_warnings.append(
+            f"Unit detection fell back to a size heuristic "
+            f"(largest raw span: {round(raw_max_span, 4)} → assumed **{raw_label}**). "
+            "If the dimensions below look wrong, override the unit assumption by "
+            "adjusting the values manually."
+        )
+
+    dims_sorted = sorted([length, width, height])
+    if dims_sorted[2] > 0 and dims_sorted[0] < dims_sorted[2] * 0.01:
+        thin_axis = (
+            "Z (height)" if height == dims_sorted[0] else
+            "Y (width)"  if width  == dims_sorted[0] else
+            "X (length)"
+        )
+        soft_warnings.append(
+            f"Geometry appears extremely flat: {thin_axis} is only {dims_sorted[0]} mm "
+            f"against a longest span of {dims_sorted[2]} mm. "
+            "This may indicate a 2D drawing, a thin sheet/plate, or an incorrectly "
+            "oriented STEP export. Verify the part is the intended 3D solid."
+        )
+
+    largest_dim = max(length, width, height)
+    if largest_dim > 5000:
+        soft_warnings.append(
+            f"Bounding box appears implausibly large: largest dimension is "
+            f"**{largest_dim:,.1f} mm** ({largest_dim/1000:.2f} m). "
+            "This usually means unit detection chose the wrong scale factor. "
+            "Check the 'Detected Units' field below — if it shows metres or feet "
+            "when the part should be in millimetres, the conversion failed. "
+            "Override the dimensions manually."
+        )
+
+    # ── Build success response (all original fields preserved) ───────────────
     bbox_vol_cm3 = round(length * width * height / 1000.0, 3)
     part_vol_cm3 = round(bbox_vol_cm3 * 0.60, 3)
 
@@ -195,6 +340,7 @@ def parse_step_bounding_box(file_bytes: bytes) -> dict:
         "detection_method": method,
         "converted": converted,
         "message": message,
+        "warnings": soft_warnings,
     }
 
 
