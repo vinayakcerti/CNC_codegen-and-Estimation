@@ -18,7 +18,7 @@ from modules.operation_planner import plan_operations
 from modules.time_estimator import estimate_time
 from modules.gcode_generator import generate_gcode
 from modules.visual_preview import build_top_view, build_3d_view
-from modules.step_parser import parse_step_bounding_box
+from modules.step_parser import parse_step_bounding_box, parse_step_geometry
 from modules.setup_sheet import generate_setup_sheet
 from modules.speeds_feeds import (
     material_list, coating_list, get_vc_range, get_chip_load_range,
@@ -36,27 +36,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ── Password protection ──────────────────────────────────────────────────────
-_DEMO_PASSWORD = "cnc_demo_2026"
-
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    st.markdown(
-        "<h3 style='text-align:center;margin-top:3rem;'>CNC Process Planner – Demo Access</h3>",
-        unsafe_allow_html=True,
-    )
-    pwd = st.text_input("Enter demo password", type="password", key="_login_pwd")
-    if st.button("Login"):
-        if pwd == _DEMO_PASSWORD:
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Incorrect password. Please try again.")
-    st.stop()
-# ────────────────────────────────────────────────────────────────────────────
 
 APP_NAME = "CNC Plan and Process Pro"
 APP_TAGLINE = "Professional CNC Planning for Modern Workshops"
@@ -163,7 +142,6 @@ def sidebar_nav():
             unsafe_allow_html=True,
         )
         st.caption("Professional CNC Planning")
-        st.caption("🔒 Demo Mode – Restricted Access")
         st.divider()
         pages = [
             "1. Upload STEP File",
@@ -191,7 +169,7 @@ def page_upload_step():
         cl1, cl2 = st.columns([3, 1])
         cl1.info(f"Loaded file: **{st.session_state.uploaded_filename}**")
         if cl2.button("Clear & Start New", type="secondary"):
-            for key in ("uploaded_filename", "step_parse_result"):
+            for key in ("uploaded_filename", "step_parse_result", "step_geometry"):
                 st.session_state.pop(key, None)
             st.session_state.stock = {
                 "length": 150.0, "width": 100.0, "height": 50.0,
@@ -219,9 +197,11 @@ def page_upload_step():
 
         with st.spinner("Parsing STEP file geometry..."):
             parse_result = parse_step_bounding_box(file_bytes)
+            geo_result   = parse_step_geometry(file_bytes)
 
         if parse_result["success"]:
             st.session_state.step_parse_result = parse_result
+            st.session_state.step_geometry = geo_result
             st.session_state.stock["length"] = parse_result["length_mm"]
             st.session_state.stock["width"] = parse_result["width_mm"]
             st.session_state.stock["height"] = parse_result["height_mm"]
@@ -1095,12 +1075,25 @@ def page_visual_preview():
 
     tab1, tab2 = st.tabs(["Top View", "3D View"])
 
+    step_geometry = st.session_state.get("step_geometry")
+
+    if step_geometry and step_geometry.get("success"):
+        ec = step_geometry.get("edge_count", 0)
+        cc = step_geometry.get("circle_count", 0)
+        st.success(
+            f"STEP geometry loaded — **{ec}** straight edges + **{cc}** circular edges. "
+            "Showing actual part shape below."
+        )
+    else:
+        st.info("No STEP file geometry available — showing feature layout only. "
+                "Upload a STEP file on Screen 1 to see the actual part shape.")
+
     with tab1:
-        fig_top = build_top_view(stock, features)
+        fig_top = build_top_view(stock, features, step_geometry=step_geometry)
         st.plotly_chart(fig_top, use_container_width=True)
 
     with tab2:
-        fig_3d = build_3d_view(stock, features)
+        fig_3d = build_3d_view(stock, features, step_geometry=step_geometry)
         st.plotly_chart(fig_3d, use_container_width=True)
 
 
