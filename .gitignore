@@ -40,3 +40,4 @@ Thumbs.db
 
 # Replit platform files — do not publish
 .replit-artifact/
+test_samples/ 
