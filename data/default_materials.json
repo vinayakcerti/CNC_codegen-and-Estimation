@@ -1,0 +1,158 @@
+[
+  {
+    "name": "Aluminium (Al 6061 / IS 65032)",
+    "density": 2.7,
+    "machinability_factor": 1.0,
+    "safety_factor": 1.1
+  },
+  {
+    "name": "Aluminium (Al 7075 / IS 74530)",
+    "density": 2.81,
+    "machinability_factor": 0.9,
+    "safety_factor": 1.15
+  },
+  {
+    "name": "Mild Steel IS 2062 E250",
+    "density": 7.85,
+    "machinability_factor": 0.65,
+    "safety_factor": 1.25
+  },
+  {
+    "name": "EN8 / IS 40C8 (Med. Carbon Steel)",
+    "density": 7.85,
+    "machinability_factor": 0.55,
+    "safety_factor": 1.3
+  },
+  {
+    "name": "EN19 / IS 40Cr4Mo2 (Cr-Mo Steel)",
+    "density": 7.85,
+    "machinability_factor": 0.45,
+    "safety_factor": 1.4
+  },
+  {
+    "name": "EN24 / IS 40Ni2Cr1Mo28 (Alloy Steel)",
+    "density": 7.85,
+    "machinability_factor": 0.4,
+    "safety_factor": 1.4
+  },
+  {
+    "name": "EN31 / IS 103Cr1 (Bearing Steel)",
+    "density": 7.81,
+    "machinability_factor": 0.35,
+    "safety_factor": 1.45
+  },
+  {
+    "name": "Stainless Steel 304 / IS 04Cr18Ni10",
+    "density": 8.0,
+    "machinability_factor": 0.4,
+    "safety_factor": 1.5
+  },
+  {
+    "name": "Stainless Steel 316L",
+    "density": 8.0,
+    "machinability_factor": 0.35,
+    "safety_factor": 1.55
+  },
+  {
+    "name": "Stainless Steel 410 / 17-4PH",
+    "density": 7.75,
+    "machinability_factor": 0.38,
+    "safety_factor": 1.5
+  },
+  {
+    "name": "Cast Iron Grey IS 210 FG200",
+    "density": 7.15,
+    "machinability_factor": 0.5,
+    "safety_factor": 1.3
+  },
+  {
+    "name": "Cast Iron Grey IS 210 FG260",
+    "density": 7.2,
+    "machinability_factor": 0.45,
+    "safety_factor": 1.35
+  },
+  {
+    "name": "Cast Iron Ductile / SG IS 1865 SG400",
+    "density": 7.1,
+    "machinability_factor": 0.5,
+    "safety_factor": 1.3
+  },
+  {
+    "name": "Tool Steel / Die Steel (H13, D2)",
+    "density": 7.8,
+    "machinability_factor": 0.3,
+    "safety_factor": 1.5
+  },
+  {
+    "name": "Hardened Steel (HRC 45–55)",
+    "density": 7.8,
+    "machinability_factor": 0.2,
+    "safety_factor": 1.7
+  },
+  {
+    "name": "Brass IS 319 / CZ121",
+    "density": 8.5,
+    "machinability_factor": 0.9,
+    "safety_factor": 1.15
+  },
+  {
+    "name": "Phosphor Bronze IS 7814",
+    "density": 8.8,
+    "machinability_factor": 0.7,
+    "safety_factor": 1.2
+  },
+  {
+    "name": "Gun Metal (LG2 Bronze)",
+    "density": 8.7,
+    "machinability_factor": 0.65,
+    "safety_factor": 1.2
+  },
+  {
+    "name": "Copper / ETP Copper",
+    "density": 8.96,
+    "machinability_factor": 0.6,
+    "safety_factor": 1.25
+  },
+  {
+    "name": "Titanium Grade 2 (Cp-Ti)",
+    "density": 4.51,
+    "machinability_factor": 0.25,
+    "safety_factor": 1.7
+  },
+  {
+    "name": "Titanium Grade 5 (Ti-6Al-4V)",
+    "density": 4.43,
+    "machinability_factor": 0.2,
+    "safety_factor": 1.8
+  },
+  {
+    "name": "Inconel 718 / Nickel Alloy",
+    "density": 8.19,
+    "machinability_factor": 0.15,
+    "safety_factor": 2.0
+  },
+  {
+    "name": "Zinc / Zamak Die Cast",
+    "density": 6.6,
+    "machinability_factor": 1.1,
+    "safety_factor": 1.1
+  },
+  {
+    "name": "Nylon PA6 / PA66",
+    "density": 1.14,
+    "machinability_factor": 1.2,
+    "safety_factor": 1.1
+  },
+  {
+    "name": "HDPE / Acrylic (Plastic)",
+    "density": 0.96,
+    "machinability_factor": 1.3,
+    "safety_factor": 1.05
+  },
+  {
+    "name": "Wood / MDF / Plywood",
+    "density": 0.65,
+    "machinability_factor": 1.5,
+    "safety_factor": 1.05
+  }
+]

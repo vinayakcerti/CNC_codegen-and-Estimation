@@ -1,0 +1,182 @@
+[
+  {
+    "machine_name": "Ace Micromatic AMV 55 (VMC)",
+    "machine_type": "VMC",
+    "controller": "Fanuc 0i-MF",
+    "max_spindle_rpm": 8000,
+    "max_feed_rate": 10000,
+    "rapid_feed_rate": 36000,
+    "tool_change_time_s": 5,
+    "setup_time_min": 25
+  },
+  {
+    "machine_name": "Ace Micromatic ATC 25 (CNC Lathe)",
+    "machine_type": "CNC Turning",
+    "controller": "Fanuc 0i-TF",
+    "max_spindle_rpm": 4500,
+    "max_feed_rate": 4000,
+    "rapid_feed_rate": 15000,
+    "tool_change_time_s": 4,
+    "setup_time_min": 15
+  },
+  {
+    "machine_name": "BFW Betas 500 (VMC)",
+    "machine_type": "VMC",
+    "controller": "Fanuc 0i-MF",
+    "max_spindle_rpm": 8000,
+    "max_feed_rate": 10000,
+    "rapid_feed_rate": 30000,
+    "tool_change_time_s": 6,
+    "setup_time_min": 25
+  },
+  {
+    "machine_name": "BFW TC 20 (CNC Turning Centre)",
+    "machine_type": "CNC Turning",
+    "controller": "Fanuc 0i-TF",
+    "max_spindle_rpm": 4000,
+    "max_feed_rate": 5000,
+    "rapid_feed_rate": 18000,
+    "tool_change_time_s": 5,
+    "setup_time_min": 15
+  },
+  {
+    "machine_name": "Jyoti VMC 850 (Fanuc)",
+    "machine_type": "VMC",
+    "controller": "Fanuc 0i-MF",
+    "max_spindle_rpm": 8000,
+    "max_feed_rate": 8000,
+    "rapid_feed_rate": 24000,
+    "tool_change_time_s": 7,
+    "setup_time_min": 25
+  },
+  {
+    "machine_name": "Jyoti DX 200 (CNC Lathe)",
+    "machine_type": "CNC Turning",
+    "controller": "Fanuc 0i-TF",
+    "max_spindle_rpm": 4000,
+    "max_feed_rate": 5000,
+    "rapid_feed_rate": 15000,
+    "tool_change_time_s": 4,
+    "setup_time_min": 15
+  },
+  {
+    "machine_name": "HMT Stallion 100 (CNC Lathe)",
+    "machine_type": "CNC Turning",
+    "controller": "Fanuc 0i-TF",
+    "max_spindle_rpm": 3500,
+    "max_feed_rate": 3000,
+    "rapid_feed_rate": 10000,
+    "tool_change_time_s": 8,
+    "setup_time_min": 20
+  },
+  {
+    "machine_name": "HMT FN2 (CNC Milling)",
+    "machine_type": "CNC Milling",
+    "controller": "Fanuc 0i-MF",
+    "max_spindle_rpm": 4500,
+    "max_feed_rate": 3000,
+    "rapid_feed_rate": 10000,
+    "tool_change_time_s": 10,
+    "setup_time_min": 30
+  },
+  {
+    "machine_name": "LMW LT2 (CNC Turning Centre)",
+    "machine_type": "CNC Turning",
+    "controller": "Fanuc 0i-TF",
+    "max_spindle_rpm": 4500,
+    "max_feed_rate": 5000,
+    "rapid_feed_rate": 15000,
+    "tool_change_time_s": 4,
+    "setup_time_min": 15
+  },
+  {
+    "machine_name": "Mazak QT Smart 200 (Turning)",
+    "machine_type": "CNC Turning",
+    "controller": "Mazatrol",
+    "max_spindle_rpm": 5000,
+    "max_feed_rate": 6000,
+    "rapid_feed_rate": 20000,
+    "tool_change_time_s": 4,
+    "setup_time_min": 15
+  },
+  {
+    "machine_name": "Mazak VCN 530C (VMC)",
+    "machine_type": "VMC",
+    "controller": "Mazatrol",
+    "max_spindle_rpm": 12000,
+    "max_feed_rate": 32000,
+    "rapid_feed_rate": 60000,
+    "tool_change_time_s": 3,
+    "setup_time_min": 20
+  },
+  {
+    "machine_name": "DMG MORI NLX 2500 (Turn-Mill)",
+    "machine_type": "Turn-Mill",
+    "controller": "Siemens 840D",
+    "max_spindle_rpm": 5000,
+    "max_feed_rate": 10000,
+    "rapid_feed_rate": 30000,
+    "tool_change_time_s": 4,
+    "setup_time_min": 30
+  },
+  {
+    "machine_name": "Haas VF2 (VMC)",
+    "machine_type": "VMC",
+    "controller": "Haas",
+    "max_spindle_rpm": 8100,
+    "max_feed_rate": 6350,
+    "rapid_feed_rate": 20000,
+    "tool_change_time_s": 4,
+    "setup_time_min": 20
+  },
+  {
+    "machine_name": "Haas ST-20 (CNC Lathe)",
+    "machine_type": "CNC Turning",
+    "controller": "Haas",
+    "max_spindle_rpm": 6000,
+    "max_feed_rate": 10160,
+    "rapid_feed_rate": 30480,
+    "tool_change_time_s": 3,
+    "setup_time_min": 15
+  },
+  {
+    "machine_name": "Siemens VMC (828D)",
+    "machine_type": "VMC",
+    "controller": "Siemens 828D",
+    "max_spindle_rpm": 8000,
+    "max_feed_rate": 10000,
+    "rapid_feed_rate": 24000,
+    "tool_change_time_s": 6,
+    "setup_time_min": 25
+  },
+  {
+    "machine_name": "MTAB MaxMill (Mini VMC / Training)",
+    "machine_type": "VMC",
+    "controller": "Fanuc 0i-MF",
+    "max_spindle_rpm": 6000,
+    "max_feed_rate": 3000,
+    "rapid_feed_rate": 8000,
+    "tool_change_time_s": 8,
+    "setup_time_min": 20
+  },
+  {
+    "machine_name": "Generic CNC Milling",
+    "machine_type": "CNC Milling",
+    "controller": "Generic",
+    "max_spindle_rpm": 4000,
+    "max_feed_rate": 2500,
+    "rapid_feed_rate": 8000,
+    "tool_change_time_s": 12,
+    "setup_time_min": 30
+  },
+  {
+    "machine_name": "Generic CNC Lathe",
+    "machine_type": "CNC Turning",
+    "controller": "Generic",
+    "max_spindle_rpm": 3500,
+    "max_feed_rate": 3000,
+    "rapid_feed_rate": 10000,
+    "tool_change_time_s": 6,
+    "setup_time_min": 15
+  }
+]

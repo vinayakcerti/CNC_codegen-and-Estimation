@@ -1,0 +1,92 @@
+[
+  {
+    "tool_number": 1,
+    "tool_name": "Spot Drill",
+    "tool_type": "Spot Drill",
+    "diameter_mm": 5.0,
+    "default_spindle_rpm": 2000,
+    "default_feed_rate_mm_min": 150,
+    "max_depth_mm": 3.0
+  },
+  {
+    "tool_number": 2,
+    "tool_name": "Drill 6mm",
+    "tool_type": "Drill",
+    "diameter_mm": 6.0,
+    "default_spindle_rpm": 1800,
+    "default_feed_rate_mm_min": 180,
+    "max_depth_mm": 30.0
+  },
+  {
+    "tool_number": 3,
+    "tool_name": "Drill 10mm",
+    "tool_type": "Drill",
+    "diameter_mm": 10.0,
+    "default_spindle_rpm": 1200,
+    "default_feed_rate_mm_min": 150,
+    "max_depth_mm": 50.0
+  },
+  {
+    "tool_number": 4,
+    "tool_name": "Drill 12mm",
+    "tool_type": "Drill",
+    "diameter_mm": 12.0,
+    "default_spindle_rpm": 1000,
+    "default_feed_rate_mm_min": 120,
+    "max_depth_mm": 60.0
+  },
+  {
+    "tool_number": 5,
+    "tool_name": "End Mill 6mm",
+    "tool_type": "End Mill",
+    "diameter_mm": 6.0,
+    "default_spindle_rpm": 3000,
+    "default_feed_rate_mm_min": 400,
+    "max_depth_mm": 6.0
+  },
+  {
+    "tool_number": 6,
+    "tool_name": "End Mill 10mm",
+    "tool_type": "End Mill",
+    "diameter_mm": 10.0,
+    "default_spindle_rpm": 2200,
+    "default_feed_rate_mm_min": 500,
+    "max_depth_mm": 10.0
+  },
+  {
+    "tool_number": 7,
+    "tool_name": "End Mill 12mm",
+    "tool_type": "End Mill",
+    "diameter_mm": 12.0,
+    "default_spindle_rpm": 2000,
+    "default_feed_rate_mm_min": 600,
+    "max_depth_mm": 12.0
+  },
+  {
+    "tool_number": 8,
+    "tool_name": "Face Mill",
+    "tool_type": "Face Mill",
+    "diameter_mm": 50.0,
+    "default_spindle_rpm": 800,
+    "default_feed_rate_mm_min": 800,
+    "max_depth_mm": 3.0
+  },
+  {
+    "tool_number": 9,
+    "tool_name": "Boring Tool",
+    "tool_type": "Boring",
+    "diameter_mm": 20.0,
+    "default_spindle_rpm": 600,
+    "default_feed_rate_mm_min": 80,
+    "max_depth_mm": 80.0
+  },
+  {
+    "tool_number": 10,
+    "tool_name": "Chamfer Tool",
+    "tool_type": "Chamfer",
+    "diameter_mm": 10.0,
+    "default_spindle_rpm": 1500,
+    "default_feed_rate_mm_min": 300,
+    "max_depth_mm": 5.0
+  }
+]
