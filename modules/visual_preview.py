@@ -126,7 +126,7 @@ def build_top_view(stock, features, step_geometry=None):
         fig.add_shape(type="rect", x0=0, y0=0, x1=sx, y1=sy,
                       line=dict(color="steelblue", width=1.5, dash="dash"),
                       fillcolor="rgba(135,206,250,0.05)")
-        title = "Top View — Actual STEP Geometry (XY projection)"
+        title = "Top View — Approximate STEP Wireframe (XY projection) — Planning Preview Only"
 
     else:
         # ── Fallback: bounding box + feature boxes ─────────────────────────
@@ -172,7 +172,7 @@ def build_top_view(stock, features, step_geometry=None):
                     x0=x, y0=y, x1=x+flen, y1=y+fwid,
                     line=dict(color="navy", width=2, dash="dot"),
                     fillcolor="rgba(0,0,128,0.05)")
-        title = "Top View — Feature Layout (no STEP file loaded)"
+        title = "Top View — Approximate Feature Layout — Planning Preview Only"
 
     pad = max(sx, sy) * 0.12
     fig.update_layout(
@@ -231,14 +231,14 @@ def build_3d_view(stock, features, step_geometry=None):
         # Feature overlays on top
         _add_feature_traces_3d(fig, features, sz)
 
-        title = "3D View — Actual STEP Geometry"
+        title = "3D View — Approximate STEP Wireframe — Planning Preview Only"
 
     else:
         # ── Fallback: bounding box + features ────────────────────────────
         for tr in _stock_box_traces(sx, sy, sz):
             fig.add_trace(tr)
         _add_feature_traces_3d(fig, features, sz)
-        title = "3D View — Feature Preview (no STEP file loaded)"
+        title = "3D View — Approximate Feature Layout — Planning Preview Only"
 
     fig.update_layout(
         title=title,

@@ -152,7 +152,7 @@ def sidebar_nav():
             "5a. Setup & Feature Review",
             "6. Operation Plan",
             "7. Time & Effort Estimate",
-            "8. Visual Preview",
+            "8. Approximate Process Preview",
             "9. CNC Program Export",
             "10. Job Notes & History",
         ]
@@ -1238,9 +1238,13 @@ def page_time_estimate():
 
 
 def page_visual_preview():
-    st.header("8. Visual Preview")
+    st.header("8. Approximate Process Preview")
 
-    st.warning("This visual preview is approximate and for planning only. It is not a CAM-verified simulation.")
+    st.warning(
+        "This is not the final machined part. This is an approximate planning preview "
+        "based on STEP bounding geometry and manual/detected features. "
+        "Verify the part and toolpath in CAM/simulation before machining."
+    )
 
     if not st.session_state.features:
         st.info("No features defined yet. Load demo features in Feature Input.")
@@ -1249,20 +1253,21 @@ def page_visual_preview():
     stock = st.session_state.stock
     features = st.session_state.features
 
-    tab1, tab2 = st.tabs(["Top View", "3D View"])
+    tab1, tab2 = st.tabs(["Top View (Planning Preview)", "3D View (Planning Preview)"])
 
     step_geometry = st.session_state.get("step_geometry")
 
     if step_geometry and step_geometry.get("success"):
         ec = step_geometry.get("edge_count", 0)
         cc = step_geometry.get("circle_count", 0)
-        st.success(
-            f"STEP geometry loaded — **{ec}** straight edges + **{cc}** circular edges. "
-            "Showing actual part shape below."
+        st.info(
+            f"STEP bounding wireframe loaded — **{ec}** straight edges + **{cc}** circular edges. "
+            "Showing approximate part wireframe for planning reference only. "
+            "This is not a machining simulation."
         )
     else:
-        st.info("No STEP file geometry available — showing feature layout only. "
-                "Upload a STEP file on Screen 1 to see the actual part shape.")
+        st.info("No STEP file geometry available — showing approximate feature layout only. "
+                "Upload a STEP file on page 1 to see the approximate part wireframe.")
 
     with tab1:
         fig_top = build_top_view(stock, features, step_geometry=step_geometry)
@@ -1502,7 +1507,7 @@ def main():
         page_operation_plan()
     elif page == "7. Time & Effort Estimate":
         page_time_estimate()
-    elif page == "8. Visual Preview":
+    elif page == "8. Approximate Process Preview":
         page_visual_preview()
     elif page == "9. CNC Program Export":
         page_cnc_export()
