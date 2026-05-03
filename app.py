@@ -149,6 +149,7 @@ def sidebar_nav():
             "3. Tool Library",
             "4. Material Setup",
             "5. Feature Input",
+            "5a. Setup & Feature Review",
             "6. Operation Plan",
             "7. Time & Effort Estimate",
             "8. Visual Preview",
@@ -846,6 +847,181 @@ def page_feature_input():
             st.warning("Ra value is above normal machining range — verify drawing specification.")
 
 
+def page_setup_review():
+    st.header("5a. Setup & Feature Review")
+    st.caption(
+        "Review stock, setup assumptions, and detected/manual features "
+        "before generating the operation plan."
+    )
+    st.divider()
+
+    stock    = st.session_state.get("stock", {})
+    machine  = st.session_state.get("selected_machine")
+    material = st.session_state.get("selected_material")
+    features = st.session_state.get("features", [])
+    step_ok  = bool(st.session_state.get("step_parse_result"))
+
+    # ── A. Stock summary ─────────────────────────────────────────────────────
+    st.subheader("Stock Dimensions")
+    if stock:
+        sc1, sc2, sc3, sc4, sc5 = st.columns(5)
+        sc1.metric("Length (mm)", stock.get("length", "—"))
+        sc2.metric("Width (mm)",  stock.get("width",  "—"))
+        sc3.metric("Height (mm)", stock.get("height", "—"))
+        sc4.metric("Stock Vol (cm³)", stock.get("stock_volume", "—"))
+        sc5.metric("Part Vol (cm³)",  stock.get("part_volume",  "—"))
+
+        sv = stock.get("stock_volume") or 0
+        pv = stock.get("part_volume")  or 0
+        removed = round(sv - pv, 3)
+        if sv > 0:
+            pct = round((removed / sv) * 100, 1)
+            st.caption(f"Estimated material removed: **{removed} cm³** ({pct}% of stock)")
+    else:
+        st.warning("Stock dimensions not set. Complete page 1 or 2 first.")
+
+    st.divider()
+
+    # ── B. Setup summary ─────────────────────────────────────────────────────
+    st.subheader("Machine & Material")
+    ms1, ms2 = st.columns(2)
+    with ms1:
+        if machine:
+            st.success(f"Machine: **{machine.get('machine_name', '—')}**")
+            st.caption(
+                f"Type: {machine.get('machine_type','—')} · "
+                f"Controller: {machine.get('controller','—')} · "
+                f"Max spindle: {machine.get('max_spindle_rpm','—')} RPM"
+            )
+        else:
+            st.warning("No machine selected — go to page 2.")
+    with ms2:
+        if material:
+            st.success(f"Material: **{material.get('name', '—')}**")
+            st.caption(
+                f"Machinability factor: {material.get('machinability_factor','—')} · "
+                f"Safety factor: {material.get('safety_factor','—')} · "
+                f"Density: {material.get('density','—')} g/cm³"
+            )
+        else:
+            st.warning("No material selected — go to page 4.")
+
+    st.divider()
+
+    # ── C. Feature summary ───────────────────────────────────────────────────
+    st.subheader("Feature Summary")
+    if not features:
+        st.info("No features entered yet — go to page 5 to add features.")
+    else:
+        display_cols = [
+            "feature_name", "feature_type", "quantity",
+            "x_pos", "y_pos", "diameter", "length", "width", "depth",
+            "tolerance_note", "priority",
+        ]
+        df = pd.DataFrame(features)
+        for col in display_cols:
+            if col not in df.columns:
+                df[col] = None
+        st.dataframe(
+            df[display_cols].rename(columns={
+                "feature_name":   "Name",
+                "feature_type":   "Type",
+                "quantity":       "Qty",
+                "x_pos":          "X (mm)",
+                "y_pos":          "Y (mm)",
+                "diameter":       "Dia (mm)",
+                "length":         "L (mm)",
+                "width":          "W (mm)",
+                "depth":          "Depth (mm)",
+                "tolerance_note": "Tolerance",
+                "priority":       "Priority",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.divider()
+
+    # ── D. Validation flags ──────────────────────────────────────────────────
+    st.subheader("Validation Flags")
+    if not features:
+        st.info("No features to validate.")
+    else:
+        stk_l = stock.get("length") or 0
+        stk_w = stock.get("width")  or 0
+        warnings_found = False
+        for i, feat in enumerate(features):
+            issues = []
+            name  = feat.get("feature_name", "").strip()
+            qty   = feat.get("quantity") or 0
+            depth = feat.get("depth")    or 0
+            xpos  = feat.get("x_pos")    or 0
+            ypos  = feat.get("y_pos")    or 0
+
+            if not name:
+                issues.append("Missing feature name")
+            if qty < 1:
+                issues.append(f"Quantity is {qty} (must be ≥ 1)")
+            if depth == 0:
+                issues.append("Depth is 0 or missing")
+            if stk_l > 0 and xpos > stk_l:
+                issues.append(f"X position {xpos} mm exceeds stock length {stk_l} mm")
+            if stk_w > 0 and ypos > stk_w:
+                issues.append(f"Y position {ypos} mm exceeds stock width {stk_w} mm")
+
+            if issues:
+                warnings_found = True
+                label = name if name else f"Feature #{i + 1}"
+                for msg in issues:
+                    st.warning(f"**{label}:** {msg}")
+
+        if not warnings_found:
+            st.success("All features passed basic validation checks.")
+
+    st.divider()
+
+    # ── E. Pre-flight checklist ──────────────────────────────────────────────
+    st.subheader("Pre-flight Checklist")
+
+    tools = st.session_state.get("tools", [])
+
+    has_stock    = bool(stock and stock.get("length") and stock.get("length") > 0)
+    has_machine  = bool(machine)
+    has_material = bool(material)
+    has_tools    = bool(tools)
+    has_features = bool(features)
+
+    # Re-evaluate validation for checklist
+    any_critical = False
+    if features:
+        for feat in features:
+            if (not feat.get("feature_name", "").strip()
+                    or (feat.get("quantity") or 0) < 1
+                    or (feat.get("depth") or 0) == 0):
+                any_critical = True
+                break
+
+    checks = [
+        (has_stock or step_ok, "Stock dimensions entered or STEP file uploaded"),
+        (has_machine,           "Machine selected"),
+        (has_material,          "Material selected"),
+        (has_tools,             "Tool library loaded"),
+        (has_features,          "At least one feature defined"),
+        (has_features and not any_critical, "Features have no critical validation warnings"),
+    ]
+
+    all_pass = all(ok for ok, _ in checks)
+    for ok, label in checks:
+        icon = "✅" if ok else "⚠️"
+        st.markdown(f"{icon} {label}")
+
+    st.divider()
+    if all_pass:
+        st.success("All checks passed — you may proceed to page 6: Operation Plan.")
+    else:
+        st.warning("Resolve the items above before generating the operation plan.")
+
+
 def page_operation_plan():
     st.header("6. Operation Plan")
 
@@ -1320,6 +1496,8 @@ def main():
         page_material_setup()
     elif page == "5. Feature Input":
         page_feature_input()
+    elif page == "5a. Setup & Feature Review":
+        page_setup_review()
     elif page == "6. Operation Plan":
         page_operation_plan()
     elif page == "7. Time & Effort Estimate":
