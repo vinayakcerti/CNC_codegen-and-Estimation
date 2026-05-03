@@ -337,6 +337,32 @@ def page_upload_step():
         )
         st.caption(f"Detection method: {r['detection_method']}. {_vol_note}")
 
+        # ── CAD Geometry Summary ──────────────────────────────────────────────
+        st.subheader("CAD Geometry Summary")
+
+        def _fmt_count(v):
+            return f"{v:,}" if v is not None else "N/A"
+
+        g1, g2, g3, g4, g5, g6 = st.columns(6)
+        g1.metric("Parser Used",   r.get("parser_used", "lightweight"))
+        g2.metric("Volume Source", r.get("volume_source", "—"))
+        g3.metric("Solids",    _fmt_count(r.get("solids_count")))
+        g4.metric("Faces",     _fmt_count(r.get("faces_count")))
+        g5.metric("Edges",     _fmt_count(r.get("edges_count")))
+        g6.metric("Vertices",  _fmt_count(r.get("vertices_count")))
+
+        if r.get("parser_used") == "cadquery":
+            st.success(
+                "Deep CAD parser active. Geometry and volume were extracted "
+                "using CadQuery/OpenCASCADE."
+            )
+        else:
+            st.info(
+                "Using lightweight parser. Geometry metadata is not available — "
+                "bounding box and volume are approximate and may not represent "
+                "the full STEP solid."
+            )
+
     st.session_state.stock = stock
 
 

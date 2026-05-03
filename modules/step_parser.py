@@ -518,15 +518,31 @@ def parse_step_with_cadquery(file_path: str) -> dict:
     part_vol_cm3 = round(raw_vol_mm3 / 1000.0, 3)
 
     if part_vol_cm3 <= 0:
-        part_vol_cm3 = round(stock_vol_cm3 * 0.60, 3)
+        part_vol_cm3  = round(stock_vol_cm3 * 0.60, 3)
+        volume_source = "bbox_estimate_fallback"
         warnings.append(
             "CadQuery reported zero part volume — the file may be a surface/shell "
             "model rather than a closed solid. "
             f"Part volume estimated as 60% of bounding box ({part_vol_cm3} cm³). "
             "Adjust manually if your part geometry is significantly different."
         )
+    else:
+        volume_source = "cadquery_real_solid_volume"
 
     removed_vol_cm3 = round(max(stock_vol_cm3 - part_vol_cm3, 0.0), 3)
+
+    # Topology counts — wrapped individually; some STEP files lack certain types
+    def _safe_count(fn):
+        try:
+            return len(fn().vals())
+        except Exception:
+            return None
+
+    solids_count   = _safe_count(result.solids)
+    shells_count   = _safe_count(result.shells)
+    faces_count    = _safe_count(result.faces)
+    edges_count    = _safe_count(result.edges)
+    vertices_count = _safe_count(result.vertices)
 
     message = (
         f"CadQuery parsed: {length} × {width} × {height} mm · "
@@ -546,6 +562,13 @@ def parse_step_with_cadquery(file_path: str) -> dict:
         "stock_volume_cm3":   stock_vol_cm3,
         "part_volume_cm3":    part_vol_cm3,
         "removed_volume_cm3": removed_vol_cm3,
+        "volume_source":      volume_source,
+        # Topology counts
+        "solids_count":   solids_count,
+        "shells_count":   shells_count,
+        "faces_count":    faces_count,
+        "edges_count":    edges_count,
+        "vertices_count": vertices_count,
         # Coordinate ranges derived from bounding box (mm)
         "x_range": (round(bb.xmin, 3), round(bb.xmax, 3)),
         "y_range": (round(bb.ymin, 3), round(bb.ymax, 3)),
@@ -583,7 +606,13 @@ def parse_step_auto(file_bytes: bytes) -> dict:
     """
     if not _CADQUERY_AVAILABLE:
         result = parse_step_bounding_box(file_bytes)
-        result["parser_used"] = "lightweight"
+        result["parser_used"]    = "lightweight"
+        result["volume_source"]  = "bbox_estimate_60_percent"
+        result["solids_count"]   = None
+        result["shells_count"]   = None
+        result["faces_count"]    = None
+        result["edges_count"]    = None
+        result["vertices_count"] = None
         return result
 
     tmp_path = None
@@ -599,11 +628,17 @@ def parse_step_auto(file_bytes: bytes) -> dict:
 
     except Exception as exc:
         result = parse_step_bounding_box(file_bytes)
-        result["parser_used"] = "lightweight_fallback"
+        result["parser_used"]      = "lightweight_fallback"
         result["cadquery_warning"] = (
             f"CadQuery parsing failed ({type(exc).__name__}: {exc}). "
             "Fell back to lightweight regex parser."
         )
+        result["volume_source"]  = "bbox_estimate_60_percent"
+        result["solids_count"]   = None
+        result["shells_count"]   = None
+        result["faces_count"]    = None
+        result["edges_count"]    = None
+        result["vertices_count"] = None
         return result
 
     finally:
