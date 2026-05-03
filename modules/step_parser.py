@@ -16,6 +16,17 @@ except Exception:
     # Catch any other import-time error (e.g. missing OCC shared libs)
     _CADQUERY_AVAILABLE = False
 
+# Optional OCC BRepAdaptor — bundled inside cadquery-ocp, used for precise
+# cylinder radius and axis extraction.  Only attempted when CadQuery loaded.
+_OCC_ADAPTOR_AVAILABLE = False
+if _CADQUERY_AVAILABLE:
+    try:
+        from OCC.Core.BRepAdaptor import BRepAdaptor_Surface as _BRepAdaptor
+        from OCC.Core.GeomAbs import GeomAbs_Cylinder as _GeomAbsCylinder
+        _OCC_ADAPTOR_AVAILABLE = True
+    except (ImportError, Exception):
+        pass
+
 # ---------------------------------------------------------------------------
 # Unit detection helpers
 # ---------------------------------------------------------------------------
@@ -476,6 +487,143 @@ def parse_step_geometry(file_bytes: bytes) -> dict:
         "circle_count": len(circle_traces),
         "factor": factor,
     }
+
+
+# ---------------------------------------------------------------------------
+# CadQuery face-level data extractor (Step 1 of feature candidate detection)
+# ---------------------------------------------------------------------------
+
+def _extract_face_records(cq_result) -> list:
+    """
+    Iterate every OCC face in a loaded CadQuery workplane and return a list
+    of plain dicts with geometry properties — one dict per face.
+
+    All coordinates and lengths are in millimetres (OCC native unit for STEP).
+    Individual face failures are silenced: the record is still appended with
+    None for any field that could not be computed.  The function never raises.
+
+    Normal convention:
+        PLANE   → face.normalAt() is the constant surface normal.
+        CYLINDER→ face.normalAt() is the outward radial normal at the UV-centre
+                  of that face, NOT the cylinder axis.  Use cylinder_axis_x/y/z
+                  (from the OCC adaptor) for the axis direction.
+        BSPLINE → normalAt() may fail; fields left as None.
+
+    Args:
+        cq_result: cadquery.Workplane as returned by
+                   cadquery.importers.importStep().
+
+    Returns:
+        list[dict] with keys:
+            face_index, geom_type,
+            area_mm2,
+            center_x, center_y, center_z,
+            normal_x, normal_y, normal_z,
+            bbox_xmin, bbox_xmax,
+            bbox_ymin, bbox_ymax,
+            bbox_zmin, bbox_zmax,
+            bbox_length_x, bbox_length_y, bbox_length_z,
+            cylinder_radius_mm,          # None if not CYLINDER or OCC unavail.
+            cylinder_axis_x/y/z          # None same conditions
+    """
+    records = []
+
+    try:
+        faces = cq_result.faces().vals()
+    except Exception:
+        return records
+
+    for idx, face in enumerate(faces):
+        rec = {
+            "face_index":         idx,
+            "geom_type":          None,
+            "area_mm2":           None,
+            "center_x":           None,
+            "center_y":           None,
+            "center_z":           None,
+            "normal_x":           None,
+            "normal_y":           None,
+            "normal_z":           None,
+            "bbox_xmin":          None,
+            "bbox_xmax":          None,
+            "bbox_ymin":          None,
+            "bbox_ymax":          None,
+            "bbox_zmin":          None,
+            "bbox_zmax":          None,
+            "bbox_length_x":      None,
+            "bbox_length_y":      None,
+            "bbox_length_z":      None,
+            "cylinder_radius_mm": None,
+            "cylinder_axis_x":    None,
+            "cylinder_axis_y":    None,
+            "cylinder_axis_z":    None,
+        }
+
+        try:
+            rec["geom_type"] = face.geomType()
+        except Exception:
+            pass
+
+        try:
+            rec["area_mm2"] = round(face.Area(), 4)
+        except Exception:
+            pass
+
+        try:
+            c = face.Center()
+            rec["center_x"] = round(c.x, 4)
+            rec["center_y"] = round(c.y, 4)
+            rec["center_z"] = round(c.z, 4)
+        except Exception:
+            pass
+
+        try:
+            # Evaluates at the mid-point of the face's UV parameter range.
+            # Reliable for PLANE; for CYLINDER gives a radial outward normal
+            # at one point only.  May fail for degenerate BSPLINE surfaces.
+            n = face.normalAt()
+            rec["normal_x"] = round(n.x, 6)
+            rec["normal_y"] = round(n.y, 6)
+            rec["normal_z"] = round(n.z, 6)
+        except Exception:
+            pass
+
+        try:
+            bb = face.BoundingBox()
+            rec["bbox_xmin"] = round(bb.xmin, 4)
+            rec["bbox_xmax"] = round(bb.xmax, 4)
+            rec["bbox_ymin"] = round(bb.ymin, 4)
+            rec["bbox_ymax"] = round(bb.ymax, 4)
+            rec["bbox_zmin"] = round(bb.zmin, 4)
+            rec["bbox_zmax"] = round(bb.zmax, 4)
+            # xlen / ylen / zlen are available in CadQuery's BoundBox but guard
+            # against older builds that may not expose them.
+            rec["bbox_length_x"] = round(
+                getattr(bb, "xlen", bb.xmax - bb.xmin), 4)
+            rec["bbox_length_y"] = round(
+                getattr(bb, "ylen", bb.ymax - bb.ymin), 4)
+            rec["bbox_length_z"] = round(
+                getattr(bb, "zlen", bb.zmax - bb.zmin), 4)
+        except Exception:
+            pass
+
+        # Precise cylinder geometry via OCC BRepAdaptor
+        if _OCC_ADAPTOR_AVAILABLE and rec.get("geom_type") == "CYLINDER":
+            try:
+                adaptor = _BRepAdaptor(face.wrapped)
+                if adaptor.GetType() == _GeomAbsCylinder:
+                    cyl = adaptor.Cylinder()
+                    rec["cylinder_radius_mm"] = round(cyl.Radius(), 4)
+                    d = cyl.Axis().Direction()
+                    rec["cylinder_axis_x"] = round(d.X(), 6)
+                    rec["cylinder_axis_y"] = round(d.Y(), 6)
+                    rec["cylinder_axis_z"] = round(d.Z(), 6)
+            except Exception:
+                pass
+
+        records.append(rec)
+
+    return records
 
 
 # ---------------------------------------------------------------------------
