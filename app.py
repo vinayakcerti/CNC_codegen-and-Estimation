@@ -1149,7 +1149,7 @@ def page_setup_review():
                 issues.append("Missing feature name")
             if qty < 1:
                 issues.append(f"Quantity is {qty} (must be ≥ 1)")
-            if depth == 0:
+            if depth == 0 and feat.get("feature_type") != "Face Milling":
                 issues.append("Depth is 0 or missing")
             if stk_l > 0 and xpos > stk_l:
                 issues.append(f"X position {xpos} mm exceeds stock length {stk_l} mm")
@@ -1184,7 +1184,10 @@ def page_setup_review():
         for feat in features:
             if (not feat.get("feature_name", "").strip()
                     or (feat.get("quantity") or 0) < 1
-                    or (feat.get("depth") or 0) == 0):
+                    or (
+                        (feat.get("depth") or 0) == 0
+                        and feat.get("feature_type") != "Face Milling"
+                    )):
                 any_critical = True
                 break
 

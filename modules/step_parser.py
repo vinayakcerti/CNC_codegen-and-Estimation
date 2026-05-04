@@ -698,6 +698,9 @@ def parse_step_with_cadquery(file_path: str) -> dict:
         f"Removed {removed_vol_cm3} cm³."
     )
 
+    # Feature candidate detection — never raises; failures surface as warnings only
+    _cand = detect_feature_candidates_from_cadquery_file(file_path)
+
     return {
         "success": True,
         "message": message,
@@ -733,6 +736,10 @@ def parse_step_with_cadquery(file_path: str) -> dict:
         # Not applicable for CadQuery path
         "point_count": None,
         "warnings": warnings,
+        # Feature candidates from face-record classification
+        "candidate_features":  _cand.get("candidate_features", []),
+        "candidate_count":     _cand.get("candidate_count", 0),
+        "candidate_warnings":  _cand.get("warnings", []),
     }
 
 
@@ -754,13 +761,16 @@ def parse_step_auto(file_bytes: bytes) -> dict:
     """
     if not _CADQUERY_AVAILABLE:
         result = parse_step_bounding_box(file_bytes)
-        result["parser_used"]    = "lightweight"
-        result["volume_source"]  = "bbox_estimate_60_percent"
-        result["solids_count"]   = None
-        result["shells_count"]   = None
-        result["faces_count"]    = None
-        result["edges_count"]    = None
-        result["vertices_count"] = None
+        result["parser_used"]        = "lightweight"
+        result["volume_source"]      = "bbox_estimate_60_percent"
+        result["solids_count"]       = None
+        result["shells_count"]       = None
+        result["faces_count"]        = None
+        result["edges_count"]        = None
+        result["vertices_count"]     = None
+        result["candidate_features"] = []
+        result["candidate_count"]    = 0
+        result["candidate_warnings"] = []
         return result
 
     tmp_path = None
@@ -776,17 +786,20 @@ def parse_step_auto(file_bytes: bytes) -> dict:
 
     except Exception as exc:
         result = parse_step_bounding_box(file_bytes)
-        result["parser_used"]      = "lightweight_fallback"
-        result["cadquery_warning"] = (
+        result["parser_used"]        = "lightweight_fallback"
+        result["cadquery_warning"]   = (
             f"CadQuery parsing failed ({type(exc).__name__}: {exc}). "
             "Fell back to lightweight regex parser."
         )
-        result["volume_source"]  = "bbox_estimate_60_percent"
-        result["solids_count"]   = None
-        result["shells_count"]   = None
-        result["faces_count"]    = None
-        result["edges_count"]    = None
-        result["vertices_count"] = None
+        result["volume_source"]      = "bbox_estimate_60_percent"
+        result["solids_count"]       = None
+        result["shells_count"]       = None
+        result["faces_count"]        = None
+        result["edges_count"]        = None
+        result["vertices_count"]     = None
+        result["candidate_features"] = []
+        result["candidate_count"]    = 0
+        result["candidate_warnings"] = []
         return result
 
     finally:
@@ -857,6 +870,22 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
         lx = round(r.get("bbox_length_x") or 0, 3)
         ly = round(r.get("bbox_length_y") or 0, 3)
 
+        if nz > 0:
+            _face_note = (
+                f"Top facing candidate; default facing allowance 1.0 mm. "
+                f"(Planar face #{r['face_index']}; normal_z={nz:.4f}; "
+                f"area={area:.1f} mm²; "
+                f"{'large face' if is_large else 'smaller qualifying face'}.)"
+            )
+        else:
+            _face_note = (
+                f"Bottom facing candidate; likely requires flip / second setup; "
+                f"default facing allowance 1.0 mm. "
+                f"(Planar face #{r['face_index']}; normal_z={nz:.4f}; "
+                f"area={area:.1f} mm²; "
+                f"{'large face' if is_large else 'smaller qualifying face'}.)"
+            )
+
         candidates.append({
             "candidate_id":     cid,
             "feature_name":     f"Face milling — {face_dir} surface",
@@ -867,17 +896,12 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "diameter":         None,
             "length":           lx or None,
             "width":            ly or None,
-            "depth":            None,
+            "depth":            1.0,
             "tolerance_note":   "",
             "priority":         1,
             "confidence":       "high",
             "detection_source": "cadquery_face_records",
-            "detection_note":   (
-                f"Planar face #{r['face_index']}; "
-                f"normal_z={nz:.4f} (~{'+'if nz > 0 else '-'}Z); "
-                f"area={area:.1f} mm²; "
-                f"{'large face' if is_large else 'smaller qualifying face'}."
-            ),
+            "detection_note":   _face_note,
             "accepted": False,
             "ignored":  False,
         })
