@@ -16,7 +16,8 @@ OPERATION_RULES = {
         {"op": "Finish End Mill", "notes": "Finish pocket walls and floor"},
     ],
     "Slot": [
-        {"op": "End Mill", "notes": "Full slot cut"},
+        {"op": "Rough End Mill", "notes": "Rough slot using multiple depth/radial passes"},
+        {"op": "Finish End Mill", "notes": "Finish slot walls and floor"},
     ],
     "Face Milling": [
         {"op": "Face Mill", "notes": "Face mill stock surface"},
