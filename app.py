@@ -131,6 +131,14 @@ def init_session():
         st.session_state.uploaded_filename = None
     if "step_uploader_key" not in st.session_state:
         st.session_state.step_uploader_key = 0
+    if "step_candidates" not in st.session_state:
+        st.session_state.step_candidates = []
+    if "step_candidate_warnings" not in st.session_state:
+        st.session_state.step_candidate_warnings = []
+    if "added_candidate_ids" not in st.session_state:
+        st.session_state.added_candidate_ids = set()
+    if "features_from_candidates" not in st.session_state:
+        st.session_state.features_from_candidates = False
 
 
 def sidebar_nav():
@@ -208,6 +216,10 @@ def page_upload_step():
             st.session_state.stock["height"] = parse_result["height_mm"]
             st.session_state.stock["stock_volume"] = parse_result["stock_volume_cm3"]
             st.session_state.stock["part_volume"] = parse_result["part_volume_cm3"]
+            # Store feature candidates; reset accepted-set so re-upload starts fresh
+            st.session_state.step_candidates          = parse_result.get("candidate_features", [])
+            st.session_state.step_candidate_warnings  = parse_result.get("candidate_warnings", [])
+            st.session_state.added_candidate_ids      = set()
 
             # Unit detection banner
             r = parse_result
@@ -957,8 +969,26 @@ def page_setup_review():
 
     st.divider()
 
-    # ── C. Feature summary ───────────────────────────────────────────────────
-    st.subheader("Feature Summary")
+    # ── C. Current features — conflict warning + clear option ───────────────
+    _has_features        = bool(features)
+    _has_candidates      = bool(st.session_state.get("step_candidates"))
+    _from_candidates     = st.session_state.get("features_from_candidates", False)
+    _show_conflict       = _has_features and _has_candidates and not _from_candidates
+
+    if _show_conflict:
+        st.warning(
+            "Existing manual/demo features are currently loaded. "
+            "These may not belong to the uploaded STEP file."
+        )
+        if st.button("Clear existing features before accepting CAD candidates"):
+            st.session_state.features = []
+            st.session_state.features_from_candidates = False
+            save_features_to_db([])
+            st.success("Feature list cleared.")
+            st.rerun()
+
+    # ── C. Current Manual / Accepted Features ───────────────────────────────
+    st.subheader("Current Manual / Accepted Features")
     if not features:
         st.info("No features entered yet — go to page 5 to add features.")
     else:
@@ -988,6 +1018,114 @@ def page_setup_review():
             use_container_width=True,
             hide_index=True,
         )
+
+    st.divider()
+
+    # ── D5. Detected CAD Feature Candidates ─────────────────────────────────
+    st.subheader("Detected CAD Feature Candidates")
+    st.caption("Candidates are not used in operation planning until you accept them.")
+
+    _candidates   = st.session_state.get("step_candidates", [])
+    _cand_warns   = st.session_state.get("step_candidate_warnings", [])
+    _added_ids    = st.session_state.get("added_candidate_ids", set())
+
+    if not _candidates:
+        st.info("No CAD feature candidates available. Use manual Feature Input.")
+    else:
+        st.caption(
+            f"{len(_candidates)} candidate(s) detected from STEP geometry. "
+            "Tick **Accept** and click **Add accepted candidates** to include "
+            "them in the feature list."
+        )
+        for _w in _cand_warns:
+            st.warning(_w)
+
+        _rows = []
+        for _c in _candidates:
+            _cid = _c["candidate_id"]
+            _rows.append({
+                "accept":         _cid not in _added_ids,
+                "status":         "Added ✓" if _cid in _added_ids else "",
+                "candidate_id":   _cid,
+                "feature_type":   _c.get("feature_type", ""),
+                "feature_name":   _c.get("feature_name", ""),
+                "confidence":     _c.get("confidence", ""),
+                "x_pos":          _c.get("x_pos"),
+                "y_pos":          _c.get("y_pos"),
+                "diameter":       _c.get("diameter"),
+                "length":         _c.get("length"),
+                "width":          _c.get("width"),
+                "depth":          _c.get("depth"),
+                "detection_note": _c.get("detection_note", ""),
+            })
+
+        _edited = st.data_editor(
+            pd.DataFrame(_rows),
+            column_config={
+                "accept":       st.column_config.CheckboxColumn("Accept",       default=True),
+                "status":       st.column_config.TextColumn("Status",           disabled=True, width="small"),
+                "candidate_id": st.column_config.TextColumn("ID",               disabled=True, width="small"),
+                "feature_type": st.column_config.TextColumn("Type",             disabled=True),
+                "feature_name": st.column_config.TextColumn("Name",             disabled=True),
+                "confidence":   st.column_config.TextColumn("Confidence",       disabled=True, width="small"),
+                "x_pos":        st.column_config.NumberColumn("X (mm)",         disabled=True, format="%.2f"),
+                "y_pos":        st.column_config.NumberColumn("Y (mm)",         disabled=True, format="%.2f"),
+                "diameter":     st.column_config.NumberColumn("Dia (mm)",       disabled=True, format="%.2f"),
+                "length":       st.column_config.NumberColumn("L (mm)",         disabled=True, format="%.2f"),
+                "width":        st.column_config.NumberColumn("W (mm)",         disabled=True, format="%.2f"),
+                "depth":        st.column_config.NumberColumn("Depth (mm)",     disabled=True, format="%.2f"),
+                "detection_note": st.column_config.TextColumn("Detection Note", disabled=True),
+            },
+            use_container_width=True,
+            hide_index=True,
+            key="cand_editor",
+        )
+
+        _FTYPE_MAP = {
+            "face milling":        "Face Milling",
+            "hole":                "Hole",
+            "large hole / boring": "Large Hole / Boring",
+            "slot":                "Slot",
+        }
+
+        if st.button("Add accepted candidates to feature list", type="primary"):
+            if "added_candidate_ids" not in st.session_state:
+                st.session_state.added_candidate_ids = set()
+            _lookup = {_c["candidate_id"]: _c for _c in _candidates}
+            _n_added = 0
+            for _, _row in _edited.iterrows():
+                _cid = _row["candidate_id"]
+                if not _row["accept"] or _cid in st.session_state.added_candidate_ids:
+                    continue
+                _c = _lookup.get(_cid)
+                if _c is None:
+                    continue
+                _ftype = _FTYPE_MAP.get(
+                    (_c.get("feature_type") or "").strip().lower(),
+                    _c.get("feature_type", ""),
+                )
+                st.session_state.features.append({
+                    "feature_name":   _c.get("feature_name") or _ftype,
+                    "feature_type":   _ftype,
+                    "quantity":       int(_c.get("quantity")  or 1),
+                    "x_pos":          float(_c.get("x_pos")   or 0.0),
+                    "y_pos":          float(_c.get("y_pos")   or 0.0),
+                    "diameter":       float(_c.get("diameter") or 0.0),
+                    "length":         float(_c.get("length")  or 0.0),
+                    "width":          float(_c.get("width")   or 0.0),
+                    "depth":          float(_c.get("depth")   or 0.0),
+                    "tolerance_note": _c.get("tolerance_note") or "",
+                    "priority":       int(_c.get("priority")  or 3),
+                })
+                st.session_state.added_candidate_ids.add(_cid)
+                _n_added += 1
+            if _n_added > 0:
+                st.session_state.features_from_candidates = True
+                save_features_to_db(st.session_state.features)
+                st.success(f"Added {_n_added} candidate(s) to the feature list.")
+                st.rerun()
+            else:
+                st.info("No new candidates selected — tick Accept for candidates to add.")
 
     st.divider()
 
