@@ -795,3 +795,373 @@ def parse_step_auto(file_bytes: bytes) -> dict:
                 os.unlink(tmp_path)
             except OSError:
                 pass  # Non-fatal: temp file cleanup failure on Windows
+
+
+# ---------------------------------------------------------------------------
+# Feature candidate classification (experiment — not wired into parse_step_auto)
+# ---------------------------------------------------------------------------
+
+def _classify_face_records(face_records: list, part_bbox: dict) -> list:
+    """
+    Classify extracted face records into preliminary machinable feature candidates.
+
+    Detects three candidate types:
+        A. Face milling  — large planar faces with normal ≈ ±Z
+        B. Hole / Large hole / boring — individual cylindrical faces
+        C. Slot          — paired cylindrical faces with matching Z range
+                           and axis alignment (slot ends)
+
+    Args:
+        face_records : list[dict] from _extract_face_records()
+        part_bbox    : dict with keys length_mm, width_mm, height_mm,
+                       x_range, y_range, z_range
+
+    Returns:
+        list[dict]  one candidate dict per detected feature; never raises
+    """
+    candidates = []
+
+    part_length  = float(part_bbox.get("length_mm") or 0)
+    part_width   = float(part_bbox.get("width_mm")  or 0)
+    part_height  = float(part_bbox.get("height_mm") or 0)
+    xy_footprint = part_length * part_width   # mm²
+
+    _f_n = [0]   # facing ID counter (list for mutability inside nested scope)
+    _h_n = [0]   # hole ID counter
+    _s_n = [0]   # slot ID counter
+
+    # ── A. Facing candidates ─────────────────────────────────────────────────
+    # Large planar faces with surface normal approximately ±Z.
+    _NZ_THRESH     = 0.92     # |normal_z| must exceed (within ~23° of ±Z)
+    _MIN_AREA_MM2  = 50.0     # ignore tiny slivers
+    _LARGE_FRAC    = 0.05     # area > 5% of XY footprint counts as large
+    _LARGE_ABS_MM2 = 500.0    # or unconditionally large above this
+
+    for r in face_records:
+        if r.get("geom_type") != "PLANE":
+            continue
+        nz = r.get("normal_z")
+        if nz is None or abs(nz) <= _NZ_THRESH:
+            continue
+        area = r.get("area_mm2") or 0.0
+        if area < _MIN_AREA_MM2:
+            continue
+
+        _f_n[0] += 1
+        cid      = f"F{_f_n[0]:03d}"
+        is_large = (
+            (xy_footprint > 0 and area > xy_footprint * _LARGE_FRAC)
+            or area > _LARGE_ABS_MM2
+        )
+        face_dir = "top" if nz > 0 else "bottom"
+        lx = round(r.get("bbox_length_x") or 0, 3)
+        ly = round(r.get("bbox_length_y") or 0, 3)
+
+        candidates.append({
+            "candidate_id":     cid,
+            "feature_name":     f"Face milling — {face_dir} surface",
+            "feature_type":     "Face milling",
+            "quantity":         1,
+            "x_pos":            r.get("center_x"),
+            "y_pos":            r.get("center_y"),
+            "diameter":         None,
+            "length":           lx or None,
+            "width":            ly or None,
+            "depth":            None,
+            "tolerance_note":   "",
+            "priority":         1,
+            "confidence":       "high",
+            "detection_source": "cadquery_face_records",
+            "detection_note":   (
+                f"Planar face #{r['face_index']}; "
+                f"normal_z={nz:.4f} (~{'+'if nz > 0 else '-'}Z); "
+                f"area={area:.1f} mm²; "
+                f"{'large face' if is_large else 'smaller qualifying face'}."
+            ),
+            "accepted": False,
+            "ignored":  False,
+        })
+
+    # ── B. Hole / bore candidates ────────────────────────────────────────────
+    # Only CYLINDER faces that are circular in the machining plane (XY) qualify.
+    # circular_xy = bbox spans in X and Y are within 15% of each other.
+    # Non-circular cylinder bboxes indicate slot-end curved walls — skipped here.
+    cyl_faces = [r for r in face_records if r.get("geom_type") == "CYLINDER"]
+
+    for r in cyl_faces:
+        lx = r.get("bbox_length_x") or 0
+        ly = r.get("bbox_length_y") or 0
+        circular_xy = (
+            lx > 0 and ly > 0
+            and abs(lx - ly) / max(lx, ly) <= 0.15
+        )
+
+        if not circular_xy:
+            continue   # non-circular bbox → slot-end wall, not a standalone hole
+
+        _h_n[0] += 1
+        cid = f"H{_h_n[0]:03d}"
+
+        exact_r = r.get("cylinder_radius_mm")
+
+        if exact_r is not None:
+            diameter   = round(exact_r * 2, 3)
+            confidence = "high"
+            diam_note  = f"OCC adaptor radius={exact_r:.4f} mm"
+        elif lx > 0 and ly > 0:
+            diameter   = round((lx + ly) / 2.0, 3)
+            confidence = "medium"
+            diam_note  = f"bbox-estimated from spans lx={lx:.3f} ly={ly:.3f} mm"
+        else:
+            diameter   = None
+            confidence = "medium"
+            diam_note  = "diameter unknown — bbox spans unavailable"
+
+        lz         = r.get("bbox_length_z") or 0
+        depth      = round(lz, 3) if lz > 0 else None
+        is_through = part_height > 0 and lz >= part_height * 0.70
+
+        ftype = (
+            "Hole" if (diameter is None or diameter < 25)
+            else "Large hole / boring"
+        )
+        name = (
+            f"{ftype} Ø{diameter:.2f} mm" if diameter is not None else ftype
+        )
+
+        candidates.append({
+            "candidate_id":     cid,
+            "feature_name":     name,
+            "feature_type":     ftype,
+            "quantity":         1,
+            "x_pos":            r.get("center_x"),
+            "y_pos":            r.get("center_y"),
+            "diameter":         diameter,
+            "length":           None,
+            "width":            None,
+            "depth":            depth,
+            "tolerance_note":   "",
+            "priority":         2,
+            "confidence":       confidence,
+            "detection_source": "cadquery_face_records",
+            "detection_note":   (
+                f"Cylinder face #{r['face_index']}; "
+                f"circular_xy=True (lx={lx:.3f} ly={ly:.3f} mm, ratio≤0.15) → treated as hole/bore; "
+                f"{diam_note}; "
+                f"depth={depth} mm "
+                f"({'through' if is_through else 'blind or partial'})."
+            ),
+            "accepted": False,
+            "ignored":  False,
+        })
+
+    # ── C. Slot candidates ───────────────────────────────────────────────────
+    # Detect pairs of cylindrical faces with: similar radius, matching Z range,
+    # and centers aligned primarily along one axis (X or Y slot orientation).
+    # Only non-circular cylinder faces (circular_xy=False) are considered as
+    # slot-end walls.  Circular cylinders are holes/bores and excluded here.
+    _slot_items = []
+    for r in cyl_faces:
+        lx = r.get("bbox_length_x") or 0
+        ly = r.get("bbox_length_y") or 0
+        circular_xy = (
+            lx > 0 and ly > 0
+            and abs(lx - ly) / max(lx, ly) <= 0.15
+        )
+
+        if circular_xy:
+            continue   # circular → already a hole/bore candidate, not a slot end
+
+        exact_r = r.get("cylinder_radius_mm")
+
+        if exact_r is not None:
+            est_r = exact_r
+        elif lx > 0 and ly > 0:
+            est_r = (lx + ly) / 4.0   # (lx+ly)/2 is diameter estimate; /4 = radius
+        else:
+            est_r = None
+
+        if est_r is None or est_r <= 0:
+            continue
+
+        _slot_items.append({
+            "rec":        r,
+            "est_radius": est_r,
+            "cx":   r.get("center_x") or 0.0,
+            "cy":   r.get("center_y") or 0.0,
+            "zmin": r.get("bbox_zmin"),
+            "zmax": r.get("bbox_zmax"),
+            "lz":   r.get("bbox_length_z") or 0.0,
+        })
+
+    _RADIUS_TOL = 0.20   # pair radii must be within 20% of their average
+    _Z_TOL_MM   = 2.0    # absolute mm tolerance for matching Z extents
+    used        = set()
+    slot_pairs  = []
+
+    for i in range(len(_slot_items)):
+        if i in used:
+            continue
+        a = _slot_items[i]
+
+        for j in range(i + 1, len(_slot_items)):
+            if j in used:
+                continue
+            b = _slot_items[j]
+
+            # Radius similarity
+            r_avg = (a["est_radius"] + b["est_radius"]) / 2.0
+            if abs(a["est_radius"] - b["est_radius"]) / r_avg > _RADIUS_TOL:
+                continue
+
+            # Z-range overlap: both zmin and zmax must agree within tolerance
+            if (a["zmin"] is None or b["zmin"] is None
+                    or a["zmax"] is None or b["zmax"] is None):
+                continue
+            if (abs(a["zmin"] - b["zmin"]) > _Z_TOL_MM
+                    or abs(a["zmax"] - b["zmax"]) > _Z_TOL_MM):
+                continue
+
+            # Axis alignment: one axis dominates, the other is within one diameter
+            dx   = abs(a["cx"] - b["cx"])
+            dy   = abs(a["cy"] - b["cy"])
+            diam = r_avg * 2.0
+            x_aligned = dx > diam and dy < diam * 0.6   # slot runs along X
+            y_aligned = dy > diam and dx < diam * 0.6   # slot runs along Y
+
+            if not (x_aligned or y_aligned):
+                continue
+
+            used.add(i)
+            used.add(j)
+            slot_pairs.append((a, b, r_avg))
+            break   # face i is consumed; move to i+1
+
+    for (a, b, r_avg) in slot_pairs:
+        _s_n[0] += 1
+        cid = f"S{_s_n[0]:03d}"
+
+        diam_slot   = round(r_avg * 2.0, 3)
+        ctr_dist    = math.sqrt(
+            (a["cx"] - b["cx"]) ** 2 + (a["cy"] - b["cy"]) ** 2
+        )
+        slot_length = round(ctr_dist + diam_slot, 3)
+        slot_depth  = (
+            round((a["lz"] + b["lz"]) / 2.0, 3)
+            if a["lz"] and b["lz"] else None
+        )
+        slot_cx = round((a["cx"] + b["cx"]) / 2.0, 3)
+        slot_cy = round((a["cy"] + b["cy"]) / 2.0, 3)
+
+        candidates.append({
+            "candidate_id":     cid,
+            "feature_name":     f"Slot {slot_length:.2f}×{diam_slot:.2f} mm",
+            "feature_type":     "Slot",
+            "quantity":         1,
+            "x_pos":            slot_cx,
+            "y_pos":            slot_cy,
+            "diameter":         None,
+            "length":           slot_length,
+            "width":            diam_slot,
+            "depth":            slot_depth,
+            "tolerance_note":   "",
+            "priority":         3,
+            "confidence":       "medium",
+            "detection_source": "cadquery_face_records",
+            "detection_note":   (
+                f"Paired non-circular cylinder end faces "
+                f"#{a['rec']['face_index']} and #{b['rec']['face_index']} "
+                f"(circular_xy=False on both, excluded from hole detection); "
+                f"est. radius={r_avg:.3f} mm; "
+                f"center separation={ctr_dist:.2f} mm → "
+                f"length={slot_length} mm, width={diam_slot} mm."
+            ),
+            "accepted": False,
+            "ignored":  False,
+        })
+
+    return candidates
+
+
+def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
+    """
+    Load a STEP file with CadQuery and return preliminary machinable feature
+    candidates classified from per-face geometry records.
+
+    Never raises — all exceptions are caught and returned as success=False
+    with a populated warnings list.  Does NOT wire into parse_step_auto.
+
+    Returns:
+        {
+            "success":            bool,
+            "candidate_features": list[dict],
+            "candidate_count":    int,
+            "warnings":           list[str]
+        }
+    """
+    warnings_out = []
+
+    try:
+        if not _CADQUERY_AVAILABLE:
+            return {
+                "success": False,
+                "candidate_features": [],
+                "candidate_count": 0,
+                "warnings": [
+                    "CadQuery is not installed — cannot detect feature candidates. "
+                    "Install via: conda install -c conda-forge cadquery"
+                ],
+            }
+
+        import cadquery as cq  # local re-import makes the dependency explicit
+
+        if not os.path.isfile(file_path):
+            return {
+                "success": False,
+                "candidate_features": [],
+                "candidate_count": 0,
+                "warnings": [f"File not found: {file_path}"],
+            }
+
+        cq_result = cq.importers.importStep(file_path)
+
+        bb = cq_result.val().BoundingBox()
+        part_bbox = {
+            "length_mm": round(bb.xmax - bb.xmin, 3),
+            "width_mm":  round(bb.ymax - bb.ymin, 3),
+            "height_mm": round(bb.zmax - bb.zmin, 3),
+            "x_range":   (bb.xmin, bb.xmax),
+            "y_range":   (bb.ymin, bb.ymax),
+            "z_range":   (bb.zmin, bb.zmax),
+        }
+
+        face_records = _extract_face_records(cq_result)
+
+        if not face_records:
+            warnings_out.append(
+                "No face records extracted — "
+                "file may be a surface shell or CadQuery found no topology."
+            )
+
+        candidates = _classify_face_records(face_records, part_bbox)
+
+        if not candidates:
+            warnings_out.append(
+                "No feature candidates detected. "
+                "The file may lack planar ±Z faces or cylindrical features."
+            )
+
+        return {
+            "success":            True,
+            "candidate_features": candidates,
+            "candidate_count":    len(candidates),
+            "warnings":           warnings_out,
+        }
+
+    except Exception as exc:
+        return {
+            "success":            False,
+            "candidate_features": [],
+            "candidate_count":    0,
+            "warnings":           [f"Detection failed — {type(exc).__name__}: {exc}"],
+        }
