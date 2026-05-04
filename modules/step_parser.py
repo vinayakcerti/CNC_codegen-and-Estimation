@@ -1131,6 +1131,182 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "ignored":  False,
         })
 
+    # ── D. Through rectangular pocket / window candidates ──────────────────────
+    # Detect rectangular channels from pairs of opposing internal PLANE walls.
+    # An internal ±X pair is identified by: +X face at xa < -X face at xb.
+    # Outer-profile walls have the opposite orientation (right +X > left -X)
+    # and are excluded naturally.  An 88% span guard catches edge cases.
+    # Through pockets have wall lz ~= part height and no detected floor face.
+    # Does not modify Sections A, B, or C.
+
+    _P_NZ_MAX     = 0.15    # |nz| must be below this — face must be nearly vertical
+    _P_NA_MIN     = 0.92    # |nx| or |ny| must exceed this for axis-aligned wall
+    _P_WALL_MIN_A = 400.0   # ignore wall face slivers smaller than this (mm²)
+    _P_OUTER_FRAC = 0.88    # skip pairs whose gap > 88% of part span in that axis
+    _P_MIN_DIM    = 4.0     # minimum pocket dimension in mm
+    _P_MAX_ASPECT = 8.0     # max length/width — above this prefer slot territory
+    _P_THRU_FRAC  = 0.90    # wall Z span >= 90% of part height → through pocket
+
+    _pz_span = float(part_height)   # part_height already computed at top of function
+
+    # Bucket axis-aligned vertical PLANE faces by normal direction.
+    _vxp, _vxn, _vyp, _vyn = [], [], [], []   # +X, -X, +Y, -Y normals
+    for _r in face_records:
+        if _r.get("geom_type") != "PLANE":
+            continue
+        _nz = _r.get("normal_z") or 0.0
+        _nx = _r.get("normal_x") or 0.0
+        _ny = _r.get("normal_y") or 0.0
+        if abs(_nz) >= _P_NZ_MAX:
+            continue   # not vertical enough
+        if (_r.get("area_mm2") or 0.0) < _P_WALL_MIN_A:
+            continue
+        if (_r.get("bbox_length_z") or 0.0) <= 0:
+            continue
+        if _nx > _P_NA_MIN:
+            _vxp.append(_r)
+        elif _nx < -_P_NA_MIN:
+            _vxn.append(_r)
+        if _ny > _P_NA_MIN:
+            _vyp.append(_r)
+        elif _ny < -_P_NA_MIN:
+            _vyn.append(_r)
+
+    # Build internal ±X pairs: +X wall at xa must be LEFT of -X wall at xb (xa < xb).
+    # Outer right-wall (+X at x_max) and outer left-wall (-X at x_min) have the
+    # opposite relationship, so xa > xb and are excluded without any extra test.
+    _xpairs = []
+    for _a in _vxp:
+        _xa = _a.get("center_x") or 0.0
+        for _b in _vxn:
+            _xb = _b.get("center_x") or 0.0
+            if _xb <= _xa:
+                continue                               # outer-profile orientation
+            _gx = _xb - _xa
+            if part_length > 0 and _gx > part_length * _P_OUTER_FRAC:
+                continue                               # gap spans nearly full part
+            _azlo = _a.get("bbox_zmin") or 0.0;  _azhi = _a.get("bbox_zmax") or 0.0
+            _bzlo = _b.get("bbox_zmin") or 0.0;  _bzhi = _b.get("bbox_zmax") or 0.0
+            _zlo = max(_azlo, _bzlo);  _zhi = min(_azhi, _bzhi)
+            if _zhi <= _zlo:
+                continue
+            _xpairs.append({"a": _a, "b": _b, "gap": _gx,
+                             "cx": (_xa + _xb) / 2.0, "zlo": _zlo, "zhi": _zhi})
+
+    # Build internal ±Y pairs: +Y wall at ya must be BELOW -Y wall at yb (ya < yb).
+    _ypairs = []
+    for _a in _vyp:
+        _ya = _a.get("center_y") or 0.0
+        for _b in _vyn:
+            _yb = _b.get("center_y") or 0.0
+            if _yb <= _ya:
+                continue
+            _gy = _yb - _ya
+            if part_width > 0 and _gy > part_width * _P_OUTER_FRAC:
+                continue
+            _azlo = _a.get("bbox_zmin") or 0.0;  _azhi = _a.get("bbox_zmax") or 0.0
+            _bzlo = _b.get("bbox_zmin") or 0.0;  _bzhi = _b.get("bbox_zmax") or 0.0
+            _zlo = max(_azlo, _bzlo);  _zhi = min(_azhi, _bzhi)
+            if _zhi <= _zlo:
+                continue
+            _ypairs.append({"a": _a, "b": _b, "gap": _gy,
+                             "cy": (_ya + _yb) / 2.0, "zlo": _zlo, "zhi": _zhi})
+
+    _used_p_walls = set()   # face indices already consumed by a pocket candidate
+    _p_n = [0]              # pocket ID counter
+
+    for _xp in _xpairs:
+        for _yp in _ypairs:
+            # Both pairs must share a Z overlap region.
+            _zlo = max(_xp["zlo"], _yp["zlo"])
+            _zhi = min(_xp["zhi"], _yp["zhi"])
+            if _zhi <= _zlo:
+                continue
+
+            _px = round(_xp["gap"], 3)
+            _py = round(_yp["gap"], 3)
+            if _px < _P_MIN_DIM or _py < _P_MIN_DIM:
+                continue
+            if max(_px, _py) / min(_px, _py) >= _P_MAX_ASPECT:
+                continue   # high aspect ratio — slot territory
+
+            _wall_idxs = frozenset([
+                _xp["a"]["face_index"], _xp["b"]["face_index"],
+                _yp["a"]["face_index"], _yp["b"]["face_index"],
+            ])
+            if _wall_idxs & _used_p_walls:
+                continue   # a wall already used in a prior pocket candidate
+
+            _cx_pk = round(_xp["cx"], 3)
+            _cy_pk = round(_yp["cy"], 3)
+
+            # Skip if CYLINDER faces lie within the pocket XY/Z region — rounded
+            # slot ends indicate the region is already handled by Section C.
+            _has_cyl = False
+            for _rc in face_records:
+                if _rc.get("geom_type") != "CYLINDER":
+                    continue
+                _rx = _rc.get("center_x") or 0.0
+                _ry = _rc.get("center_y") or 0.0
+                _rz = _rc.get("center_z") or 0.0
+                if (abs(_rx - _cx_pk) <= _px / 2 + 2
+                        and abs(_ry - _cy_pk) <= _py / 2 + 2
+                        and _zlo <= _rz <= _zhi):
+                    _has_cyl = True
+                    break
+            if _has_cyl:
+                continue
+
+            _wall_lz  = round(_zhi - _zlo, 3)
+            _depth    = _wall_lz
+            _length   = round(max(_px, _py), 3)
+            _width    = round(min(_px, _py), 3)
+
+            _p_n[0] += 1
+            _pcid = f"P{_p_n[0]:03d}"
+
+            _pnote = (
+                f"Paired internal PLANE walls — "
+                f"X-pair: face #{_xp['a']['face_index']} (+X, "
+                f"cx={(_xp['a'].get('center_x') or 0):.2f}) and "
+                f"face #{_xp['b']['face_index']} (-X, "
+                f"cx={(_xp['b'].get('center_x') or 0):.2f}), "
+                f"gap={_px:.2f} mm; "
+                f"Y-pair: face #{_yp['a']['face_index']} (+Y, "
+                f"cy={(_yp['a'].get('center_y') or 0):.2f}) and "
+                f"face #{_yp['b']['face_index']} (-Y, "
+                f"cy={(_yp['b'].get('center_y') or 0):.2f}), "
+                f"gap={_py:.2f} mm; "
+                f"Z overlap {_zlo:.2f} to {_zhi:.2f} mm "
+                f"(wall lz={_wall_lz:.2f} mm). "
+                f"No floor face detected -- treated as through pocket/window."
+            )
+
+            _used_p_walls |= {
+                _xp["a"]["face_index"], _xp["b"]["face_index"],
+                _yp["a"]["face_index"], _yp["b"]["face_index"],
+            }
+
+            candidates.append({
+                "candidate_id":     _pcid,
+                "feature_name":     f"Through pocket {_length:.1f}x{_width:.1f} mm",
+                "feature_type":     "Pocket",
+                "quantity":         1,
+                "x_pos":            _cx_pk,
+                "y_pos":            _cy_pk,
+                "diameter":         None,
+                "length":           _length,
+                "width":            _width,
+                "depth":            _depth,
+                "tolerance_note":   "",
+                "priority":         3,
+                "confidence":       "low",
+                "detection_source": "paired_internal_walls",
+                "detection_note":   _pnote,
+                "accepted": False,
+                "ignored":  False,
+            })
+
     return candidates
 
 
