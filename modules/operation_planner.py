@@ -71,6 +71,35 @@ def estimate_path_length(feature, operation_type):
     return 50.0 * qty
 
 
+def _context_note(ftype, feature_name, diameter, op_type):
+    """Return an additional note string for a specific feature/operation context.
+
+    Returns an empty string when no extra note applies.  Callers append this to
+    the base rule note with a single space separator.
+    """
+    fname_lower = (feature_name or "").lower()
+
+    if ftype == "Face Milling":
+        if "bottom" in fname_lower:
+            return "Setup 2 required — flip part before machining this face."
+        if "top" in fname_lower:
+            return "Primary setup facing operation."
+
+    if ftype == "Large Hole / Boring" and op_type == "Boring" and (diameter or 0) >= 25:
+        return (
+            "Verify boring tool reach and minimum bore capability "
+            f"for final diameter Ø{diameter:.1f} mm."
+        )
+
+    if ftype == "Slot":
+        if op_type == "Rough End Mill":
+            return "Use multiple depth passes and radial stepovers."
+        if op_type == "Finish End Mill":
+            return "Finish slot walls and floor after roughing."
+
+    return ""
+
+
 def plan_operations(features, tools, material):
     """Generate operation plan from features."""
     operations = []
@@ -86,6 +115,14 @@ def plan_operations(features, tools, material):
             spindle, feed = get_spindle_and_feed(tool, material)
             path_len = estimate_path_length(feature, op_type)
 
+            extra = _context_note(
+                ftype,
+                feature.get("feature_name", ""),
+                feature.get("diameter") or 0,
+                op_type,
+            )
+            note = rule["notes"] + (" | " + extra if extra else "")
+
             operations.append({
                 "op_num": op_num,
                 "feature_name": feature["feature_name"],
@@ -96,7 +133,7 @@ def plan_operations(features, tools, material):
                 "spindle_rpm": spindle,
                 "feed_rate_mm_min": feed,
                 "est_path_length_mm": round(path_len, 1),
-                "notes": rule["notes"],
+                "notes": note,
                 # Carry feature geometry for G-code generation
                 "_x_pos": float(feature.get("x_pos", 0) or 0),
                 "_y_pos": float(feature.get("y_pos", 0) or 0),
