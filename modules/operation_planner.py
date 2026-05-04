@@ -143,6 +143,34 @@ def _context_note(ftype, feature_name, diameter, op_type):
     return ""
 
 
+def _sequence_key(op):
+    """Return a sort key for practical machining order.
+
+    Planning-level sequence heuristic — groups ops by phase so the operator
+    completes Setup 1 before any flip is required.  Not a substitute for full
+    CAM setup planning.
+    """
+    ftype  = op.get("feature_type", "")
+    fname  = op.get("feature_name", "").lower()
+    op_type = op.get("operation_type", "")
+
+    # Bottom face milling needs a flip — always goes last (Setup 2)
+    if ftype == "Face Milling" and "bottom" in fname:
+        return 6
+
+    if ftype == "Face Milling":                          # top / primary facing first
+        return 0
+    if op_type in ("Spot Drill", "Pilot Drill", "Drill"):
+        return 1
+    if op_type == "Boring":
+        return 2
+    if op_type == "Rough End Mill":
+        return 3
+    if op_type == "Finish End Mill":
+        return 4
+    return 5                                             # chamfer, profile, other
+
+
 def plan_operations(features, tools, material):
     """Generate operation plan from features."""
     operations = []
@@ -187,5 +215,10 @@ def plan_operations(features, tools, material):
                 "_quantity": int(feature.get("quantity", 1) or 1),
             })
             op_num += 1
+
+    # Re-sequence into practical machining order, then renumber from 1.
+    operations.sort(key=_sequence_key)
+    for i, op in enumerate(operations, start=1):
+        op["op_num"] = i
 
     return operations
