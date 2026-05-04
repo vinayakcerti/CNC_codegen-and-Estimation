@@ -31,20 +31,36 @@ OPERATION_RULES = {
 }
 
 
-def estimate_path_length(feature, operation_type):
-    """Estimate cutting path length in mm."""
-    ftype = feature.get("feature_type", "")
-    length = feature.get("length", 0) or 0
-    width = feature.get("width", 0) or 0
-    depth = feature.get("depth", 0) or 0
+def estimate_path_length(feature, operation_type, tool=None):
+    """Estimate cutting path length in mm.
+
+    These are planning estimates for time/cost approximation — not CAM toolpaths.
+    Actual NC programs will differ based on CAM strategy, lead-in/out, and fixturing.
+
+    Args:
+        feature       : feature dict from session state
+        operation_type: operation string, e.g. "Face Mill", "Rough End Mill"
+        tool          : selected tool dict (optional); used where tool diameter
+                        affects the number of passes.  Falls back to sensible
+                        defaults when None.
+    """
+    ftype    = feature.get("feature_type", "")
+    length   = feature.get("length",   0) or 0
+    width    = feature.get("width",    0) or 0
+    depth    = feature.get("depth",    0) or 0
     diameter = feature.get("diameter", 0) or 0
-    qty = feature.get("quantity", 1) or 1
+    qty      = feature.get("quantity", 1) or 1
 
+    # Tool diameter — used by Face Mill and End Mill formulas below.
+    tool_dia = (tool or {}).get("diameter_mm") or 0
+
+    # ── Holes / boring ───────────────────────────────────────────────────────
     if ftype in ("Hole", "Large Hole / Boring"):
-        if operation_type in ("Spot Drill",):
-            return 5.0 * qty
-        return depth * qty
+        if operation_type == "Spot Drill":
+            return 5.0 * qty          # constant centre-drill engagement
+        return depth * qty             # drill/bore travel = hole depth
 
+    # ── Pocket ───────────────────────────────────────────────────────────────
     if ftype == "Pocket":
         if length > 0 and width > 0:
             passes = math.ceil(depth / 3.0)
@@ -52,19 +68,46 @@ def estimate_path_length(feature, operation_type):
             return path_per_pass * passes * qty
         return 100.0 * qty
 
+    # ── Slot ─────────────────────────────────────────────────────────────────
     if ftype == "Slot":
-        return (length or 50) * qty
+        slot_len = length or 50
 
+        if operation_type == "Rough End Mill":
+            # Raster estimate: depth passes × radial passes × slot length.
+            # DOC = 0.5 × D (axial),  stepover = 0.6 × D (radial).
+            dia = tool_dia if tool_dia > 0 else 12.0   # default: T7 12 mm
+            stepdown      = dia * 0.5
+            stepover      = dia * 0.6
+            depth_passes  = max(1, math.ceil(depth  / stepdown))  if depth  > 0 else 1
+            radial_passes = max(1, math.ceil(width  / stepover))  if width  > 0 else 1
+            return depth_passes * radial_passes * slot_len * qty
+
+        if operation_type == "Finish End Mill":
+            # Two finishing passes — one along each slot wall.
+            return 2 * slot_len * qty
+
+        # Fallback for any other op type on a slot feature
+        return slot_len * qty
+
+    # ── Face Milling ─────────────────────────────────────────────────────────
     if ftype == "Face Milling":
         if length > 0 and width > 0:
-            return (length + width) * 2
+            # Raster estimate: passes across the face width, each pass = face length
+            # plus one tool-diameter approach/exit.
+            # Stepover = 0.75 × D (standard face milling overlap).
+            dia      = tool_dia if tool_dia > 0 else 50.0   # default: T8 50 mm
+            stepover = dia * 0.75
+            passes   = max(1, math.ceil(width / stepover))
+            return passes * (length + dia) * qty
         return 300.0
 
+    # ── Outer Profile ────────────────────────────────────────────────────────
     if ftype == "Outer Profile":
         if length > 0 and width > 0:
             return (length + width) * 2 * qty
         return 200.0 * qty
 
+    # ── Chamfer ──────────────────────────────────────────────────────────────
     if ftype == "Chamfer":
         return (diameter or 10) * 3.14 * qty
 
@@ -113,7 +156,7 @@ def plan_operations(features, tools, material):
             op_type = rule["op"]
             tool = select_tool_for_operation(op_type, feature, tools)
             spindle, feed = get_spindle_and_feed(tool, material)
-            path_len = estimate_path_length(feature, op_type)
+            path_len = estimate_path_length(feature, op_type, tool)
 
             extra = _context_note(
                 ftype,
