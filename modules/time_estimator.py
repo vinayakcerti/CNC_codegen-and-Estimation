@@ -21,7 +21,8 @@ def estimate_time(operations, machine, material, features):
         rapid_distance += (x ** 2 + y ** 2) ** 0.5
 
     rapid_distance = max(rapid_distance, 200.0)
-    rapid_time_min = (rapid_distance / rapid_feed) * 1000
+    # mm / (mm/min) = minutes — no extra multiplier needed.
+    rapid_time_min = rapid_distance / rapid_feed if rapid_feed > 0 else 0.0
 
     tool_numbers = list({op["tool_number"] for op in operations})
     num_tool_changes = max(len(tool_numbers) - 1, 0)
