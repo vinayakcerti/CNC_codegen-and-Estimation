@@ -844,11 +844,24 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
     _s_n = [0]   # slot ID counter
 
     # ── A. Facing candidates ─────────────────────────────────────────────────
-    # Large planar faces with surface normal approximately ±Z.
-    _NZ_THRESH     = 0.92     # |normal_z| must exceed (within ~23° of ±Z)
-    _MIN_AREA_MM2  = 50.0     # ignore tiny slivers
-    _LARGE_FRAC    = 0.05     # area > 5% of XY footprint counts as large
-    _LARGE_ABS_MM2 = 500.0    # or unconditionally large above this
+    # Only large setup-level horizontal faces qualify as Face milling candidates.
+    # Small horizontal faces (blind hole bottoms, pocket floors, step ledges)
+    # are excluded by the 35% footprint-area threshold.
+    # At most one top candidate and one bottom candidate are emitted.
+    _NZ_THRESH       = 0.92   # |normal_z| > 0.92 (within ~23° of ±Z)
+    _MIN_AREA_MM2    = 200.0  # absolute floor — unconditional sliver filter
+    _FOOTPRINT_RATIO = 0.35   # face must cover >= 35% of XY footprint to qualify
+
+    # XY footprint computed from part bounding-box coordinate ranges.
+    xr = part_bbox.get("x_range", (0.0, 0.0))
+    yr = part_bbox.get("y_range", (0.0, 0.0))
+    footprint_area = (xr[1] - xr[0]) * (yr[1] - yr[0])   # mm²
+    min_qual_area  = (
+        footprint_area * _FOOTPRINT_RATIO if footprint_area > 0 else _MIN_AREA_MM2
+    )
+
+    top_hz_faces    = []   # PLANE faces with nz > 0 that pass the area threshold
+    bottom_hz_faces = []   # PLANE faces with nz < 0 that pass the area threshold
 
     for r in face_records:
         if r.get("geom_type") != "PLANE":
@@ -859,31 +872,45 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
         area = r.get("area_mm2") or 0.0
         if area < _MIN_AREA_MM2:
             continue
-
-        _f_n[0] += 1
-        cid      = f"F{_f_n[0]:03d}"
-        is_large = (
-            (xy_footprint > 0 and area > xy_footprint * _LARGE_FRAC)
-            or area > _LARGE_ABS_MM2
-        )
-        face_dir = "top" if nz > 0 else "bottom"
-        lx = round(r.get("bbox_length_x") or 0, 3)
-        ly = round(r.get("bbox_length_y") or 0, 3)
-
+        # Reject faces that do not cover enough of the part XY footprint.
+        # This eliminates blind hole bottoms, pocket floors, and step ledges
+        # which all have areas well below 35% of the part footprint.
+        if footprint_area > 0 and area < min_qual_area:
+            continue
         if nz > 0:
+            top_hz_faces.append(r)
+        else:
+            bottom_hz_faces.append(r)
+
+    # Emit at most one candidate per direction — the largest qualifying face by area.
+    for face_dir, face_list in (("top", top_hz_faces), ("bottom", bottom_hz_faces)):
+        if not face_list:
+            continue
+        best = max(face_list, key=lambda r: r.get("area_mm2") or 0.0)
+        _f_n[0] += 1
+        cid  = f"F{_f_n[0]:03d}"
+        area = best.get("area_mm2") or 0.0
+        nz   = best.get("normal_z") or 0.0
+        lx   = round(best.get("bbox_length_x") or 0, 3)
+        ly   = round(best.get("bbox_length_y") or 0, 3)
+        pct  = (area / footprint_area * 100) if footprint_area > 0 else 0.0
+
+        base_note = (
+            f"Face #{best['face_index']}; normal_z={nz:.4f}; "
+            f"area={area:.1f} mm^2 ({pct:.1f}% of XY footprint "
+            f"{footprint_area:.1f} mm^2, threshold >={_FOOTPRINT_RATIO*100:.0f}%); "
+            f"default facing allowance 1.0 mm."
+        )
+        if face_dir == "top":
             _face_note = (
-                f"Top facing candidate; default facing allowance 1.0 mm. "
-                f"(Planar face #{r['face_index']}; normal_z={nz:.4f}; "
-                f"area={area:.1f} mm²; "
-                f"{'large face' if is_large else 'smaller qualifying face'}.)"
+                f"Top facing candidate — largest qualifying top horizontal face. "
+                + base_note
             )
         else:
             _face_note = (
-                f"Bottom facing candidate; likely requires flip / second setup; "
-                f"default facing allowance 1.0 mm. "
-                f"(Planar face #{r['face_index']}; normal_z={nz:.4f}; "
-                f"area={area:.1f} mm²; "
-                f"{'large face' if is_large else 'smaller qualifying face'}.)"
+                f"Bottom facing candidate — largest qualifying bottom horizontal face; "
+                f"likely requires flip / second setup. "
+                + base_note
             )
 
         candidates.append({
@@ -891,8 +918,8 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "feature_name":     f"Face milling — {face_dir} surface",
             "feature_type":     "Face milling",
             "quantity":         1,
-            "x_pos":            r.get("center_x"),
-            "y_pos":            r.get("center_y"),
+            "x_pos":            best.get("center_x"),
+            "y_pos":            best.get("center_y"),
             "diameter":         None,
             "length":           lx or None,
             "width":            ly or None,
