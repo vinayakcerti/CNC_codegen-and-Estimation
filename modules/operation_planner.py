@@ -186,13 +186,24 @@ def plan_operations(features, tools, material):
             spindle, feed = get_spindle_and_feed(tool, material)
             path_len = estimate_path_length(feature, op_type, tool)
 
-            extra = _context_note(
-                ftype,
-                feature.get("feature_name", ""),
-                feature.get("diameter") or 0,
-                op_type,
+            _fname_lower = feature.get("feature_name", "").lower()
+            _is_through_pocket = (
+                ftype == "Pocket"
+                and ("through pocket" in _fname_lower or "window" in _fname_lower)
             )
-            note = rule["notes"] + (" | " + extra if extra else "")
+
+            if _is_through_pocket and op_type == "Rough End Mill":
+                note = "Rough through pocket/window using multiple depth/radial passes"
+            elif _is_through_pocket and op_type == "Finish End Mill":
+                note = "Finish internal walls of through pocket/window"
+            else:
+                extra = _context_note(
+                    ftype,
+                    feature.get("feature_name", ""),
+                    feature.get("diameter") or 0,
+                    op_type,
+                )
+                note = rule["notes"] + (" | " + extra if extra else "")
 
             operations.append({
                 "op_num": op_num,
