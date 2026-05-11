@@ -88,6 +88,7 @@ The app currently detects these candidate features from CadQuery face records:
 | Large holes / boring | Implemented |
 | Slots | Implemented |
 | Through rectangular pocket/window | Implemented |
+| Blind rectangular pocket (with floor face) | Implemented |
 
 Candidate detection is not automatically used. It is shown to the user for review.
 
@@ -184,13 +185,14 @@ Generated CNC code is draft only and must be verified in CAM or a simulator befo
 | `23_mixed_plate_holes_slot_pocket.step` | Mixed basic milling feature detection works |
 | `25_vmc_job_plate_all_basic_features.step` | Basic VMC job feature mix works |
 | `Flanges-Body.step` | Tested in prototype |
+| `M03_vmc_blind_rectangular_pocket.step` | Blind pocket detection works — 1 Pocket candidate, confidence=medium, depth=12 mm |
 | `test5slotted.step` | Tested in prototype |
 
 Additional findings:
 
 - Through rectangular pocket/window detection works.
+- Blind rectangular pocket detection works (floor face confirmed, depth from top to floor).
 - Face milling false positives were reduced.
-- A true blind rectangular pocket sample with a clear floor face is still required.
 - A proper top-milled step/shoulder sample is still required.
 
 ## 7. Known Gaps
@@ -199,7 +201,7 @@ Additional findings:
 
 | Gap | Status |
 | --- | --- |
-| True blind rectangular pocket detection with floor face | Not implemented |
+| True blind rectangular pocket detection with floor face | Implemented ✓ |
 | Step/shoulder detection | Not implemented |
 | Chamfer detection | Not implemented |
 | Better pocket G-code strategy | Not implemented |

@@ -1148,6 +1148,8 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
     _P_THRU_FRAC  = 0.90    # wall Z span >= 90% of part height → through pocket
 
     _pz_span = float(part_height)   # part_height already computed at top of function
+    _pzr     = part_bbox.get("z_range", (0.0, 0.0))
+    _p_z_min = float(_pzr[0])      # part Z minimum — used for floor-face Z guard
 
     # Bucket axis-aligned vertical PLANE faces by normal direction.
     _vxp, _vxn, _vyp, _vyn = [], [], [], []   # +X, -X, +Y, -Y normals
@@ -1257,10 +1259,67 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             if _has_cyl:
                 continue
 
-            _wall_lz  = round(_zhi - _zlo, 3)
-            _depth    = _wall_lz
-            _length   = round(max(_px, _py), 3)
-            _width    = round(min(_px, _py), 3)
+            _wall_lz = round(_zhi - _zlo, 3)
+            _length  = round(max(_px, _py), 3)
+            _width   = round(min(_px, _py), 3)
+
+            # ── Floor face lookup ─────────────────────────────────────────────
+            # A blind pocket has a +Z PLANE face at an intermediate Z level
+            # whose area matches the pocket footprint and whose XY centre lies
+            # within the pocket walls.  Through pockets have no such face.
+            _x_lo = _xp["a"].get("center_x") or 0.0   # left wall X position
+            _x_hi = _xp["b"].get("center_x") or 0.0   # right wall X position
+            _y_lo = _yp["a"].get("center_y") or 0.0   # front wall Y position
+            _y_hi = _yp["b"].get("center_y") or 0.0   # rear wall Y position
+            _floor_area_target = _px * _py
+            _tol_xy            = max(_px, _py) * 0.20  # 20% XY position tolerance
+
+            _floor_face = None
+            for _rf in face_records:
+                if _rf.get("geom_type") != "PLANE":
+                    continue
+                if (_rf.get("normal_z") or 0.0) < 0.92:
+                    continue   # must face upward
+                _fz = _rf.get("center_z") or 0.0
+                # Strictly between part bottom and top of pocket walls
+                if not (_p_z_min + 1.0 < _fz < _zhi - 1.0):
+                    continue
+                _fx = _rf.get("center_x") or 0.0
+                _fy = _rf.get("center_y") or 0.0
+                if not (_x_lo - _tol_xy <= _fx <= _x_hi + _tol_xy):
+                    continue   # XY centre outside pocket footprint
+                if not (_y_lo - _tol_xy <= _fy <= _y_hi + _tol_xy):
+                    continue
+                _fa = _rf.get("area_mm2") or 0.0
+                if _fa < 400.0:
+                    continue   # sliver
+                if not (0.70 * _floor_area_target <= _fa <= 1.30 * _floor_area_target):
+                    continue   # area too different from expected pocket floor
+                # Keep the face whose area is closest to the expected floor area
+                if _floor_face is None or abs(_fa - _floor_area_target) < abs(
+                    (_floor_face.get("area_mm2") or 0.0) - _floor_area_target
+                ):
+                    _floor_face = _rf
+
+            # Branch: blind (floor found) vs through (no floor)
+            if _floor_face is not None:
+                _floor_z    = _floor_face.get("center_z") or _zlo
+                _depth      = round(_zhi - _floor_z, 3)
+                _confidence = "medium"
+                _fname      = f"Blind pocket {_length:.1f}x{_width:.1f} mm"
+                _floor_note = (
+                    f"Floor face #{_floor_face['face_index']} at "
+                    f"z={_floor_z:.2f} mm "
+                    f"(area={(_floor_face.get('area_mm2') or 0.0):.1f} mm^2); "
+                    f"depth from top = {_depth:.2f} mm."
+                )
+            else:
+                _depth      = _wall_lz
+                _confidence = "low"
+                _fname      = f"Through pocket {_length:.1f}x{_width:.1f} mm"
+                _floor_note = (
+                    "No floor face detected -- treated as through pocket/window."
+                )
 
             _p_n[0] += 1
             _pcid = f"P{_p_n[0]:03d}"
@@ -1279,7 +1338,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 f"gap={_py:.2f} mm; "
                 f"Z overlap {_zlo:.2f} to {_zhi:.2f} mm "
                 f"(wall lz={_wall_lz:.2f} mm). "
-                f"No floor face detected -- treated as through pocket/window."
+                + _floor_note
             )
 
             _used_p_walls |= {
@@ -1289,7 +1348,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
 
             candidates.append({
                 "candidate_id":     _pcid,
-                "feature_name":     f"Through pocket {_length:.1f}x{_width:.1f} mm",
+                "feature_name":     _fname,
                 "feature_type":     "Pocket",
                 "quantity":         1,
                 "x_pos":            _cx_pk,
@@ -1300,7 +1359,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 "depth":            _depth,
                 "tolerance_note":   "",
                 "priority":         3,
-                "confidence":       "low",
+                "confidence":       _confidence,
                 "detection_source": "paired_internal_walls",
                 "detection_note":   _pnote,
                 "accepted": False,
