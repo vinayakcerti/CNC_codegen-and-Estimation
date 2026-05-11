@@ -1214,8 +1214,9 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             _ypairs.append({"a": _a, "b": _b, "gap": _gy,
                              "cy": (_ya + _yb) / 2.0, "zlo": _zlo, "zhi": _zhi})
 
-    _used_p_walls = set()   # face indices already consumed by a pocket candidate
-    _p_n = [0]              # pocket ID counter
+    _used_p_walls         = set()  # face indices consumed by a pocket candidate
+    _pocket_floor_indices = set()  # blind pocket floor indices — excluded from step detection
+    _p_n = [0]                     # pocket ID counter
 
     for _xp in _xpairs:
         for _yp in _ypairs:
@@ -1313,6 +1314,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                     f"(area={(_floor_face.get('area_mm2') or 0.0):.1f} mm^2); "
                     f"depth from top = {_depth:.2f} mm."
                 )
+                _pocket_floor_indices.add(_floor_face["face_index"])
             else:
                 _depth      = _wall_lz
                 _confidence = "low"
@@ -1365,6 +1367,235 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 "accepted": False,
                 "ignored":  False,
             })
+
+    # ── E. Step / shoulder candidates ────────────────────────────────────────
+    # Detect stepped faces: two parallel PLANE faces sharing the same normal
+    # sign at different positions along the same axis.  The inner face is the
+    # step floor; a shoulder wall must connect it to the outer (boundary) face.
+    # Z-axis is processed first (top-milled priority), then Y, then X.
+    # Any face already consumed by Section D (pocket walls/floors) is excluded.
+
+    _ST_NORMAL_MIN = 0.92   # |normal component| to be axis-aligned
+    _ST_MIN_AREA   = 400.0  # minimum step floor area mm²
+    _ST_MIN_DEPTH  = 1.0    # minimum step depth mm
+
+    _st_n    = [0]
+    _st_used = set()   # face indices used in emitted Step candidates
+
+    _xr_e = part_bbox.get("x_range", (0.0, 0.0))
+    _yr_e = part_bbox.get("y_range", (0.0, 0.0))
+    _zr_e = part_bbox.get("z_range", (0.0, 0.0))
+
+    _step_excl = set(_used_p_walls) | _pocket_floor_indices
+
+    # (normal_key, pos_key, bbox_min_key, bbox_max_key,
+    #  part_min, part_max, dim1_key, dim2_key, perp_normal_keys)
+    _step_axes = [
+        ("normal_z", "center_z", "bbox_zmin", "bbox_zmax",
+         _zr_e[0], _zr_e[1], "bbox_length_x", "bbox_length_y",
+         ("normal_x", "normal_y")),
+        ("normal_y", "center_y", "bbox_ymin", "bbox_ymax",
+         _yr_e[0], _yr_e[1], "bbox_length_x", "bbox_length_z",
+         ("normal_x", "normal_z")),
+        ("normal_x", "center_x", "bbox_xmin", "bbox_xmax",
+         _xr_e[0], _xr_e[1], "bbox_length_y", "bbox_length_z",
+         ("normal_y", "normal_z")),
+    ]
+
+    for (_nkey, _pkey, _bmin_k, _bmax_k,
+         _ax_min, _ax_max, _d1key, _d2key, _perp_keys) in _step_axes:
+        _ax_span = _ax_max - _ax_min
+        if _ax_span < 2.0:
+            continue
+
+        _pos_grp, _neg_grp = [], []
+        for _r in face_records:
+            if _r.get("geom_type") != "PLANE":
+                continue
+            if (_r["face_index"] in _step_excl
+                    or _r["face_index"] in _st_used):
+                continue
+            _nv   = _r.get(_nkey) or 0.0
+            _area = _r.get("area_mm2") or 0.0
+            if _area < _ST_MIN_AREA:
+                continue
+            if _nv > _ST_NORMAL_MIN:
+                _pos_grp.append(_r)
+            elif _nv < -_ST_NORMAL_MIN:
+                _neg_grp.append(_r)
+
+        for _sign, _grp in ((+1, _pos_grp), (-1, _neg_grp)):
+            if len(_grp) < 2:
+                continue
+
+            _grp.sort(key=lambda r: r.get(_pkey) or 0.0)
+
+            if _sign == +1:
+                _outer_f = _grp[-1]
+                _inners  = _grp[:-1]
+            else:
+                _outer_f = _grp[0]
+                _inners  = _grp[1:]
+
+            _outer_pos = _outer_f.get(_pkey) or 0.0
+            _boundary  = _ax_max if _sign == +1 else _ax_min
+            if abs(_outer_pos - _boundary) > _ax_span * 0.10:
+                continue
+
+            for _sf in _inners:
+                if _sf["face_index"] in _st_used:
+                    continue
+
+                _sf_pos = _sf.get(_pkey) or 0.0
+                _sdepth = abs(_outer_pos - _sf_pos)
+                if _sdepth < _ST_MIN_DEPTH:
+                    continue
+                # Reject "steps" that span more than 60% of the part in that axis
+                # (indicates outer-wall vs inner-wall pairing, not a real step).
+                if _ax_span > 0 and _sdepth > _ax_span * 0.60:
+                    continue
+
+                # Reject symmetric geometry: if a mirror face exists on the
+                # opposite side at the same offset from its boundary, the
+                # feature is a slot or pocket channel (symmetric), not a step.
+                _gap_from_outer = abs(_outer_pos - _sf_pos)
+                _mir_boundary   = _ax_min if _sign == +1 else _ax_max
+                _mir_pos        = (_mir_boundary + _gap_from_outer
+                                   if _sign == +1
+                                   else _mir_boundary - _gap_from_outer)
+                _mir_tol        = _gap_from_outer * 0.20 + 1.0
+                _has_mirror = any(
+                    _mr.get("geom_type") == "PLANE"
+                    and (_mr.get(_nkey) or 0.0) * _sign < -(_ST_NORMAL_MIN - 0.1)
+                    and abs((_mr.get(_pkey) or 0.0) - _mir_pos) <= _mir_tol
+                    for _mr in face_records
+                )
+                if _has_mirror:
+                    continue
+
+                _d1     = _sf.get(_d1key) or 0.0
+                _d2     = _sf.get(_d2key) or 0.0
+                _sf_len = round(max(_d1, _d2), 3)
+                _sf_wid = round(min(_d1, _d2), 3)
+                _sf_cx  = _sf.get("center_x") or 0.0
+                _sf_cy  = _sf.get("center_y") or 0.0
+                _sf_bxn = _sf.get("bbox_xmin") or _sf_cx
+                _sf_bxx = _sf.get("bbox_xmax") or _sf_cx
+                _sf_byn = _sf.get("bbox_ymin") or _sf_cy
+                _sf_byx = _sf.get("bbox_ymax") or _sf_cy
+
+                _pos_lo = min(_sf_pos, _outer_pos)
+                _pos_hi = max(_sf_pos, _outer_pos)
+                _sw_tol = _sdepth * 0.20 + 1.0
+                _fp_tol = max(_d1, _d2, _sdepth) * 0.25 + 2.0
+
+                # For Z-direction steps: skip if CYLINDER faces exist in the
+                # step column (slot end-caps or bore walls → not a step).
+                # Use bbox Z-range overlap, not just center, so that cylinders
+                # spanning the full slot depth are correctly detected.
+                if _nkey == "normal_z":
+                    _has_cyl = False
+                    for _rc in face_records:
+                        if _rc.get("geom_type") != "CYLINDER":
+                            continue
+                        _rc_zmin = _rc.get("bbox_zmin") or 0.0
+                        _rc_zmax = _rc.get("bbox_zmax") or 0.0
+                        # Cylinder Z extent must overlap the step Z region
+                        if not (_rc_zmin < _pos_hi + 2.0 and _rc_zmax > _pos_lo - 2.0):
+                            continue
+                        _rc_cx = _rc.get("center_x") or 0.0
+                        _rc_cy = _rc.get("center_y") or 0.0
+                        if (_sf_bxn - _fp_tol <= _rc_cx <= _sf_bxx + _fp_tol
+                                and _sf_byn - _fp_tol <= _rc_cy <= _sf_byx + _fp_tol):
+                            _has_cyl = True
+                            break
+                    if _has_cyl:
+                        continue
+
+                # Find shoulder wall: perpendicular to step axis, spanning
+                # [step_floor_pos, outer_pos] in the step-axis direction.
+                _sw = None
+                for _pw in face_records:
+                    if _pw.get("geom_type") != "PLANE":
+                        continue
+                    if (_pw["face_index"] in _step_excl
+                            or _pw["face_index"] in _st_used):
+                        continue
+                    if abs(_pw.get(_nkey) or 0.0) > 0.15:
+                        continue
+                    if not any(abs(_pw.get(_pk) or 0.0) > _ST_NORMAL_MIN
+                               for _pk in _perp_keys):
+                        continue
+                    _sw_bmin = _pw.get(_bmin_k) or 0.0
+                    _sw_bmax = _pw.get(_bmax_k) or 0.0
+                    if not (_pos_lo - _sw_tol <= _sw_bmin <= _pos_lo + _sw_tol):
+                        continue
+                    if not (_pos_hi - _sw_tol <= _sw_bmax <= _pos_hi + _sw_tol):
+                        continue
+                    _pw_cx = _pw.get("center_x") or 0.0
+                    _pw_cy = _pw.get("center_y") or 0.0
+                    if _nkey == "normal_y":
+                        if not (_sf_bxn - _fp_tol <= _pw_cx <= _sf_bxx + _fp_tol):
+                            continue
+                    elif _nkey == "normal_x":
+                        if not (_sf_byn - _fp_tol <= _pw_cy <= _sf_byx + _fp_tol):
+                            continue
+                    elif _nkey == "normal_z":
+                        if not (_sf_bxn - _fp_tol <= _pw_cx <= _sf_bxx + _fp_tol):
+                            continue
+                        if not (_sf_byn - _fp_tol <= _pw_cy <= _sf_byx + _fp_tol):
+                            continue
+                    _sw = _pw
+                    break
+
+                if _sw is None:
+                    continue
+
+                _st_n[0] += 1
+                _stcid    = f"ST{_st_n[0]:03d}"
+                _ax_lbl   = _nkey.replace("normal_", "").upper()
+                _sdepth_r = round(_sdepth, 3)
+
+                _stnote = (
+                    f"Step floor: face #{_sf['face_index']} "
+                    f"(normal_{_ax_lbl}={(_sf.get(_nkey) or 0):+.3f}, "
+                    f"{_ax_lbl}={_sf_pos:.2f} mm, "
+                    f"area={(_sf.get('area_mm2') or 0):.1f} mm²); "
+                    f"outer face: #{_outer_f['face_index']} at "
+                    f"{_ax_lbl}={_outer_pos:.2f} mm; "
+                    f"step depth = {_sdepth_r:.2f} mm; "
+                    f"shoulder wall: face #{_sw['face_index']} "
+                    f"(area={(_sw.get('area_mm2') or 0):.1f} mm²)."
+                )
+
+                _st_used |= {
+                    _sf["face_index"],
+                    _sw["face_index"],
+                    _outer_f["face_index"],
+                }
+
+                candidates.append({
+                    "candidate_id":     _stcid,
+                    "feature_name":     (
+                        f"Step shoulder {_sf_len:.1f}x{_sf_wid:.1f} "
+                        f"depth {_sdepth_r:.1f} mm"
+                    ),
+                    "feature_type":     "Step",
+                    "quantity":         1,
+                    "x_pos":            _sf_cx,
+                    "y_pos":            _sf_cy,
+                    "diameter":         None,
+                    "length":           _sf_len,
+                    "width":            _sf_wid,
+                    "depth":            _sdepth_r,
+                    "tolerance_note":   "",
+                    "priority":         3,
+                    "confidence":       "medium",
+                    "detection_source": "intermediate_floor_and_shoulder_wall",
+                    "detection_note":   _stnote,
+                    "accepted": False,
+                    "ignored":  False,
+                })
 
     return candidates
 
