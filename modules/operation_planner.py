@@ -148,25 +148,49 @@ def _context_note(ftype, feature_name, diameter, op_type):
 
     if ftype == "Face Milling":
         if "bottom" in fname_lower:
-            return "Setup 2 required — flip part before machining this face."
+            return (
+                "Setup 2 required — flip part before machining this face. "
+                "Verify workholding and fixture clearance for second setup."
+            )
         if "top" in fname_lower:
             return "Primary setup facing operation."
 
-    if ftype == "Large Hole / Boring" and op_type == "Boring" and (diameter or 0) >= 25:
+    if ftype == "Large Hole / Boring" and op_type == "Boring":
+        dia_note = f" Final diameter: Ø{diameter:.1f} mm." if (diameter or 0) > 0 else ""
         return (
-            "Verify boring tool reach and minimum bore capability "
-            f"for final diameter Ø{diameter:.1f} mm."
+            "Verify boring tool minimum bore, maximum bore, reach, and rigidity "
+            f"before machining.{dia_note}"
         )
+
+    if ftype == "Pocket":
+        if op_type == "Rough End Mill":
+            return (
+                "Rough pocket using multiple depth/radial passes. "
+                "Verify tool diameter and corner radius suitability."
+            )
+        if op_type == "Finish End Mill":
+            return (
+                "Finishing pass cleans pocket walls and floor. "
+                "Verify tool flute length >= pocket depth."
+            )
 
     if ftype == "Slot":
         if op_type == "Rough End Mill":
-            return "Use multiple depth passes and radial stepovers."
+            return (
+                "Use multiple depth passes and radial stepovers. "
+                "Verify tool diameter <= slot width and corner radius suitability."
+            )
         if op_type == "Finish End Mill":
-            return "Finish slot walls and floor after roughing."
+            return (
+                "Finish slot walls and floor. "
+                "Verify tool flute length >= slot depth and corner radius suitability."
+            )
 
     if ftype == "Step":
         if op_type == "Rough End Mill":
             return "Rough lower step level using multiple depth/radial passes."
+        if op_type == "Finish End Mill":
+            return "Verify tool reach and flute length for shoulder wall finish pass."
 
     if ftype == "Chamfer":
         return (

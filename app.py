@@ -1502,7 +1502,7 @@ def page_visual_preview():
 def page_cnc_export():
     st.header("9. CNC Program Export")
 
-    st.error("IMPORTANT: Generated CNC code is DRAFT only. ALWAYS verify in CAM/simulator before running on a real machine.")
+    st.error("DO NOT RUN THIS PROGRAM DIRECTLY ON A MACHINE. This is draft planning code only. Verify in CAM/simulator and by a qualified CNC programmer before use on any real machine.")
 
     if "operations" not in st.session_state or not st.session_state.operations:
         st.warning("No operations available. Please run Operation Plan first.")
