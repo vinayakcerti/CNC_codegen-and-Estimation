@@ -30,7 +30,7 @@ OPERATION_RULES = {
         {"op": "End Mill", "notes": "Profile outer contour"},
     ],
     "Chamfer": [
-        {"op": "Chamfer", "notes": "Chamfer edges"},
+        {"op": "Chamfer", "notes": "Chamfer top edges"},
     ],
 }
 
@@ -167,6 +167,12 @@ def _context_note(ftype, feature_name, diameter, op_type):
     if ftype == "Step":
         if op_type == "Rough End Mill":
             return "Rough lower step level using multiple depth/radial passes."
+
+    if ftype == "Chamfer":
+        return (
+            "Use chamfer mill / countersink-style tool. "
+            "Verify chamfer size and edge selection before machining."
+        )
 
     return ""
 
