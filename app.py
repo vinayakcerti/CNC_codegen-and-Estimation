@@ -922,6 +922,37 @@ def page_setup_review():
     features = st.session_state.get("features", [])
     step_ok  = bool(st.session_state.get("step_parse_result"))
 
+    # ── Start New Job / Reset ────────────────────────────────────────────────
+    if st.session_state.pop("_job_reset_done", False):
+        st.success("Job reset — features and candidates cleared. Upload a new STEP file on page 1.")
+
+    _has_job_state = bool(features) or bool(st.session_state.get("step_candidates"))
+    if _has_job_state:
+        _rc1, _rc2 = st.columns([5, 1])
+        _rc1.info(
+            f"**{len(features)} accepted feature(s)**  ·  "
+            f"**{len(st.session_state.get('step_candidates', []))} CAD candidate(s)**"
+            + (f"  ·  File: **{st.session_state.uploaded_filename}**"
+               if st.session_state.get("uploaded_filename") else "")
+        )
+        if _rc2.button("Start New Job / Reset", type="secondary", use_container_width=True):
+            st.session_state.features = []
+            save_features_to_db([])
+            st.session_state.features_from_candidates = False
+            st.session_state.step_candidates = []
+            st.session_state.step_candidate_warnings = []
+            st.session_state.added_candidate_ids = set()
+            for _k in ("operations", "time_result", "step_parse_result", "step_geometry"):
+                st.session_state.pop(_k, None)
+            st.session_state.uploaded_filename = None
+            st.session_state.step_uploader_key += 1
+            st.session_state.stock = {
+                "length": 150.0, "width": 100.0, "height": 50.0,
+                "part_volume": 600.0, "stock_volume": 750.0,
+            }
+            st.session_state._job_reset_done = True
+            st.rerun()
+
     # ── A. Stock summary ─────────────────────────────────────────────────────
     st.subheader("Stock Dimensions")
     if stock:
