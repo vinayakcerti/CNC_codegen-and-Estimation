@@ -2,7 +2,7 @@
 
 **Epic:** Epic 3 — Chamfer Detection  
 **Priority:** 3 (after blind pocket and step detection — Epic 3 next)  
-**Status:** Ready for implementation  
+**Status:** Implemented ✓  
 **Branch:** `v2-feature-review-engine`
 
 ---
@@ -298,23 +298,24 @@ Expected: **18 PASS, 0 FAIL, 1 MISSING** (after expectations update)
 
 ## 9. Definition of Done
 
-- [ ] `_classify_face_records()` in `modules/step_parser.py` has a new Section F:
-  - [ ] Constants `_CH_NZ_MIN`, `_CH_NZ_MAX`, `_CH_HORIZ_MIN`, `_CH_MAX_AREA`, `_CH_Z_FRAC` defined.
-  - [ ] Loop collects qualifying angled PLANE faces.
-  - [ ] Single CH001 candidate emitted if any qualifying faces found.
-  - [ ] `feature_type = "Chamfer"`, `detection_source = "angled_plane_near_top"`.
-  - [ ] `confidence = "medium"` if ≥ 3 faces, `"low"` if 1–2.
-- [ ] `python experiments/test_feature_candidates.py test_samples/M07_vmc_chamfered_plate.step` produces 6 candidates (2 FM + 4 H + 1 Chamfer CH001, confidence=medium, ~2.0mm size).
-- [ ] `python experiments/test_feature_candidates.py test_samples/25_vmc_job_plate_all_basic_features.step` produces Chamfer=1 in addition to existing candidates.
-- [ ] `17b_top_milled_step_shoulder-Body.step` produces 0 Chamfer candidates.
-- [ ] `tests/feature_detection_expectations.json` updated:
-  - [ ] M07 entry: add `"Chamfer": 1` to expected_counts.
-  - [ ] Sample 25 entry: add `"Chamfer": 1` to expected_counts.
-  - [ ] M07 notes field updated to describe chamfer detection.
-- [ ] `python tests/run_feature_detection_regression.py --allow-missing` → **18 PASS, 0 FAIL, 1 MISSING**.
-- [ ] No new Python dependencies introduced.
-- [ ] `modules/operation_planner.py`, `app.py`, and all other application files **not modified**.
+- [x] `_classify_face_records()` in `modules/step_parser.py` has a new Section F:
+  - [x] Constants `_CH_NZ_MIN`, `_CH_NZ_MAX`, `_CH_HORIZ_MIN`, `_CH_MAX_AREA`, `_CH_Z_FRAC` defined.
+  - [x] Loop collects qualifying angled PLANE faces.
+  - [x] Single CH001 candidate emitted if any qualifying faces found.
+  - [x] `feature_type = "Chamfer"`, `detection_source = "angled_top_plane_faces"`.
+  - [x] `confidence = "medium"` if ≥ 3 faces, `"low"` if 1–2.
+- [x] `python experiments/test_feature_candidates.py test_samples/M07_vmc_chamfered_plate.step` produces 7 candidates (2 FM + 4 H + 1 Chamfer CH001, confidence=medium, ~2.0mm size).
+- [x] `python experiments/test_feature_candidates.py test_samples/25_vmc_job_plate_all_basic_features.step` produces Chamfer=1 in addition to existing candidates.
+- [x] `17b_top_milled_step_shoulder-Body.step` produces 0 Chamfer candidates.
+- [x] `tests/feature_detection_expectations.json` updated:
+  - [x] M07 entry: add `"Chamfer": 1` to expected_counts.
+  - [x] Sample 25 entry: add `"Chamfer": 1` to expected_counts.
+  - [x] M07 notes field updated to describe chamfer detection.
+- [x] `python tests/run_feature_detection_regression.py --allow-missing` → **18 PASS, 0 FAIL, 1 MISSING**.
+- [x] No new Python dependencies introduced.
+- [x] `modules/operation_planner.py`, `app.py`, and all other application files **not modified**.
 - [ ] PRD current-state document updated: Chamfer detection → Implemented.
+- [ ] Streamlit manual test with `M07_vmc_chamfered_plate.step` (perform before demo).
 
 ---
 
