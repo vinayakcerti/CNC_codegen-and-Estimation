@@ -205,7 +205,7 @@ Additional findings:
 | --- | --- |
 | True blind rectangular pocket detection with floor face | Implemented ✓ |
 | Step/shoulder detection | Implemented ✓ |
-| Chamfer detection | Not implemented |
+| Chamfer detection | Implemented ✓ |
 | Better pocket G-code strategy | Not implemented |
 | Better setup-change handling | Not implemented |
 | Better roughing/finishing sequence for pockets | Not implemented |
