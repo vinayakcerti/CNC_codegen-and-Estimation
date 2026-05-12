@@ -67,7 +67,7 @@
     },
     {
       "file": "17b_top_milled_step_shoulder-Body.step",
-      "notes": "Y-direction shoulder step; depth=12 mm",
+      "notes": "Official step/shoulder regression sample — Y-direction shoulder step; depth=12 mm (replaces M06)",
       "expected_counts": {
         "Face milling": 2,
         "Step": 1
@@ -131,14 +131,6 @@
         "Face milling": 2,
         "Large hole / boring": 1,
         "Hole": 2
-      }
-    },
-    {
-      "file": "M06_vmc_top_milled_step_shoulder.step",
-      "notes": "Top-milled Z-direction step; file not yet created",
-      "expected_counts": {
-        "Face milling": 2,
-        "Step": 1
       }
     },
     {

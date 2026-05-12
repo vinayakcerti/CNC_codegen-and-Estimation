@@ -283,9 +283,9 @@ Goal: Detect top-milled step/shoulder geometry after receiving a proper test sam
 
 | Story | Acceptance Criteria | Test Cases |
 | --- | --- | --- |
-| Detect top-milled step | Candidate is created for a lowered top region with a clear vertical shoulder wall | `M06_vmc_top_milled_step_shoulder.step` |
+| Detect top-milled step | Candidate is created for a lowered top region with a clear vertical shoulder wall | `17b_top_milled_step_shoulder-Body.step` |
 | Avoid side-profile false positives | Side-profile/extruded samples are not incorrectly classified as top-milled steps | `17_stepped_block_single_step.step` |
-| Add step operation plan | Accepted step creates roughing/facing operation notes suitable for VMC milling | `M06_vmc_top_milled_step_shoulder.step` |
+| Add step operation plan | Accepted step creates roughing/facing operation notes suitable for VMC milling | `17b_top_milled_step_shoulder-Body.step` |
 
 ### Epic 3: Chamfer Detection
 
