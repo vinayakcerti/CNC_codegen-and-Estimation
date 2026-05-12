@@ -9,8 +9,8 @@
 | Metric | Count |
 |--------|-------|
 | Total entries | 19 |
-| PASS | 17 |
-| FAIL | 1 |
+| PASS | 18 |
+| FAIL | 0 |
 | MISSING | 1 |
 | ERROR | 0 |
 
@@ -30,7 +30,7 @@
 | `23_mixed_plate_holes_slot_pocket.step` | **PASS** | Face milling=2, Pocket=2, Slot=2 | Face milling=2, Pocket=2, Slot=2 | Mixed: face mill + 2 slots + 2 pockets |
 | `25_vmc_job_plate_all_basic_features.step` | **PASS** | Face milling=2, Large hole / boring=1, Slot=2 | Face milling=2, Large hole / boring=1, Slot=2 | All basic VMC features: face mill + slot + large bore |
 | `M01_vmc_basic_plate_holes.step` | **PASS** | Face milling=2, Hole=4 | Face milling=2, Hole=4 | Basic plate with 4 holes |
-| `M02_vmc_slot_plate.step` | **FAIL** | Face milling=2, Slot=1 | Face milling=2, Pocket=1 | Plate with single slot |
+| `M02_vmc_slot_plate.step` | **PASS** | Face milling=2, Slot=1 | Face milling=2, Slot=1 | Plate with single slot (flat-ended, no cylinder faces) — detected via Section D flat-slot branch, AR=4.0 >= 3.5, confidence=medium. |
 | `M03_vmc_blind_rectangular_pocket.step` | **PASS** | Face milling=2, Pocket=1 | Face milling=2, Pocket=1 | Blind pocket with floor face; depth=12 mm, confidence=medium |
 | `M04_vmc_through_pocket_window.step` | **PASS** | Face milling=2, Pocket=1 | Face milling=2, Pocket=1 | Through pocket/window; no floor, confidence=low |
 | `M05_vmc_large_bore_plate.step` | **PASS** | Face milling=2, Hole=2, Large hole / boring=1 | Face milling=2, Hole=2, Large hole / boring=1 | Large bore plate with pilot holes |
@@ -52,17 +52,4 @@ These files exist in `test_samples/` but have no entry in `feature_detection_exp
 
 ## Failure Details
 
-
-### M02_vmc_slot_plate.step — FAIL
-
-- **Expected:** Face milling=2, Slot=1
-- **Actual:** Face milling=2, Pocket=1
-- **Notes:** Plate with single slot
-
-Candidates detected:
-
-| ID | Type | Name | Confidence |
-|----|------|------|------------|
-| F001 | Face milling | Face milling — top surface | high |
-| F002 | Face milling | Face milling — bottom surface | high |
-| P001 | Pocket | Through pocket 80.0x20.0 mm | low |
+No failures.

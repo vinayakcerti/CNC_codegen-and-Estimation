@@ -1144,7 +1144,8 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
     _P_WALL_MIN_A = 400.0   # ignore wall face slivers smaller than this (mm²)
     _P_OUTER_FRAC = 0.88    # skip pairs whose gap > 88% of part span in that axis
     _P_MIN_DIM    = 4.0     # minimum pocket dimension in mm
-    _P_MAX_ASPECT = 8.0     # max length/width — above this prefer slot territory
+    _P_MAX_ASPECT    = 8.0   # max length/width — above this prefer slot territory
+    _FLAT_SLOT_MIN_AR = 3.5  # no-floor region at or above this AR → flat-ended slot
     _P_THRU_FRAC  = 0.90    # wall Z span >= 90% of part height → through pocket
 
     _pz_span = float(part_height)   # part_height already computed at top of function
@@ -1263,6 +1264,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             _wall_lz = round(_zhi - _zlo, 3)
             _length  = round(max(_px, _py), 3)
             _width   = round(min(_px, _py), 3)
+            _ar      = _length / _width if _width > 0 else 1.0
 
             # ── Floor face lookup ─────────────────────────────────────────────
             # A blind pocket has a +Z PLANE face at an intermediate Z level
@@ -1302,7 +1304,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 ):
                     _floor_face = _rf
 
-            # Branch: blind (floor found) vs through (no floor)
+            # Branch: blind pocket / flat-ended through slot / through pocket
             if _floor_face is not None:
                 _floor_z    = _floor_face.get("center_z") or _zlo
                 _depth      = round(_zhi - _floor_z, 3)
@@ -1315,6 +1317,25 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                     f"depth from top = {_depth:.2f} mm."
                 )
                 _pocket_floor_indices.add(_floor_face["face_index"])
+                _p_n[0] += 1
+                _pcid         = f"P{_p_n[0]:03d}"
+                _feature_type = "Pocket"
+                _dsource      = "paired_internal_walls"
+            elif _ar >= _FLAT_SLOT_MIN_AR:
+                # No floor face and high aspect ratio → flat-ended through slot.
+                # Emitted as Slot (same feature_type as Section C rounded slots).
+                _depth      = _wall_lz
+                _confidence = "medium"
+                _fname      = f"Flat-ended slot {_length:.1f}x{_width:.1f} mm"
+                _floor_note = (
+                    f"No floor face detected; aspect ratio {_ar:.2f} >= "
+                    f"{_FLAT_SLOT_MIN_AR} — classified as flat-ended through slot. "
+                    f"No cylindrical end faces found."
+                )
+                _s_n[0] += 1
+                _pcid         = f"S{_s_n[0]:03d}"
+                _feature_type = "Slot"
+                _dsource      = "flat_ended_slot_walls"
             else:
                 _depth      = _wall_lz
                 _confidence = "low"
@@ -1322,9 +1343,10 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 _floor_note = (
                     "No floor face detected -- treated as through pocket/window."
                 )
-
-            _p_n[0] += 1
-            _pcid = f"P{_p_n[0]:03d}"
+                _p_n[0] += 1
+                _pcid         = f"P{_p_n[0]:03d}"
+                _feature_type = "Pocket"
+                _dsource      = "paired_internal_walls"
 
             _pnote = (
                 f"Paired internal PLANE walls — "
@@ -1351,7 +1373,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             candidates.append({
                 "candidate_id":     _pcid,
                 "feature_name":     _fname,
-                "feature_type":     "Pocket",
+                "feature_type":     _feature_type,
                 "quantity":         1,
                 "x_pos":            _cx_pk,
                 "y_pos":            _cy_pk,
@@ -1362,7 +1384,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 "tolerance_note":   "",
                 "priority":         3,
                 "confidence":       _confidence,
-                "detection_source": "paired_internal_walls",
+                "detection_source": _dsource,
                 "detection_note":   _pnote,
                 "accepted": False,
                 "ignored":  False,

@@ -101,7 +101,7 @@
     },
     {
       "file": "M02_vmc_slot_plate.step",
-      "notes": "Plate with single slot; KNOWN FAIL — flat-ended slot has no cylinder faces, falls through to Pocket detector (Pocket=1 actual). Fix: add flat-ended slot detection or regenerate M02 with radiused ends.",
+      "notes": "Plate with single slot (flat-ended, no cylinder faces) — detected via Section D flat-slot branch, AR=4.0 >= 3.5, confidence=medium.",
       "expected_counts": {
         "Face milling": 2,
         "Slot": 1

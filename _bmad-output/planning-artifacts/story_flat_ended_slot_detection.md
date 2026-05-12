@@ -2,7 +2,7 @@
 
 **Epic:** Epic 2 — Slot Detection Completeness  
 **Priority:** 3 (blocking regression — M02 currently FAIL)  
-**Status:** Ready for implementation  
+**Status:** Implemented ✓  
 **Branch:** `v2-feature-review-engine`
 
 ---
@@ -264,18 +264,18 @@ Update the M02 notes field from the current KNOWN FAIL note to:
 
 ## 9. Definition of Done
 
-- [ ] `_classify_face_records()` in `modules/step_parser.py` updated:
-  - [ ] `_FLAT_SLOT_MIN_AR = 3.5` constant added to Section D constants block.
-  - [ ] `elif _ar >= _FLAT_SLOT_MIN_AR` branch added after the floor-face `if _floor_face is not None` block.
-  - [ ] Flat-ended slot uses `_s_n[0]` counter and emits `feature_type = "Slot"`, `detection_source = "flat_ended_slot_walls"`.
-- [ ] `python experiments/test_feature_candidates.py test_samples/M02_vmc_slot_plate.step` produces exactly 3 candidates: F001 Face milling, F002 Face milling, S001 Flat-ended slot, `confidence = medium`.
-- [ ] M03 and M04 still produce Pocket=1 (no Slot candidates introduced).
-- [ ] Sample 13 still produces Pocket=1 (AR=2.67 < 3.5).
-- [ ] Sample 23 still produces Slot=2 + Pocket=2 (no change to existing detections).
-- [ ] `python tests/run_feature_detection_regression.py --allow-missing` reports **18 PASS, 0 FAIL, 1 MISSING**.
-- [ ] `tests/feature_detection_expectations.json` M02 notes updated to reflect fixed detection.
-- [ ] No new Python dependencies introduced.
-- [ ] `modules/operation_planner.py`, `app.py`, and all other application files not modified.
+- [x] `_classify_face_records()` in `modules/step_parser.py` updated:
+  - [x] `_FLAT_SLOT_MIN_AR = 3.5` constant added to Section D constants block.
+  - [x] `elif _ar >= _FLAT_SLOT_MIN_AR` branch added after the floor-face `if _floor_face is not None` block.
+  - [x] Flat-ended slot uses `_s_n[0]` counter and emits `feature_type = "Slot"`, `detection_source = "flat_ended_slot_walls"`.
+- [x] `python experiments/test_feature_candidates.py test_samples/M02_vmc_slot_plate.step` produces exactly 3 candidates: F001 Face milling, F002 Face milling, S001 Flat-ended slot, `confidence = medium`.
+- [x] M03 and M04 still produce Pocket=1 (no Slot candidates introduced).
+- [x] Sample 13 still produces Pocket=1 (AR=2.67 < 3.5).
+- [x] Sample 23 still produces Slot=2 + Pocket=2 (no change to existing detections).
+- [x] `python tests/run_feature_detection_regression.py --allow-missing` reports **18 PASS, 0 FAIL, 1 MISSING**.
+- [x] `tests/feature_detection_expectations.json` M02 notes updated to reflect fixed detection.
+- [x] No new Python dependencies introduced.
+- [x] `modules/operation_planner.py`, `app.py`, and all other application files not modified.
 - [ ] PRD current-state document updated: note flat-ended slot detection as Implemented.
 
 ---
