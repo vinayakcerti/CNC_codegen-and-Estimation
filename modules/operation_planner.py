@@ -19,6 +19,10 @@ OPERATION_RULES = {
         {"op": "Rough End Mill", "notes": "Rough slot using multiple depth/radial passes"},
         {"op": "Finish End Mill", "notes": "Finish slot walls and floor"},
     ],
+    "Step": [
+        {"op": "Rough End Mill", "notes": "Rough step floor and shoulder"},
+        {"op": "Finish End Mill", "notes": "Finish step floor and shoulder wall"},
+    ],
     "Face Milling": [
         {"op": "Face Mill", "notes": "Face mill stock surface"},
     ],
@@ -89,6 +93,26 @@ def estimate_path_length(feature, operation_type, tool=None):
         # Fallback for any other op type on a slot feature
         return slot_len * qty
 
+    # ── Step / shoulder ──────────────────────────────────────────────────────
+    if ftype == "Step":
+        step_len = length or 50
+
+        if operation_type == "Rough End Mill":
+            # Raster estimate: depth passes × radial passes × step length.
+            # DOC = 0.5 × D (axial),  stepover = 0.6 × D (radial).
+            dia           = tool_dia if tool_dia > 0 else 12.0
+            stepdown      = dia * 0.5
+            stepover      = dia * 0.6
+            depth_passes  = max(1, math.ceil(depth / stepdown)) if depth > 0 else 1
+            radial_passes = max(1, math.ceil(width / stepover)) if width > 0 else 1
+            return depth_passes * radial_passes * step_len * qty
+
+        if operation_type == "Finish End Mill":
+            # One pass along step floor + one pass along shoulder wall.
+            return 2 * step_len * qty
+
+        return step_len * qty
+
     # ── Face Milling ─────────────────────────────────────────────────────────
     if ftype == "Face Milling":
         if length > 0 and width > 0:
@@ -139,6 +163,10 @@ def _context_note(ftype, feature_name, diameter, op_type):
             return "Use multiple depth passes and radial stepovers."
         if op_type == "Finish End Mill":
             return "Finish slot walls and floor after roughing."
+
+    if ftype == "Step":
+        if op_type == "Rough End Mill":
+            return "Rough lower step level using multiple depth/radial passes."
 
     return ""
 
