@@ -1,6 +1,6 @@
 {
   "_comment": "Expected feature-type counts per STEP sample for VMC regression testing. Feature types must match exact strings from step_parser._classify_face_records().",
-  "_feature_types": ["Face milling", "Hole", "Large hole / boring", "Slot", "Pocket", "Step"],
+  "_feature_types": ["Face milling", "Hole", "Large hole / boring", "Slot", "Pocket", "Step", "Chamfer"],
   "expectations": [
     {
       "file": "01_plain_rectangular_block_100x60x30-Body.step",
@@ -84,11 +84,12 @@
     },
     {
       "file": "25_vmc_job_plate_all_basic_features.step",
-      "notes": "All basic VMC features: face mill + slot + large bore",
+      "notes": "All basic VMC features: face mill + slot + large bore + top edge chamfer (6 faces)",
       "expected_counts": {
         "Face milling": 2,
         "Slot": 2,
-        "Large hole / boring": 1
+        "Large hole / boring": 1,
+        "Chamfer": 1
       }
     },
     {
@@ -142,10 +143,11 @@
     },
     {
       "file": "M07_vmc_chamfered_plate.step",
-      "notes": "Chamfered plate; chamfer not yet detected, only holes expected",
+      "notes": "Chamfered plate; 4 angled PLANE faces on top edges detected as Chamfer (Section F), ~2.0mm",
       "expected_counts": {
         "Face milling": 2,
-        "Hole": 4
+        "Hole": 4,
+        "Chamfer": 1
       }
     },
     {

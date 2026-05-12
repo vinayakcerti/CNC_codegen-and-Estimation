@@ -1619,6 +1619,92 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                     "ignored":  False,
                 })
 
+    # ── F. Chamfer candidates ─────────────────────────────────────────────────
+    # Detect simple top outer-edge chamfers: PLANE faces with an angled-upward
+    # normal (nz between 0.40 and 0.92) that sit near the top of the part.
+    # All qualifying faces are grouped into a single CH001 candidate.
+
+    _CH_NZ_MIN    = 0.40    # nz lower bound: ~24° from horizontal
+    _CH_NZ_MAX    = 0.92    # nz upper bound: just below Section A flat-face threshold
+    _CH_HORIZ_MIN = 0.40    # |nx| or |ny| must be significant
+    _CH_MAX_AREA  = 2000.0  # mm² — upper bound for a single chamfer face
+    _CH_MIN_AREA  = 50.0    # mm² — ignore slivers
+    _CH_Z_FRAC    = 0.20    # z_center within this fraction of part height from top
+
+    _ch_p_z_max = part_bbox.get("z_range", (0.0, 0.0))[1]
+    _ch_z_lo    = _ch_p_z_max - max(8.0, part_height * _CH_Z_FRAC)
+
+    _ch_faces = []
+    for _r in face_records:
+        if _r.get("geom_type") != "PLANE":
+            continue
+        _ch_nz  = _r.get("normal_z") or 0.0
+        _ch_hnx = abs(_r.get("normal_x") or 0.0)
+        _ch_hny = abs(_r.get("normal_y") or 0.0)
+        _ch_a   = _r.get("area_mm2") or 0.0
+        _ch_cz  = _r.get("center_z") or 0.0
+
+        if not (_CH_NZ_MIN <= _ch_nz <= _CH_NZ_MAX):
+            continue   # not angled upward in the chamfer range
+        if max(_ch_hnx, _ch_hny) < _CH_HORIZ_MIN:
+            continue   # no significant horizontal component
+        if not (_CH_MIN_AREA <= _ch_a <= _CH_MAX_AREA):
+            continue   # too small (sliver) or too large (design face / wall)
+        if _ch_cz < _ch_z_lo:
+            continue   # not near the top of the part
+
+        _ch_faces.append(_r)
+
+    if _ch_faces:
+        # Estimate chamfer size from the smallest span on each face
+        _ch_sizes = []
+        for _cf in _ch_faces:
+            _cf_dims = [
+                v for v in [
+                    _cf.get("bbox_length_x") or 0.0,
+                    _cf.get("bbox_length_y") or 0.0,
+                    _cf.get("bbox_length_z") or 0.0,
+                ] if v > 0.1
+            ]
+            if _cf_dims:
+                _ch_sizes.append(min(_cf_dims))
+        _ch_size = round(sum(_ch_sizes) / len(_ch_sizes), 1) if _ch_sizes else 0.0
+        _ch_n    = len(_ch_faces)
+        _ch_ids  = ", ".join(f"#{_cf['face_index']}" for _cf in _ch_faces)
+        _ch_areas = [_cf.get("area_mm2") or 0.0 for _cf in _ch_faces]
+        _ch_nzs   = [_cf.get("normal_z") or 0.0 for _cf in _ch_faces]
+
+        _ch_note = (
+            f"{_ch_n} angled PLANE face(s) near top of part "
+            f"classified as top outer-edge chamfer. "
+            f"Face indices: {_ch_ids}. "
+            f"normal_z range: {min(_ch_nzs):.3f}–{max(_ch_nzs):.3f}. "
+            f"Area range: {min(_ch_areas):.1f}–{max(_ch_areas):.1f} mm². "
+            f"z_center ≥ {_ch_z_lo:.1f} mm (top={_ch_p_z_max:.1f} mm). "
+            f"Estimated chamfer size ≈ {_ch_size:.1f} mm (bbox small span average)."
+        )
+
+        candidates.append({
+            "candidate_id":     "CH001",
+            "feature_name":     f"Top edge chamfer ~{_ch_size:.1f}×{_ch_size:.1f} mm "
+                                f"({_ch_n} face{'s' if _ch_n != 1 else ''})",
+            "feature_type":     "Chamfer",
+            "quantity":         _ch_n,
+            "x_pos":            0.0,
+            "y_pos":            0.0,
+            "diameter":         None,
+            "length":           None,
+            "width":            _ch_size,
+            "depth":            _ch_size,
+            "tolerance_note":   "",
+            "priority":         4,
+            "confidence":       "medium" if _ch_n >= 3 else "low",
+            "detection_source": "angled_top_plane_faces",
+            "detection_note":   _ch_note,
+            "accepted": False,
+            "ignored":  False,
+        })
+
     return candidates
 
 
