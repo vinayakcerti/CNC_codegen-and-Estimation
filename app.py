@@ -460,15 +460,89 @@ def page_upload_step():
 
 
 def page_machine_setup():
-    st.header("2. Machine Setup")
-    machines = st.session_state.machines
+    st.title("Material & Machine")
+    st.caption(
+        "Select the work material and CNC machine assumptions used for speeds, feeds, "
+        "setup time, and estimates."
+    )
+    st.divider()
 
+    # ── Top status cards ──────────────────────────────────────────────────────
+    _mach = st.session_state.selected_machine
+    _mat  = st.session_state.selected_material
+    _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+    _sc1.metric("Material",     _mat.get("name", "—"))
+    _sc2.metric("Machine",      _mach.get("machine_name", "—"))
+    _sc3.metric("Machine Type", _mach.get("machine_type", "—"))
+    _sc4.metric("Controller",   _mach.get("controller", "—"))
+
+    st.info(
+        "Machine and material settings are planning assumptions. "
+        "Verify final speeds, feeds, and setup time with the workshop."
+    )
+
+    st.divider()
+
+    # ── Section: Material Selection ───────────────────────────────────────────
+    st.subheader("Material Selection")
+
+    materials  = st.session_state.materials
+    mat_names  = [mat["name"] for mat in materials]
+    mat_sel_idx = st.selectbox(
+        "Select Material",
+        range(len(mat_names)),
+        format_func=lambda i: mat_names[i],
+        key="_mm_mat_sel",
+    )
+    mat_m = copy.deepcopy(materials[mat_sel_idx])
+
+    _mc1, _mc2, _mc3 = st.columns(3)
+    with _mc1:
+        mat_m["density"] = st.number_input(
+            "Density (g/cm³)", value=float(mat_m["density"]), step=0.1,
+            key="_mm_density",
+        )
+    with _mc2:
+        mat_m["machinability_factor"] = st.number_input(
+            "Machinability Factor (0–1)",
+            value=float(mat_m["machinability_factor"]),
+            min_value=0.1, max_value=2.0, step=0.05,
+            key="_mm_mach_factor",
+        )
+    with _mc3:
+        mat_m["safety_factor"] = st.number_input(
+            "Safety Factor",
+            value=float(mat_m["safety_factor"]),
+            min_value=1.0, max_value=3.0, step=0.05,
+            key="_mm_safety_factor",
+        )
+
+    if st.button("Apply Material", key="_mm_apply_material"):
+        st.session_state.materials[mat_sel_idx] = mat_m
+        st.session_state.selected_material = mat_m
+        st.success(f"Material **{mat_m['name']}** applied.")
+    else:
+        st.session_state.selected_material = mat_m
+
+    st.divider()
+
+    # ── Section: Machine Selection ────────────────────────────────────────────
+    st.subheader("Machine Selection")
+
+    machines      = st.session_state.machines
     machine_names = [m["machine_name"] for m in machines]
-    sel_idx = st.selectbox("Select Machine Profile", range(len(machine_names)),
-                           format_func=lambda i: machine_names[i])
+    sel_idx = st.selectbox(
+        "Select Machine Profile",
+        range(len(machine_names)),
+        format_func=lambda i: machine_names[i],
+    )
     m = copy.deepcopy(machines[sel_idx])
 
+    st.divider()
+
+    # ── Section: Machine Parameters ───────────────────────────────────────────
     st.subheader("Machine Parameters")
+
     col1, col2 = st.columns(2)
     with col1:
         m["machine_name"] = st.text_input("Machine Name", value=m["machine_name"])
@@ -476,7 +550,7 @@ def page_machine_setup():
         m["machine_type"] = st.selectbox(
             "Machine Type",
             _MACHINE_TYPES,
-            index=_MACHINE_TYPES.index(m["machine_type"]) if m["machine_type"] in _MACHINE_TYPES else 0
+            index=_MACHINE_TYPES.index(m["machine_type"]) if m["machine_type"] in _MACHINE_TYPES else 0,
         )
         _CONTROLLERS = [
             "Fanuc 0i-MF", "Fanuc 0i-TF", "Fanuc 31i", "Fanuc 32i",
@@ -487,15 +561,25 @@ def page_machine_setup():
         m["controller"] = st.selectbox(
             "Controller",
             _CONTROLLERS,
-            index=_CONTROLLERS.index(m["controller"]) if m["controller"] in _CONTROLLERS else 10
+            index=_CONTROLLERS.index(m["controller"]) if m["controller"] in _CONTROLLERS else 10,
         )
-        m["max_spindle_rpm"] = st.number_input("Max Spindle RPM", value=int(m["max_spindle_rpm"]), min_value=100, step=100)
+        m["max_spindle_rpm"] = st.number_input(
+            "Max Spindle RPM", value=int(m["max_spindle_rpm"]), min_value=100, step=100,
+        )
 
     with col2:
-        m["max_feed_rate"] = st.number_input("Max Feed Rate (mm/min)", value=int(m["max_feed_rate"]), min_value=100, step=100)
-        m["rapid_feed_rate"] = st.number_input("Rapid Feed Rate (mm/min)", value=int(m["rapid_feed_rate"]), min_value=100, step=100)
-        m["tool_change_time_s"] = st.number_input("Tool Change Time (s)", value=int(m["tool_change_time_s"]), min_value=1, step=1)
-        m["setup_time_min"] = st.number_input("Setup Time (min)", value=int(m["setup_time_min"]), min_value=1, step=1)
+        m["max_feed_rate"]      = st.number_input(
+            "Max Feed Rate (mm/min)", value=int(m["max_feed_rate"]), min_value=100, step=100,
+        )
+        m["rapid_feed_rate"]    = st.number_input(
+            "Rapid Feed Rate (mm/min)", value=int(m["rapid_feed_rate"]), min_value=100, step=100,
+        )
+        m["tool_change_time_s"] = st.number_input(
+            "Tool Change Time (s)", value=int(m["tool_change_time_s"]), min_value=1, step=1,
+        )
+        m["setup_time_min"]     = st.number_input(
+            "Setup Time (min)", value=int(m["setup_time_min"]), min_value=1, step=1,
+        )
 
     if st.button("Apply Machine Settings"):
         st.session_state.machines[sel_idx] = m
@@ -504,7 +588,29 @@ def page_machine_setup():
     else:
         st.session_state.selected_machine = m
 
-    st.info(f"Active machine: **{st.session_state.selected_machine['machine_name']}** — {st.session_state.selected_machine['machine_type']} / {st.session_state.selected_machine['controller']}")
+    _pm1, _pm2, _pm3, _pm4, _pm5 = st.columns(5)
+    _pm1.metric("Max Spindle RPM",      m["max_spindle_rpm"])
+    _pm2.metric("Max Feed (mm/min)",    m["max_feed_rate"])
+    _pm3.metric("Rapid Feed (mm/min)",  m["rapid_feed_rate"])
+    _pm4.metric("Tool Change (s)",      m["tool_change_time_s"])
+    _pm5.metric("Setup Time (min)",     m["setup_time_min"])
+
+    st.info(
+        f"Active machine: **{st.session_state.selected_machine['machine_name']}** — "
+        f"{st.session_state.selected_machine['machine_type']} / "
+        f"{st.session_state.selected_machine['controller']}"
+    )
+
+    st.divider()
+
+    # ── Section: Material Machinability ───────────────────────────────────────
+    st.subheader("Material Machinability")
+    st.caption("Key material parameters used for feeds, speeds, and time estimates.")
+
+    _mm1, _mm2, _mm3 = st.columns(3)
+    _mm1.metric("Density (g/cm³)",       mat_m["density"])
+    _mm2.metric("Machinability Factor",  mat_m["machinability_factor"])
+    _mm3.metric("Safety Factor",         mat_m["safety_factor"])
 
 
 def page_tool_library():
