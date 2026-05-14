@@ -397,11 +397,21 @@ def page_upload_step():
 
         with ov_right:
             st.subheader("3D Preview")
-            _mesh = st.session_state.get("step_mesh_data")
-            _geo  = st.session_state.get("step_geometry")
-            _stk  = st.session_state.get("stock", {})
+            _mesh     = st.session_state.get("step_mesh_data")
+            _geo      = st.session_state.get("step_geometry")
+            _stk      = st.session_state.get("stock", {})
+            _all_cands = st.session_state.get("step_candidates", [])
+
+            _show_markers = st.checkbox(
+                "Show feature markers",
+                value=True,
+                key="_3d_show_markers",
+                help="Overlay color-coded markers for detected feature candidates",
+            )
+
             if _mesh:
-                fig_mesh = build_step_mesh3d(_mesh, _stk)
+                _active_cands = _all_cands if _show_markers else []
+                fig_mesh = build_step_mesh3d(_mesh, _stk, candidates=_active_cands)
                 st.plotly_chart(fig_mesh, use_container_width=True)
                 st.caption(
                     "**Solid body** = machined part  ·  "
@@ -447,6 +457,38 @@ def page_upload_step():
                     "Span (mm)": [r["length_mm"], r["width_mm"], r["height_mm"]],
                 }
             st.dataframe(pd.DataFrame(range_data), use_container_width=True, hide_index=True)
+
+        # ── Detected Feature Measurements ─────────────────────────────
+        st.divider()
+        st.subheader("Detected Feature Measurements")
+        _cands_tbl = st.session_state.get("step_candidates", [])
+        if _cands_tbl:
+            st.caption(
+                "Detected from STEP file — planning reference only. "
+                "Accept features on **4. Setup & Feature Review**."
+            )
+
+            def _fv(v):
+                f = float(v) if v not in (None, "") else 0.0
+                return round(f, 2) if f != 0.0 else None
+
+            _rows = []
+            for _c in _cands_tbl:
+                _rows.append({
+                    "ID":         _c.get("candidate_id", "—"),
+                    "Type":       _c.get("feature_type",  "—"),
+                    "Name":       _c.get("feature_name",  "—"),
+                    "X (mm)":     _fv(_c.get("x_pos")),
+                    "Y (mm)":     _fv(_c.get("y_pos")),
+                    "Ø (mm)":     _fv(_c.get("diameter")),
+                    "L (mm)":     _fv(_c.get("length")),
+                    "W (mm)":     _fv(_c.get("width")),
+                    "D (mm)":     _fv(_c.get("depth")),
+                    "Confidence": _c.get("confidence", "—"),
+                })
+            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("Feature markers will appear after STEP feature detection.")
 
     # ── Stock & Part Dimensions (inputs unchanged) ────────────────────
     st.subheader("Stock & Part Dimensions")

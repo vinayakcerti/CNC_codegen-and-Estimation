@@ -3,6 +3,192 @@ import math
 
 
 # ---------------------------------------------------------------------------
+# Feature color palette (public — used by chart legend and UI)
+# ---------------------------------------------------------------------------
+
+FEATURE_COLORS = {
+    "Face Milling":        "#87CEEB",   # light blue
+    "Face milling":        "#87CEEB",
+    "Hole":                "#1E90FF",   # dodger blue
+    "Large Hole / Boring": "#8B008B",   # dark magenta / purple
+    "Large hole / boring": "#8B008B",
+    "Slot":                "#FF8C00",   # dark orange
+    "Pocket":              "#228B22",   # forest green
+    "Step":                "#8B4513",   # saddle brown
+    "Chamfer":             "#DA70D6",   # orchid / pink-purple
+    "Outer Profile":       "#2F4F4F",   # dark slate gray
+}
+
+
+def _feature_color(ftype):
+    """Return the hex color for a feature type (case-insensitive)."""
+    direct = FEATURE_COLORS.get(ftype)
+    if direct:
+        return direct
+    ft = ftype.lower()
+    if "face mill" in ft:               return "#87CEEB"
+    if "large hole" in ft or "boring" in ft: return "#8B008B"
+    if "hole" in ft:                    return "#1E90FF"
+    if "slot" in ft:                    return "#FF8C00"
+    if "pocket" in ft:                  return "#228B22"
+    if "step" in ft or "shoulder" in ft: return "#8B4513"
+    if "chamfer" in ft:                 return "#DA70D6"
+    if "profile" in ft:                 return "#2F4F4F"
+    return "#888888"
+
+
+# ---------------------------------------------------------------------------
+# Candidate feature marker traces
+# ---------------------------------------------------------------------------
+
+def _candidate_marker_traces(candidates, zmax, zmin):
+    """
+    Build Scatter3d traces for detected feature candidates.
+
+    Each feature type appears once in the chart legend.  Clicking the legend
+    entry toggles all markers of that type via legendgroup.
+
+    Markers are placed at z=zmax (top of part) except face-milling bottom
+    candidates which go at z=zmin.
+
+    Args:
+        candidates : list of candidate dicts from step_candidates session key
+        zmax       : top Z coordinate of the mesh (from mesh vertex extents)
+        zmin       : bottom Z coordinate of the mesh
+
+    Returns:
+        list of plotly.graph_objects.Scatter3d traces
+    """
+    traces = []
+    legend_shown = set()
+
+    for cand in candidates:
+        ftype  = cand.get("feature_type", "Unknown")
+        ft_low = ftype.lower()
+        color  = _feature_color(ftype)
+
+        x        = float(cand.get("x_pos")    or 0)
+        y        = float(cand.get("y_pos")    or 0)
+        label    = cand.get("feature_name",   ftype)
+        length   = float(cand.get("length")   or 0)
+        width    = float(cand.get("width")    or 0)
+        depth    = float(cand.get("depth")    or 0)
+        diameter = float(cand.get("diameter") or 0)
+
+        first_of_type = ftype not in legend_shown
+        if first_of_type:
+            legend_shown.add(ftype)
+
+        # Hover label
+        dims = []
+        if diameter > 0: dims.append(f"Ø{diameter:.1f}")
+        if length   > 0: dims.append(f"L={length:.1f}")
+        if width    > 0: dims.append(f"W={width:.1f}")
+        if depth    > 0: dims.append(f"D={depth:.1f}")
+        hover = label + ("<br>" + "  ".join(dims) + " mm" if dims else "")
+
+        # ── Hole / Large Hole: circle at zmax ──────────────────────────────
+        if "hole" in ft_low or "boring" in ft_low:
+            r = (diameter / 2) if diameter > 0 else 5.0
+            theta = [math.radians(a) for a in range(0, 370, 10)]
+            traces.append(go.Scatter3d(
+                x=[x + r * math.cos(t) for t in theta],
+                y=[y + r * math.sin(t) for t in theta],
+                z=[zmax] * len(theta),
+                mode="lines",
+                line=dict(color=color, width=3),
+                name=ftype,
+                legendgroup=ftype,
+                showlegend=first_of_type,
+                hovertext=hover,
+                hoverinfo="text",
+            ))
+
+        # ── Face Milling: dashed rectangle at zmax or zmin ─────────────────
+        elif "face mill" in ft_low:
+            z_face = zmin if "bottom" in label.lower() else zmax
+            half_l = (length / 2) if length > 0 else 30.0
+            half_w = (width  / 2) if width  > 0 else 30.0
+            rx = [x - half_l, x + half_l, x + half_l, x - half_l, x - half_l]
+            ry = [y - half_w, y - half_w, y + half_w, y + half_w, y - half_w]
+            traces.append(go.Scatter3d(
+                x=rx, y=ry, z=[z_face] * 5,
+                mode="lines",
+                line=dict(color=color, width=2, dash="dash"),
+                name=ftype,
+                legendgroup=ftype,
+                showlegend=first_of_type,
+                hovertext=hover,
+                hoverinfo="text",
+            ))
+
+        # ── Slot: solid rectangle outline at zmax ──────────────────────────
+        elif "slot" in ft_low:
+            half_l = (length / 2) if length > 0 else 25.0
+            half_w = (width  / 2) if width  > 0 else 10.0
+            rx = [x - half_l, x + half_l, x + half_l, x - half_l, x - half_l]
+            ry = [y - half_w, y - half_w, y + half_w, y + half_w, y - half_w]
+            traces.append(go.Scatter3d(
+                x=rx, y=ry, z=[zmax] * 5,
+                mode="lines",
+                line=dict(color=color, width=3),
+                name=ftype,
+                legendgroup=ftype,
+                showlegend=first_of_type,
+                hovertext=hover,
+                hoverinfo="text",
+            ))
+
+        # ── Pocket: solid rectangle outline at zmax ─────────────────────────
+        elif "pocket" in ft_low:
+            half_l = (length / 2) if length > 0 else 20.0
+            half_w = (width  / 2) if width  > 0 else 15.0
+            rx = [x - half_l, x + half_l, x + half_l, x - half_l, x - half_l]
+            ry = [y - half_w, y - half_w, y + half_w, y + half_w, y - half_w]
+            traces.append(go.Scatter3d(
+                x=rx, y=ry, z=[zmax] * 5,
+                mode="lines",
+                line=dict(color=color, width=3),
+                name=ftype,
+                legendgroup=ftype,
+                showlegend=first_of_type,
+                hovertext=hover,
+                hoverinfo="text",
+            ))
+
+        # ── Step / Shoulder: cross marker at (x, y, zmax) ──────────────────
+        elif "step" in ft_low or "shoulder" in ft_low:
+            arm = 8.0
+            traces.append(go.Scatter3d(
+                x=[x - arm, x + arm, None, x,       x      ],
+                y=[y,       y,       None, y - arm, y + arm],
+                z=[zmax] * 5,
+                mode="lines",
+                line=dict(color=color, width=3),
+                name=ftype,
+                legendgroup=ftype,
+                showlegend=first_of_type,
+                hovertext=hover,
+                hoverinfo="text",
+            ))
+
+        # ── Chamfer: diamond marker at (x, y, zmax) ────────────────────────
+        elif "chamfer" in ft_low:
+            traces.append(go.Scatter3d(
+                x=[x], y=[y], z=[zmax],
+                mode="markers",
+                marker=dict(size=10, color=color, symbol="diamond"),
+                name=ftype,
+                legendgroup=ftype,
+                showlegend=first_of_type,
+                hovertext=hover,
+                hoverinfo="text",
+            ))
+
+    return traces
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -67,18 +253,19 @@ def _stock_box_coords_traces(x0, x1, y0, y1, z0, z1):
 # Mesh3d solid viewer — CadQuery tessellation data
 # ---------------------------------------------------------------------------
 
-def build_step_mesh3d(mesh_data, stock):
+def build_step_mesh3d(mesh_data, stock, candidates=None):
     """
     Build a rotatable Plotly Mesh3d figure from pre-computed tessellation data.
 
     The bounding box overlay is derived from the actual vertex extents of the
     tessellated mesh so it always encloses the part regardless of the OCC
-    coordinate origin.  The `stock` parameter is accepted for API compatibility
-    but is not used for box positioning.
+    coordinate origin.
 
     Args:
-        mesh_data: dict with keys x/y/z (vertex coord lists) and i/j/k (triangle index lists)
-        stock:     dict with length/width/height keys (mm) — retained for signature compatibility
+        mesh_data : dict with keys x/y/z (vertex coord lists) and i/j/k (triangle index lists)
+        stock     : dict with length/width/height keys (mm) — retained for signature compatibility
+        candidates: list of candidate dicts from step_candidates session key, or None/[]
+                    to suppress markers
 
     Returns:
         plotly.graph_objects.Figure
@@ -86,7 +273,6 @@ def build_step_mesh3d(mesh_data, stock):
     xs, ys, zs = mesh_data["x"], mesh_data["y"], mesh_data["z"]
 
     # Derive bounding box from actual mesh vertex coordinates (OCC coordinate system).
-    # This ensures the stock box encloses the solid regardless of part origin offset.
     xmin, xmax = min(xs), max(xs)
     ymin, ymax = min(ys), max(ys)
     zmin, zmax = min(zs), max(zs)
@@ -114,6 +300,10 @@ def build_step_mesh3d(mesh_data, stock):
 
     for tr in _stock_box_coords_traces(xmin, xmax, ymin, ymax, zmin, zmax):
         fig.add_trace(tr)
+
+    if candidates:
+        for tr in _candidate_marker_traces(candidates, zmax, zmin):
+            fig.add_trace(tr)
 
     fig.update_layout(
         title="3D Preview — Part Shape (planning reference only)",
