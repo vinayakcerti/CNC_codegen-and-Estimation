@@ -408,10 +408,21 @@ def page_upload_step():
                 key="_3d_show_markers",
                 help="Overlay color-coded markers for detected feature candidates",
             )
+            _show_labels = st.checkbox(
+                "Show measurement labels",
+                value=False,
+                key="_3d_show_labels",
+                disabled=not _show_markers,
+                help="Display dimension labels next to each feature marker (may clutter small parts)",
+            )
 
             if _mesh:
                 _active_cands = _all_cands if _show_markers else []
-                fig_mesh = build_step_mesh3d(_mesh, _stk, candidates=_active_cands)
+                fig_mesh = build_step_mesh3d(
+                    _mesh, _stk,
+                    candidates=_active_cands,
+                    show_labels=(_show_labels and _show_markers),
+                )
                 st.plotly_chart(fig_mesh, use_container_width=True)
                 st.caption(
                     "**Solid body** = machined part  ·  "
@@ -472,21 +483,52 @@ def page_upload_step():
                 f = float(v) if v not in (None, "") else 0.0
                 return round(f, 2) if f != 0.0 else None
 
+            def _meas(c):
+                """Build a compact human-readable measurement string for a candidate."""
+                ft   = (c.get("feature_type") or "").lower()
+                dia  = float(c.get("diameter") or 0)
+                l    = float(c.get("length")   or 0)
+                w    = float(c.get("width")    or 0)
+                d    = float(c.get("depth")    or 0)
+                if "hole" in ft or "boring" in ft:
+                    parts = []
+                    if dia > 0: parts.append(f"Ø{dia:.2f}")
+                    if d   > 0: parts.append(f"d={d:.2f}")
+                    return ("  ".join(parts) + " mm") if parts else "—"
+                if "face mill" in ft:
+                    if l > 0 and w > 0: return f"{l:.2f} × {w:.2f} mm"
+                    return "—"
+                dims = [f"{v:.2f}" for v in (l, w, d) if v > 0]
+                return (" × ".join(dims) + " mm") if dims else "—"
+
             _rows = []
             for _c in _cands_tbl:
                 _rows.append({
-                    "ID":         _c.get("candidate_id", "—"),
-                    "Type":       _c.get("feature_type",  "—"),
-                    "Name":       _c.get("feature_name",  "—"),
-                    "X (mm)":     _fv(_c.get("x_pos")),
-                    "Y (mm)":     _fv(_c.get("y_pos")),
-                    "Ø (mm)":     _fv(_c.get("diameter")),
-                    "L (mm)":     _fv(_c.get("length")),
-                    "W (mm)":     _fv(_c.get("width")),
-                    "D (mm)":     _fv(_c.get("depth")),
-                    "Confidence": _c.get("confidence", "—"),
+                    "ID":              _c.get("candidate_id", "—"),
+                    "Type":            _c.get("feature_type",  "—"),
+                    "Name":            _c.get("feature_name",  "—"),
+                    "Measurement":     _meas(_c),
+                    "X Pos (mm)":      _fv(_c.get("x_pos")),
+                    "Y Pos (mm)":      _fv(_c.get("y_pos")),
+                    "Diameter (mm)":   _fv(_c.get("diameter")),
+                    "Length (mm)":     _fv(_c.get("length")),
+                    "Width (mm)":      _fv(_c.get("width")),
+                    "Depth (mm)":      _fv(_c.get("depth")),
+                    "Confidence":      _c.get("confidence", "—"),
                 })
-            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(_rows),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "X Pos (mm)":    st.column_config.NumberColumn("X Pos (mm)",    format="%.2f"),
+                    "Y Pos (mm)":    st.column_config.NumberColumn("Y Pos (mm)",    format="%.2f"),
+                    "Diameter (mm)": st.column_config.NumberColumn("Diameter (mm)", format="%.2f"),
+                    "Length (mm)":   st.column_config.NumberColumn("Length (mm)",   format="%.2f"),
+                    "Width (mm)":    st.column_config.NumberColumn("Width (mm)",    format="%.2f"),
+                    "Depth (mm)":    st.column_config.NumberColumn("Depth (mm)",    format="%.2f"),
+                },
+            )
         else:
             st.info("Feature markers will appear after STEP feature detection.")
 

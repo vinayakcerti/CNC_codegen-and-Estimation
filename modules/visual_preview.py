@@ -1,5 +1,6 @@
 import plotly.graph_objects as go
 import math
+import re
 
 
 # ---------------------------------------------------------------------------
@@ -38,29 +39,178 @@ def _feature_color(ftype):
 
 
 # ---------------------------------------------------------------------------
+# Hover / label helpers
+# ---------------------------------------------------------------------------
+
+def _make_hover_text(ft_low, label, diameter, length, width, depth):
+    """Return a clean, type-specific hover string for a feature candidate.
+
+    All zero / missing values are omitted gracefully.
+    """
+    if "large hole" in ft_low or "boring" in ft_low:
+        parts = []
+        if diameter > 0: parts.append(f"Ø{diameter:.1f} mm")
+        if depth    > 0: parts.append(f"depth {depth:.1f} mm")
+        return "Bore  " + "  ".join(parts) if parts else label
+    if "hole" in ft_low:
+        parts = []
+        if diameter > 0: parts.append(f"Ø{diameter:.1f} mm")
+        if depth    > 0: parts.append(f"depth {depth:.1f} mm")
+        return "Hole  " + "  ".join(parts) if parts else label
+    if "face mill" in ft_low:
+        if length > 0 and width > 0:
+            return f"Face milling  {length:.1f} × {width:.1f} mm"
+        return "Face milling"
+    if "slot" in ft_low:
+        dims = [f"{v:.1f}" for v in (length, width, depth) if v > 0]
+        return ("Slot  " + " × ".join(dims) + " mm") if dims else "Slot"
+    if "pocket" in ft_low:
+        dims = [f"{v:.1f}" for v in (length, width, depth) if v > 0]
+        return ("Pocket  " + " × ".join(dims) + " mm") if dims else "Pocket"
+    if "step" in ft_low or "shoulder" in ft_low:
+        dims = [f"{v:.1f}" for v in (length, width, depth) if v > 0]
+        return ("Step  " + " × ".join(dims) + " mm") if dims else "Step"
+    if "chamfer" in ft_low:
+        size = width or depth
+        return f"Chamfer  ~{size:.1f} mm" if size > 0 else "Chamfer"
+    return label
+
+
+def _make_short_label(ft_low, diameter, length, width, depth):
+    """Return a short string for 3D text label annotations.
+
+    Returns an empty string when no meaningful label can be formed.
+    """
+    if "large hole" in ft_low or "boring" in ft_low:
+        return f"Ø{diameter:.0f}" if diameter > 0 else "Bore"
+    if "hole" in ft_low:
+        return f"Ø{diameter:.0f}" if diameter > 0 else "Hole"
+    if "face mill" in ft_low:
+        if length > 0 and width > 0:
+            return f"{length:.0f}×{width:.0f}"
+        return "Face"
+    if "slot" in ft_low:
+        dims = [f"{v:.0f}" for v in (length, width, depth) if v > 0]
+        return "×".join(dims) if dims else "Slot"
+    if "pocket" in ft_low:
+        dims = [f"{v:.0f}" for v in (length, width, depth) if v > 0]
+        return "×".join(dims) if dims else "Pkt"
+    if "step" in ft_low or "shoulder" in ft_low:
+        return f"D{depth:.0f}" if depth > 0 else "Step"
+    if "chamfer" in ft_low:
+        size = width or depth
+        return f"~{size:.0f}" if size > 0 else "Chfr"
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Slot / Pocket orientation helpers
+# ---------------------------------------------------------------------------
+
+def _parse_xygaps(note):
+    """
+    Extract (x_gap, y_gap) from a Section-D detection_note.
+
+    The note always contains:
+        "X-pair: ... gap=N.NN mm; Y-pair: ... gap=M.MM mm"
+
+    Returns (x_gap, y_gap) as floats, or None if the pattern is absent.
+    """
+    xm = re.search(r"X-pair:.*?gap=([\d.]+)\s*mm", note)
+    ym = re.search(r"Y-pair:.*?gap=([\d.]+)\s*mm", note)
+    if xm and ym:
+        return float(xm.group(1)), float(ym.group(1))
+    return None
+
+
+def _infer_half_xy(cand, xmin, xmax, ymin, ymax):
+    """
+    Return (half_x, half_y) — half-spans along X and Y — for drawing a
+    Slot or Pocket outline rectangle in the correct orientation.
+
+    Strategy (in order of reliability):
+    1. Section D sources ("flat_ended_slot_walls", "paired_internal_walls"):
+       parse the detection_note for explicit X-gap and Y-gap.
+    2. Section C ("cadquery_face_records", cylinder-ended slots):
+       check whether x_pos ± length/2 fits within [xmin, xmax] vs
+       y_pos ± length/2 fits within [ymin, ymax].  The orientation
+       whose extent exceeds the part bbox is excluded; the one that
+       stays within it is used.  Tolerance = 2 mm for tessellation noise.
+    3. Fallback: length → X, width → Y (pre-fix behaviour).
+    """
+    length = float(cand.get("length") or 0)
+    width  = float(cand.get("width")  or 0)
+    if length <= 0:
+        return (25.0, 10.0)
+
+    dsrc = cand.get("detection_source") or ""
+    note = cand.get("detection_note")   or ""
+
+    # ── Strategy 1: explicit wall-pair gaps in detection_note ──────────────
+    if dsrc in ("flat_ended_slot_walls", "paired_internal_walls"):
+        gaps = _parse_xygaps(note)
+        if gaps:
+            return (gaps[0] / 2, gaps[1] / 2)
+
+    # ── Strategy 2: bounds-fitting for cylinder-ended slots ────────────────
+    if dsrc == "cadquery_face_records" and length > width > 0:
+        x_pos  = float(cand.get("x_pos") or 0)
+        y_pos  = float(cand.get("y_pos") or 0)
+        half_l = length / 2
+        half_w = width  / 2
+        _TOL   = 2.0   # mm — absorb tessellation / floating-point rounding
+
+        x_fits = (xmin is not None and xmax is not None and
+                  x_pos - half_l >= xmin - _TOL and
+                  x_pos + half_l <= xmax + _TOL)
+        y_fits = (ymin is not None and ymax is not None and
+                  y_pos - half_l >= ymin - _TOL and
+                  y_pos + half_l <= ymax + _TOL)
+
+        if x_fits and not y_fits:
+            return (half_l, half_w)   # long axis is X
+        if y_fits and not x_fits:
+            return (half_w, half_l)   # long axis is Y
+        # Both or neither fit — fall through to default
+
+    # ── Strategy 3: fallback (length → X, width → Y) ──────────────────────
+    half_l = length / 2 if length > 0 else 25.0
+    half_w = width  / 2 if width  > 0 else 10.0
+    return (half_l, half_w)
+
+
+# ---------------------------------------------------------------------------
 # Candidate feature marker traces
 # ---------------------------------------------------------------------------
 
-def _candidate_marker_traces(candidates, zmax, zmin):
+def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
+                              xmin=None, xmax=None, ymin=None, ymax=None):
     """
-    Build Scatter3d traces for detected feature candidates.
+    Build Scatter3d marker traces (and optional text label traces) for
+    detected feature candidates.
 
-    Each feature type appears once in the chart legend.  Clicking the legend
-    entry toggles all markers of that type via legendgroup.
+    Each feature type appears once in the chart legend via legendgroup.
+    Clicking the legend entry toggles all markers of that type.
 
     Markers are placed at z=zmax (top of part) except face-milling bottom
     candidates which go at z=zmin.
 
     Args:
-        candidates : list of candidate dicts from step_candidates session key
-        zmax       : top Z coordinate of the mesh (from mesh vertex extents)
-        zmin       : bottom Z coordinate of the mesh
+        candidates  : list of candidate dicts from step_candidates session key
+        zmax        : top Z coordinate of the mesh (from mesh vertex extents)
+        zmin        : bottom Z coordinate of the mesh
+        show_labels : if True, add a Scatter3d text annotation above each marker
+        xmin, xmax  : mesh X extents — used by _infer_half_xy for Section C orientation
+        ymin, ymax  : mesh Y extents — used by _infer_half_xy for Section C orientation
 
     Returns:
         list of plotly.graph_objects.Scatter3d traces
     """
     traces = []
     legend_shown = set()
+
+    # Text labels float a small distance above the part top surface.
+    z_text = zmax + max((zmax - zmin) * 0.08, 3.0)
 
     for cand in candidates:
         ftype  = cand.get("feature_type", "Unknown")
@@ -79,13 +229,7 @@ def _candidate_marker_traces(candidates, zmax, zmin):
         if first_of_type:
             legend_shown.add(ftype)
 
-        # Hover label
-        dims = []
-        if diameter > 0: dims.append(f"Ø{diameter:.1f}")
-        if length   > 0: dims.append(f"L={length:.1f}")
-        if width    > 0: dims.append(f"W={width:.1f}")
-        if depth    > 0: dims.append(f"D={depth:.1f}")
-        hover = label + ("<br>" + "  ".join(dims) + " mm" if dims else "")
+        hover = _make_hover_text(ft_low, label, diameter, length, width, depth)
 
         # ── Hole / Large Hole: circle at zmax ──────────────────────────────
         if "hole" in ft_low or "boring" in ft_low:
@@ -124,10 +268,9 @@ def _candidate_marker_traces(candidates, zmax, zmin):
 
         # ── Slot: solid rectangle outline at zmax ──────────────────────────
         elif "slot" in ft_low:
-            half_l = (length / 2) if length > 0 else 25.0
-            half_w = (width  / 2) if width  > 0 else 10.0
-            rx = [x - half_l, x + half_l, x + half_l, x - half_l, x - half_l]
-            ry = [y - half_w, y - half_w, y + half_w, y + half_w, y - half_w]
+            half_x, half_y = _infer_half_xy(cand, xmin, xmax, ymin, ymax)
+            rx = [x - half_x, x + half_x, x + half_x, x - half_x, x - half_x]
+            ry = [y - half_y, y - half_y, y + half_y, y + half_y, y - half_y]
             traces.append(go.Scatter3d(
                 x=rx, y=ry, z=[zmax] * 5,
                 mode="lines",
@@ -141,10 +284,9 @@ def _candidate_marker_traces(candidates, zmax, zmin):
 
         # ── Pocket: solid rectangle outline at zmax ─────────────────────────
         elif "pocket" in ft_low:
-            half_l = (length / 2) if length > 0 else 20.0
-            half_w = (width  / 2) if width  > 0 else 15.0
-            rx = [x - half_l, x + half_l, x + half_l, x - half_l, x - half_l]
-            ry = [y - half_w, y - half_w, y + half_w, y + half_w, y - half_w]
+            half_x, half_y = _infer_half_xy(cand, xmin, xmax, ymin, ymax)
+            rx = [x - half_x, x + half_x, x + half_x, x - half_x, x - half_x]
+            ry = [y - half_y, y - half_y, y + half_y, y + half_y, y - half_y]
             traces.append(go.Scatter3d(
                 x=rx, y=ry, z=[zmax] * 5,
                 mode="lines",
@@ -184,6 +326,26 @@ def _candidate_marker_traces(candidates, zmax, zmin):
                 hovertext=hover,
                 hoverinfo="text",
             ))
+
+        # ── Optional text label floating above the marker ──────────────────
+        if show_labels:
+            short = _make_short_label(ft_low, diameter, length, width, depth)
+            if short:
+                # Face-milling bottom label at z_text below the part (zmin offset)
+                z_lbl = (zmin - max((zmax - zmin) * 0.08, 3.0)
+                         if "face mill" in ft_low and "bottom" in label.lower()
+                         else z_text)
+                traces.append(go.Scatter3d(
+                    x=[x], y=[y], z=[z_lbl],
+                    mode="text",
+                    text=[short],
+                    textfont=dict(size=11, color=color, family="monospace"),
+                    textposition="middle center",
+                    name="",
+                    legendgroup=ftype,
+                    showlegend=False,
+                    hoverinfo="none",
+                ))
 
     return traces
 
@@ -253,7 +415,7 @@ def _stock_box_coords_traces(x0, x1, y0, y1, z0, z1):
 # Mesh3d solid viewer — CadQuery tessellation data
 # ---------------------------------------------------------------------------
 
-def build_step_mesh3d(mesh_data, stock, candidates=None):
+def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False):
     """
     Build a rotatable Plotly Mesh3d figure from pre-computed tessellation data.
 
@@ -262,10 +424,11 @@ def build_step_mesh3d(mesh_data, stock, candidates=None):
     coordinate origin.
 
     Args:
-        mesh_data : dict with keys x/y/z (vertex coord lists) and i/j/k (triangle index lists)
-        stock     : dict with length/width/height keys (mm) — retained for signature compatibility
-        candidates: list of candidate dicts from step_candidates session key, or None/[]
-                    to suppress markers
+        mesh_data   : dict with keys x/y/z (vertex coord lists) and i/j/k (triangle index lists)
+        stock       : dict with length/width/height keys (mm) — retained for signature compatibility
+        candidates  : list of candidate dicts from step_candidates session key, or None/[]
+                      to suppress markers
+        show_labels : if True, add Scatter3d text annotations above each candidate marker
 
     Returns:
         plotly.graph_objects.Figure
@@ -302,7 +465,11 @@ def build_step_mesh3d(mesh_data, stock, candidates=None):
         fig.add_trace(tr)
 
     if candidates:
-        for tr in _candidate_marker_traces(candidates, zmax, zmin):
+        for tr in _candidate_marker_traces(
+            candidates, zmax, zmin,
+            show_labels=show_labels,
+            xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax,
+        ):
             fig.add_trace(tr)
 
     fig.update_layout(
