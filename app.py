@@ -1800,12 +1800,20 @@ def page_visual_preview():
 
 
 def page_cnc_export():
-    st.header("9. CNC Program Export")
+    st.title("Export / Setup Sheet")
+    st.caption(
+        "Review draft CNC output, setup notes, safety warnings, and downloadable job documents."
+    )
+    st.divider()
 
-    st.error("DO NOT RUN THIS PROGRAM DIRECTLY ON A MACHINE. This is draft planning code only. Verify in CAM/simulator and by a qualified CNC programmer before use on any real machine.")
+    st.error(
+        "DO NOT RUN THIS PROGRAM DIRECTLY ON A MACHINE. "
+        "This is draft planning code only. Verify in CAM/simulator and by a qualified "
+        "CNC programmer before use on any real machine."
+    )
 
     if "operations" not in st.session_state or not st.session_state.operations:
-        st.warning("No operations available. Please run Operation Plan first.")
+        st.warning("No operations available. Please run **6. Strategy / Operations** first.")
         return
 
     gcode = generate_gcode(
@@ -1814,47 +1822,36 @@ def page_cnc_export():
         st.session_state.stock,
     )
 
-    st.subheader("Generated Draft CNC Program")
-    st.code(gcode, language="text")
+    mach = st.session_state.selected_machine
+    mat  = st.session_state.selected_material
 
-    col1, col2, col3 = st.columns(3)
+    # ── Status cards ──────────────────────────────────────────────────────────
+    _has_setup2 = any(
+        op.get("feature_type") == "Face Milling"
+        and "bottom" in op.get("feature_name", "").lower()
+        for op in st.session_state.operations
+    )
 
-    with col1:
-        st.download_button(
-            "Download Draft CNC Program (.nc)",
-            data=gcode.encode(),
-            file_name="draft_cnc_program.nc",
-            mime="text/plain",
-            type="primary",
+    _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+    _sc1.metric("Operations",       len(st.session_state.operations))
+    _sc2.metric("Machine",          mach.get("machine_name", "—"))
+    _sc3.metric("Material",         mat.get("name", "—"))
+    _sc4.metric("Setup 2 Required", "Yes" if _has_setup2 else "No")
+
+    if _has_setup2:
+        st.warning(
+            "**Setup 2 / Flip Required:** This job includes a bottom face milling operation. "
+            "Flip the part and re-set zero before machining the bottom face."
         )
 
-    if "operations" in st.session_state:
-        with col2:
-            ops_csv = pd.DataFrame(st.session_state.operations).to_csv(index=False).encode()
-            st.download_button(
-                "Download Operation Plan (CSV)",
-                data=ops_csv,
-                file_name="operation_plan.csv",
-                mime="text/csv",
-            )
+    st.divider()
 
-    if "time_result" in st.session_state:
-        with col3:
-            time_df = pd.DataFrame([{
-                "Metric": k.replace("_", " ").title(),
-                "Value": v,
-            } for k, v in st.session_state.time_result.items()])
-            time_csv = time_df.to_csv(index=False).encode()
-            st.download_button(
-                "Download Time Report (CSV)",
-                data=time_csv,
-                file_name="time_effort_report.csv",
-                mime="text/csv",
-            )
+    # ── Export Readiness ──────────────────────────────────────────────────────
+    st.subheader("Export Readiness")
 
     stat_col1, stat_col2 = st.columns(2)
     with stat_col1:
-        st.subheader("Program Statistics")
+        st.markdown("**Program Statistics**")
         lines = gcode.split("\n")
         st.write(f"- Total lines: **{len(lines)}**")
         st.write(f"- Tool changes: **{gcode.count('M6')}**")
@@ -1862,16 +1859,21 @@ def page_cnc_export():
         st.write(f"- Coolant ON (M8): **{gcode.count('M8')}**")
 
     with stat_col2:
-        st.subheader("Active Configuration")
-        mach = st.session_state.selected_machine
-        mat = st.session_state.selected_material
+        st.markdown("**Active Configuration**")
         st.write(f"- Machine: **{mach['machine_name']}**")
         st.write(f"- Controller: **{mach['controller']}**")
         st.write(f"- Material: **{mat['name']}**")
         st.write(f"- Operations: **{len(st.session_state.operations)}**")
 
-    # ── Setup Sheet ────────────────────────────────────────────────────
     st.divider()
+
+    # ── Draft CNC Program ─────────────────────────────────────────────────────
+    st.subheader("Draft CNC Program")
+    st.code(gcode, language="text")
+
+    st.divider()
+
+    # ── Setup Sheet ───────────────────────────────────────────────────────────
     st.subheader("Operator Setup Sheet")
     st.caption(
         "A printable one-page setup sheet summarising the job, tools, operation sequence, "
@@ -1934,6 +1936,46 @@ def page_cnc_export():
 
     with st.expander("Preview Setup Sheet (HTML source)"):
         st.html(setup_html)
+
+    st.divider()
+
+    # ── Downloads ─────────────────────────────────────────────────────────────
+    st.subheader("Downloads")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.download_button(
+            "Download Draft CNC Program (.nc)",
+            data=gcode.encode(),
+            file_name="draft_cnc_program.nc",
+            mime="text/plain",
+            type="primary",
+        )
+
+    if "operations" in st.session_state:
+        with col2:
+            ops_csv = pd.DataFrame(st.session_state.operations).to_csv(index=False).encode()
+            st.download_button(
+                "Download Operation Plan (CSV)",
+                data=ops_csv,
+                file_name="operation_plan.csv",
+                mime="text/csv",
+            )
+
+    if "time_result" in st.session_state:
+        with col3:
+            time_df = pd.DataFrame([{
+                "Metric": k.replace("_", " ").title(),
+                "Value": v,
+            } for k, v in st.session_state.time_result.items()])
+            time_csv = time_df.to_csv(index=False).encode()
+            st.download_button(
+                "Download Time Report (CSV)",
+                data=time_csv,
+                file_name="time_effort_report.csv",
+                mime="text/csv",
+            )
 
 
 def page_job_notes():
