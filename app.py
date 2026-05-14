@@ -960,16 +960,25 @@ def page_material_setup():
 
 
 def page_feature_input():
-    st.header("5. Feature Input")
+    st.title("Data Tables / Admin")
+    st.caption(
+        "Manual feature input, tolerance reference (ISO 286-1), and surface finish guide. "
+        "Use this page for data entry and engineering reference."
+    )
+    st.divider()
 
     tab_feat, tab_tol, tab_sf_guide = st.tabs([
-        "Feature List",
+        "Manual Feature Input",
         "Tolerance & IT Grade Guide",
         "Surface Finish Guide",
     ])
 
     # ── Tab 1: Feature List ───────────────────────────────────────────
     with tab_feat:
+        st.info(
+            "Manual feature input is useful when CAD detection is unavailable or when adding features manually. "
+            "Features added here flow directly into the operation plan."
+        )
         col_btn1, col_btn2, _ = st.columns([1, 1, 2])
         with col_btn1:
             if st.button("Load Demo Features"):
@@ -2207,10 +2216,23 @@ def page_cnc_export():
 
 
 def page_job_notes():
-    st.header("10. Job Notes & Revision History")
-    st.caption("Log notes, changes, and sign-offs against this job. All entries are saved to the local database.")
+    st.title("History")
+    st.caption("Log notes, sign-offs, and revision history for this job. All entries are saved to the local database.")
+    st.divider()
 
     notes = load_job_notes()
+
+    # ── Summary cards ─────────────────────────────────────────────────
+    _job_fname = st.session_state.get("uploaded_filename") or "—"
+    _notes_count = len(notes)
+    _last_updated = notes[-1]["timestamp"] if notes else "—"
+
+    hc1, hc2, hc3 = st.columns(3)
+    hc1.metric("Current Job", _job_fname)
+    hc2.metric("Notes Logged", _notes_count)
+    hc3.metric("Last Entry", _last_updated)
+
+    st.divider()
 
     # ── Add new note ──────────────────────────────────────────────────
     st.subheader("Add Note")
@@ -2242,7 +2264,7 @@ def page_job_notes():
     st.divider()
 
     # ── Existing notes ────────────────────────────────────────────────
-    st.subheader("Revision History")
+    st.subheader("Job Notes")
     if not notes:
         st.info("No notes yet. Add the first note above.")
     else:
@@ -2275,6 +2297,25 @@ def page_job_notes():
         if cc2.button("Clear All Notes", type="secondary"):
             clear_all_job_notes()
             st.rerun()
+
+    st.divider()
+
+    # ── Saved / Current Job Information ──────────────────────────────
+    st.subheader("Saved / Current Job Information")
+    st.caption("Read-only snapshot of the current job state.")
+    _ji_features  = st.session_state.get("features", [])
+    _ji_ops       = st.session_state.get("operations", [])
+    _ji_mat       = st.session_state.get("selected_material", {}) or {}
+    _ji_machine   = st.session_state.get("selected_machine", {}) or {}
+    ji1, ji2, ji3, ji4 = st.columns(4)
+    ji1.metric("STEP File", st.session_state.get("uploaded_filename") or "—")
+    ji2.metric("Features", len(_ji_features))
+    ji3.metric("Operations", len(_ji_ops))
+    ji4.metric("Material", _ji_mat.get("material_name", "—"))
+    if _ji_machine:
+        ji_m1, ji_m2 = st.columns(2)
+        ji_m1.metric("Machine", _ji_machine.get("machine_name", "—"))
+        ji_m2.metric("Controller", _ji_machine.get("controller", "—"))
 
 
 def main():
