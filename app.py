@@ -139,6 +139,34 @@ def init_session():
         st.session_state.added_candidate_ids = set()
     if "features_from_candidates" not in st.session_state:
         st.session_state.features_from_candidates = False
+    if "est_currency" not in st.session_state:
+        st.session_state.est_currency = "INR (₹)"
+    if "est_machine_rate" not in st.session_state:
+        st.session_state.est_machine_rate = 800.0
+    if "est_operator_rate" not in st.session_state:
+        st.session_state.est_operator_rate = 200.0
+    if "est_setup_cost" not in st.session_state:
+        st.session_state.est_setup_cost = 500.0
+    if "est_tool_cost" not in st.session_state:
+        st.session_state.est_tool_cost = 300.0
+    if "est_material_price_kg" not in st.session_state:
+        st.session_state.est_material_price_kg = 80.0
+    if "est_material_waste_pct" not in st.session_state:
+        st.session_state.est_material_waste_pct = 15.0
+    if "est_batch_qty" not in st.session_state:
+        st.session_state.est_batch_qty = 1
+    if "est_margin_pct" not in st.session_state:
+        st.session_state.est_margin_pct = 20.0
+    if "est_tolerance" not in st.session_state:
+        st.session_state.est_tolerance = "General (±0.20 mm) — ×1.00"
+    if "est_complexity" not in st.session_state:
+        st.session_state.est_complexity = 1.0
+    if "est_show_quote_currency" not in st.session_state:
+        st.session_state.est_show_quote_currency = False
+    if "est_quote_currency" not in st.session_state:
+        st.session_state.est_quote_currency = "USD ($)"
+    if "est_exchange_rate" not in st.session_state:
+        st.session_state.est_exchange_rate = 1.0
 
 
 def sidebar_nav():
@@ -1343,117 +1371,215 @@ def page_time_estimate():
     )
 
     st.divider()
-    st.subheader("Job Cost Estimator")
-    st.caption("Adjust rates below to produce a draft cost estimate for this job.")
-
-    stock = st.session_state.stock
-    mat = st.session_state.selected_material
-
-    cost_col1, cost_col2, cost_col3 = st.columns(3)
-    with cost_col1:
-        machine_rate = st.number_input(
-            "Machine Hourly Rate ($/hr)",
-            value=75.0, min_value=0.0, step=5.0,
-            help="Cost to run the machine per hour, including operator"
-        )
-        overhead_rate = st.number_input(
-            "Overhead / Setup Rate ($/hr)",
-            value=25.0, min_value=0.0, step=5.0,
-            help="Workshop overhead allocated per hour of work"
-        )
-    with cost_col2:
-        material_price_kg = st.number_input(
-            "Material Price ($/kg)",
-            value=5.0, min_value=0.0, step=0.5,
-            help="Cost of raw stock material per kilogram"
-        )
-        material_waste_pct = st.number_input(
-            "Material Waste / Offcut (%)",
-            value=15.0, min_value=0.0, max_value=80.0, step=1.0,
-            help="Extra material allowance for offcuts and setup scrap"
-        )
-    with cost_col3:
-        profit_margin_pct = st.number_input(
-            "Profit Margin (%)",
-            value=20.0, min_value=0.0, max_value=100.0, step=1.0,
-            help="Margin added on top of total cost"
-        )
-        quantity_parts = st.number_input(
-            "Number of Parts (batch)",
-            value=1, min_value=1, step=1,
-            help="Quote for a batch — setup cost is shared across the batch"
-        )
-
-    # ── Calculations ──────────────────────────────────────────────────
-    density = mat.get("density", 2.7)
-    stock_volume_cm3 = stock.get("stock_volume", 0)
-    part_volume_cm3 = stock.get("part_volume", 0)
-
-    # Material cost per part (stock volume × density × price, + waste)
-    stock_weight_kg = (stock_volume_cm3 / 1000) * density
-    material_cost_per_part = stock_weight_kg * material_price_kg * (1 + material_waste_pct / 100)
-
-    # Machine time cost (setup shared across batch, cutting per part)
-    total_time_min = result["total_machine_time_min"]
-    setup_time_min = result["setup_time_min"]
-    cutting_time_min = total_time_min - setup_time_min
-
-    setup_cost_per_batch = (setup_time_min / 60) * (machine_rate + overhead_rate)
-    cutting_cost_per_part = (cutting_time_min / 60) * machine_rate
-    overhead_cost_per_part = (cutting_time_min / 60) * overhead_rate
-
-    cost_per_part_before_margin = (
-        material_cost_per_part
-        + (setup_cost_per_batch / quantity_parts)
-        + cutting_cost_per_part
-        + overhead_cost_per_part
+    st.subheader("Quote Configuration")
+    st.caption(
+        "Enter your workshop rates and job parameters. "
+        "All values persist while you navigate pages."
     )
-    margin_per_part = cost_per_part_before_margin * (profit_margin_pct / 100)
-    sell_price_per_part = cost_per_part_before_margin + margin_per_part
-    batch_total = sell_price_per_part * quantity_parts
 
-    # ── Display ───────────────────────────────────────────────────────
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Material Cost / Part", f"${material_cost_per_part:.2f}",
-              delta=f"{stock_weight_kg:.3f} kg stock")
-    m2.metric("Setup Cost (batch)", f"${setup_cost_per_batch:.2f}",
-              delta=f"${setup_cost_per_batch/quantity_parts:.2f}/part")
-    m3.metric("Machining Cost / Part", f"${cutting_cost_per_part + overhead_cost_per_part:.2f}")
-    m4.metric("Sell Price / Part", f"${sell_price_per_part:.2f}",
-              delta=f"Margin: ${margin_per_part:.2f}")
+    # ── Costing currency selector ─────────────────────────────────────
+    _CURRENCY_OPTS = ["INR (₹)", "USD ($)", "EUR (€)", "AED", "OMR", "SAR"]
+    _CUR_SYM = {"INR (₹)": "₹", "USD ($)": "$", "EUR (€)": "€", "AED": "AED", "OMR": "OMR", "SAR": "SAR"}
+    _sym = _CUR_SYM[st.selectbox("Costing Currency", _CURRENCY_OPTS, key="est_currency")]
+    st.caption(
+        "All input rates are assumed to be in the selected costing currency. "
+        "Changing this does not auto-convert entered rates."
+    )
+
+    # ── Rates row ────────────────────────────────────────────────────
+    _qc1, _qc2, _qc3 = st.columns(3)
+    with _qc1:
+        st.number_input(f"Machine Hourly Rate ({_sym}/hr)",
+                        min_value=0.0, step=50.0, key="est_machine_rate",
+                        help="Cost to operate the VMC per hour")
+        st.number_input(f"Operator Hourly Rate ({_sym}/hr)",
+                        min_value=0.0, step=10.0, key="est_operator_rate",
+                        help="Operator wages per hour (loaded rate)")
+    with _qc2:
+        st.number_input(f"Setup Fixed Cost ({_sym})",
+                        min_value=0.0, step=50.0, key="est_setup_cost",
+                        help="Flat cost for fixturing, zero-setting, first-off — shared across batch")
+        st.number_input(f"Tool Wear / Consumables ({_sym})",
+                        min_value=0.0, step=50.0, key="est_tool_cost",
+                        help="Estimated insert/tool wear and coolant cost for this job — shared across batch")
+    with _qc3:
+        st.number_input(f"Material Price ({_sym}/kg)",
+                        min_value=0.0, step=5.0, key="est_material_price_kg")
+        st.number_input("Material Waste / Offcut (%)",
+                        min_value=0.0, max_value=80.0, step=1.0, key="est_material_waste_pct",
+                        help="Extra allowance for offcuts and setup scrap")
+
+    # ── Job parameters row ───────────────────────────────────────────
+    _qr1, _qr2, _qr3 = st.columns(3)
+    with _qr1:
+        st.number_input("Batch Quantity (parts)", min_value=1, step=1, key="est_batch_qty",
+                        help="Setup and tooling costs are divided across the batch")
+        st.number_input("Profit Margin (%)",
+                        min_value=0.0, max_value=200.0, step=5.0, key="est_margin_pct")
+    with _qr2:
+        _TOL_OPTS = [
+            "General (±0.20 mm) — ×1.00",
+            "Medium (±0.10 mm) — ×1.15",
+            "Tight (±0.05 mm) — ×1.35",
+            "Very tight (±0.02 mm) — ×1.60",
+        ]
+        _TOL_MUL = {
+            "General (±0.20 mm) — ×1.00":    1.00,
+            "Medium (±0.10 mm) — ×1.15":     1.15,
+            "Tight (±0.05 mm) — ×1.35":      1.35,
+            "Very tight (±0.02 mm) — ×1.60": 1.60,
+        }
+        st.selectbox("Tolerance Level", _TOL_OPTS, key="est_tolerance",
+                     help="Tighter tolerances require more passes, slower feeds, finer tooling")
+        _tol_mul = _TOL_MUL[st.session_state.est_tolerance]
+        st.caption(f"Tolerance multiplier: ×{_tol_mul:.2f} applied to subtotal")
+    with _qr3:
+        st.slider("Complexity Factor", min_value=1.0, max_value=2.0, step=0.05,
+                  key="est_complexity",
+                  help="1.0 = standard job; 1.5 = complex fixturing; 2.0 = very complex")
+        st.caption(
+            f"Complexity multiplier: ×{st.session_state.est_complexity:.2f}  —  "
+            "reflects multi-setup, tight-access, or special-sequence jobs"
+        )
+
+    # ── Quote currency ───────────────────────────────────────────────
+    st.checkbox("Show customer quote in another currency", key="est_show_quote_currency")
+    _show_quote = st.session_state.est_show_quote_currency
+    _cost_cur   = st.session_state.est_currency
+    _qsym       = None
+    _exchange_rate = 1.0
+
+    if _show_quote:
+        _qcol1, _qcol2 = st.columns(2)
+        with _qcol1:
+            st.selectbox("Quote Currency", _CURRENCY_OPTS, key="est_quote_currency")
+        _quote_cur = st.session_state.est_quote_currency
+
+        if _quote_cur == _cost_cur:
+            st.info("Quote currency matches costing currency — no conversion needed.")
+            _show_quote = False
+        else:
+            _cost_cur_code = _cost_cur.split(" ")[0]
+            _quote_cur_code = _quote_cur.split(" ")[0]
+            with _qcol2:
+                st.number_input(
+                    f"Exchange rate: 1 {_quote_cur_code} = ? {_cost_cur_code}",
+                    min_value=0.0001, step=0.1, format="%.4f",
+                    key="est_exchange_rate",
+                    help="Manual rate — no live API. Check xe.com or wise.com for current rates.",
+                )
+            _exchange_rate = st.session_state.est_exchange_rate
+            _qsym = _CUR_SYM[_quote_cur]
+            st.caption(
+                "Reference: "
+                "[Xe Currency Converter](https://www.xe.com/currencyconverter/) · "
+                "[Wise Currency Converter](https://wise.com/gb/currency-converter/)"
+            )
+
+    # ── Calculations ────────────────────────────────────────────────
+    stock  = st.session_state.stock
+    mat    = st.session_state.selected_material
+    _density       = mat.get("density", 2.7)
+    _stock_vol_cm3 = stock.get("stock_volume", 0) or 0
+    _stock_wt_kg   = (_stock_vol_cm3 / 1000) * _density
+
+    _material_cost  = _stock_wt_kg * st.session_state.est_material_price_kg * (
+        1 + st.session_state.est_material_waste_pct / 100
+    )
+    _cutting_min    = result["total_machine_time_min"] - result["setup_time_min"]
+    _machine_cost   = (_cutting_min / 60) * st.session_state.est_machine_rate
+    _operator_cost  = (result["operator_effort_min"] / 60) * st.session_state.est_operator_rate
+    _batch_qty      = st.session_state.est_batch_qty
+    _setup_part     = st.session_state.est_setup_cost  / _batch_qty
+    _tool_part      = st.session_state.est_tool_cost   / _batch_qty
+
+    _subtotal_base  = _material_cost + _machine_cost + _operator_cost + _setup_part + _tool_part
+    _tol_impact     = _subtotal_base * (_tol_mul - 1.0)
+    _cplx_impact    = (_subtotal_base + _tol_impact) * (st.session_state.est_complexity - 1.0)
+    _subtotal_adj   = _subtotal_base + _tol_impact + _cplx_impact
+    _margin_amt     = _subtotal_adj * (st.session_state.est_margin_pct / 100)
+    _price_per_part = _subtotal_adj + _margin_amt
+    _batch_total    = _price_per_part * _batch_qty
+
+    # ── Quotation display ────────────────────────────────────────────
+    st.divider()
+    st.subheader(f"Internal Costing Estimate ({_sym})")
+
+    _qm1, _qm2, _qm3, _qm4 = st.columns(4)
+    _qm1.metric("Machine Time Cost",    f"{_sym} {_machine_cost:,.2f}")
+    _qm2.metric("Operator Cost",        f"{_sym} {_operator_cost:,.2f}")
+    _qm3.metric("Material Cost / Part", f"{_sym} {_material_cost:,.2f}",
+                delta=f"{_stock_wt_kg:.3f} kg")
+    _qm4.metric("Sell Price / Part",    f"{_sym} {_price_per_part:,.2f}",
+                delta=f"Margin: {_sym} {_margin_amt:,.2f}")
 
     st.metric(
-        f"Batch Total ({quantity_parts} part{'s' if quantity_parts > 1 else ''})",
-        f"${batch_total:.2f}",
+        f"Batch Total — {_batch_qty} part{'s' if _batch_qty > 1 else ''}",
+        f"{_sym} {_batch_total:,.2f}",
     )
 
-    cost_breakdown = pd.DataFrame({
-        "Cost Item": [
-            "Material (incl. waste)",
-            "Setup (÷ batch size)",
-            "Machining",
-            "Overhead",
-            "Subtotal (cost)",
-            f"Profit Margin ({profit_margin_pct:.0f}%)",
-            "Sell Price per Part",
-        ],
-        "Per Part ($)": [
-            round(material_cost_per_part, 2),
-            round(setup_cost_per_batch / quantity_parts, 2),
-            round(cutting_cost_per_part, 2),
-            round(overhead_cost_per_part, 2),
-            round(cost_per_part_before_margin, 2),
-            round(margin_per_part, 2),
-            round(sell_price_per_part, 2),
-        ],
-    })
-    st.dataframe(cost_breakdown, use_container_width=True, hide_index=True)
+    if _show_quote and _qsym is not None:
+        _quote_price_per_part = _price_per_part / _exchange_rate
+        _quote_batch_total    = _batch_total    / _exchange_rate
+        st.subheader(f"Customer Quote ({_qsym})")
+        _cqm1, _cqm2 = st.columns(2)
+        _cqm1.metric("Sell Price / Part (Customer)",
+                     f"{_qsym} {_quote_price_per_part:,.2f}")
+        _cqm2.metric(
+            f"Batch Total — {_batch_qty} part{'s' if _batch_qty > 1 else ''} (Customer)",
+            f"{_qsym} {_quote_batch_total:,.2f}",
+        )
+        st.caption(
+            f"Conversion: {_sym} {_price_per_part:,.2f} / {_exchange_rate:.4f} "
+            f"= {_qsym} {_quote_price_per_part:,.2f} per part"
+        )
 
-    cost_csv = cost_breakdown.to_csv(index=False).encode()
+    _tol_label = st.session_state.est_tolerance.split("—")[0].strip()
+    _cost_col_values = [
+        round(_material_cost, 2),
+        round(_machine_cost,  2),
+        round(_operator_cost, 2),
+        round(_setup_part,    2),
+        round(_tool_part,     2),
+        round(_tol_impact,    2),
+        round(_cplx_impact,   2),
+        round(_subtotal_adj,  2),
+        round(_margin_amt,    2),
+        round(_price_per_part,2),
+    ]
+    _cost_items = [
+        "Material (incl. waste)",
+        "Machine time",
+        "Operator",
+        f"Setup fixed (/ {_batch_qty} parts)",
+        f"Tool / consumables (/ {_batch_qty} parts)",
+        f"Tolerance adjustment ({_tol_label})",
+        f"Complexity adjustment (x{st.session_state.est_complexity:.2f})",
+        "Subtotal before margin",
+        f"Profit margin ({st.session_state.est_margin_pct:.0f}%)",
+        "Sell price per part",
+    ]
+    _breakdown_data = {
+        "Cost Item": _cost_items,
+        f"Per Part ({_sym})": _cost_col_values,
+    }
+    if _show_quote and _qsym is not None:
+        _breakdown_data[f"Per Part ({_qsym}) — customer quote"] = [
+            round(v / _exchange_rate, 2) for v in _cost_col_values
+        ]
+    _breakdown = pd.DataFrame(_breakdown_data)
+    st.dataframe(_breakdown, use_container_width=True, hide_index=True)
+
+    st.info(
+        "This is a quotation/planning estimate. "
+        "Final price should be reviewed by the workshop before quoting to customer."
+    )
+
+    _cost_csv = _breakdown.to_csv(index=False).encode()
     st.download_button(
-        "Download Cost Estimate (CSV)",
-        data=cost_csv,
-        file_name="job_cost_estimate.csv",
+        "Download Quotation Estimate (CSV)",
+        data=_cost_csv,
+        file_name="quotation_estimate.csv",
         mime="text/csv",
     )
 
