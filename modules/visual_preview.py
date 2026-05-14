@@ -7,7 +7,11 @@ import math
 # ---------------------------------------------------------------------------
 
 def _stock_box_traces(sx, sy, sz):
-    """Return Mesh3d + wireframe Scatter3d traces for the stock bounding box."""
+    """Return Mesh3d + wireframe Scatter3d traces for the stock bounding box.
+
+    Draws the box from (0,0,0) to (sx, sy, sz).
+    Used by build_3d_view() where features are also positioned from 0.
+    """
     vx = [0,sx,sx, 0, 0,sx,sx, 0]
     vy = [0, 0,sy,sy, 0, 0,sy,sy]
     vz = [0, 0, 0, 0,sz,sz,sz,sz]
@@ -18,15 +22,9 @@ def _stock_box_traces(sx, sy, sz):
         k=[2,3,5,6,7,3,1,2,5,6],
         opacity=0.07, color="steelblue", name="Stock", showlegend=False,
     )
-    # wireframe edges of the box
-    edges = [
-        [0,1,None,1,2,None,2,3,None,3,0,None],   # bottom
-        [4,5,None,5,6,None,6,7,None,7,4,None],   # top
-        [0,4,None,1,5,None,2,6,None,3,7,None],   # verticals
-    ]
     ex, ey, ez = [], [], []
     idx = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
-    for a,b in idx:
+    for a, b in idx:
         ex += [vx[a],vx[b],None]; ey += [vy[a],vy[b],None]; ez += [vz[a],vz[b],None]
     wire = go.Scatter3d(
         x=ex, y=ey, z=ez, mode="lines",
@@ -34,6 +32,105 @@ def _stock_box_traces(sx, sy, sz):
         name="Stock outline", showlegend=False,
     )
     return [mesh, wire]
+
+
+def _stock_box_coords_traces(x0, x1, y0, y1, z0, z1):
+    """Return Mesh3d + wireframe Scatter3d for a box defined by explicit min/max coords.
+
+    Used by build_step_mesh3d() where coordinates must match the OCC/CadQuery
+    tessellation coordinate system rather than a 0-based span.
+    """
+    vx = [x0,x1,x1,x0, x0,x1,x1,x0]
+    vy = [y0,y0,y1,y1, y0,y0,y1,y1]
+    vz = [z0,z0,z0,z0, z1,z1,z1,z1]
+    mesh = go.Mesh3d(
+        x=vx, y=vy, z=vz,
+        i=[0,0,0,4,4,4,0,1,2,3],
+        j=[1,2,4,5,6,7,4,5,6,7],
+        k=[2,3,5,6,7,3,1,2,5,6],
+        opacity=0.05, color="steelblue",
+        name="Stock / bounding box", showlegend=True,
+    )
+    ex, ey, ez = [], [], []
+    idx = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+    for a, b in idx:
+        ex += [vx[a],vx[b],None]; ey += [vy[a],vy[b],None]; ez += [vz[a],vz[b],None]
+    wire = go.Scatter3d(
+        x=ex, y=ey, z=ez, mode="lines",
+        line=dict(color="steelblue", width=1.5, dash="dash"),
+        name="", showlegend=False,
+    )
+    return [mesh, wire]
+
+
+# ---------------------------------------------------------------------------
+# Mesh3d solid viewer — CadQuery tessellation data
+# ---------------------------------------------------------------------------
+
+def build_step_mesh3d(mesh_data, stock):
+    """
+    Build a rotatable Plotly Mesh3d figure from pre-computed tessellation data.
+
+    The bounding box overlay is derived from the actual vertex extents of the
+    tessellated mesh so it always encloses the part regardless of the OCC
+    coordinate origin.  The `stock` parameter is accepted for API compatibility
+    but is not used for box positioning.
+
+    Args:
+        mesh_data: dict with keys x/y/z (vertex coord lists) and i/j/k (triangle index lists)
+        stock:     dict with length/width/height keys (mm) — retained for signature compatibility
+
+    Returns:
+        plotly.graph_objects.Figure
+    """
+    xs, ys, zs = mesh_data["x"], mesh_data["y"], mesh_data["z"]
+
+    # Derive bounding box from actual mesh vertex coordinates (OCC coordinate system).
+    # This ensures the stock box encloses the solid regardless of part origin offset.
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    zmin, zmax = min(zs), max(zs)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Mesh3d(
+        x=xs,
+        y=ys,
+        z=zs,
+        i=mesh_data["i"],
+        j=mesh_data["j"],
+        k=mesh_data["k"],
+        color="lightsteelblue",
+        opacity=0.88,
+        flatshading=False,
+        lighting=dict(
+            ambient=0.5, diffuse=0.8, specular=0.2,
+            roughness=0.5, fresnel=0.2,
+        ),
+        lightposition=dict(x=1, y=1, z=2),
+        name="Part (solid body)",
+        showlegend=True,
+    ))
+
+    for tr in _stock_box_coords_traces(xmin, xmax, ymin, ymax, zmin, zmax):
+        fig.add_trace(tr)
+
+    fig.update_layout(
+        title="3D Preview — Part Shape (planning reference only)",
+        scene=dict(
+            xaxis_title="X (mm)",
+            yaxis_title="Y (mm)",
+            zaxis_title="Z (mm)",
+            aspectmode="data",
+            xaxis=dict(backgroundcolor="rgba(240,248,255,0.5)"),
+            yaxis=dict(backgroundcolor="rgba(240,248,255,0.5)"),
+            zaxis=dict(backgroundcolor="rgba(220,230,240,0.5)"),
+        ),
+        height=480,
+        margin=dict(l=0, r=0, t=50, b=0),
+        legend=dict(orientation="h", yanchor="bottom", y=0),
+    )
+    return fig
 
 
 def _add_feature_traces_3d(fig, features, sz):

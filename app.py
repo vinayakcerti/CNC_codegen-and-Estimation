@@ -5,6 +5,7 @@ import io
 import copy
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -17,7 +18,7 @@ from modules.data_store import (
 from modules.operation_planner import plan_operations
 from modules.time_estimator import estimate_time
 from modules.gcode_generator import generate_gcode
-from modules.visual_preview import build_top_view, build_3d_view
+from modules.visual_preview import build_top_view, build_3d_view, build_step_mesh3d
 from modules.step_parser import parse_step_bounding_box, parse_step_geometry, parse_step_auto
 from modules.setup_sheet import generate_setup_sheet
 from modules.speeds_feeds import (
@@ -167,6 +168,8 @@ def init_session():
         st.session_state.est_quote_currency = "USD ($)"
     if "est_exchange_rate" not in st.session_state:
         st.session_state.est_exchange_rate = 1.0
+    if "step_mesh_data" not in st.session_state:
+        st.session_state.step_mesh_data = None
 
 
 def sidebar_nav():
@@ -235,7 +238,7 @@ def page_upload_step():
         cl1, cl2 = st.columns([3, 1])
         cl1.info(f"Loaded file: **{st.session_state.uploaded_filename}**")
         if cl2.button("Clear & Start New", type="secondary"):
-            for key in ("uploaded_filename", "step_parse_result", "step_geometry"):
+            for key in ("uploaded_filename", "step_parse_result", "step_geometry", "step_mesh_data"):
                 st.session_state.pop(key, None)
             st.session_state.stock = {
                 "length": 150.0, "width": 100.0, "height": 50.0,
@@ -278,6 +281,35 @@ def page_upload_step():
             st.session_state.step_candidates          = parse_result.get("candidate_features", [])
             st.session_state.step_candidate_warnings  = parse_result.get("candidate_warnings", [])
             st.session_state.added_candidate_ids      = set()
+
+            # Tessellate for Mesh3d viewer — only when CadQuery successfully parsed the shape
+            _mesh_data = None
+            if parse_result.get("parser_used") == "cadquery":
+                _tmp_tess_path = None
+                try:
+                    import cadquery as cq
+                    with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as _tmp_tess:
+                        _tmp_tess.write(file_bytes)
+                        _tmp_tess_path = _tmp_tess.name
+                    _cq_tess = cq.importers.importStep(_tmp_tess_path)
+                    _verts, _tris = _cq_tess.val().tessellate(0.5)
+                    _mesh_data = {
+                        "x": [v.x for v in _verts],
+                        "y": [v.y for v in _verts],
+                        "z": [v.z for v in _verts],
+                        "i": [t[0] for t in _tris],
+                        "j": [t[1] for t in _tris],
+                        "k": [t[2] for t in _tris],
+                    }
+                except Exception:
+                    _mesh_data = None
+                finally:
+                    if _tmp_tess_path and os.path.exists(_tmp_tess_path):
+                        try:
+                            os.unlink(_tmp_tess_path)
+                        except OSError:
+                            pass
+            st.session_state.step_mesh_data = _mesh_data
 
             # Unit detection banner
             r = parse_result
@@ -365,11 +397,32 @@ def page_upload_step():
 
         with ov_right:
             st.subheader("3D Preview")
-            st.info(
-                "Interactive 3D preview will appear here in the next phase. "
-                "A static rotatable part view with detected features highlighted "
-                "will be enabled once the 3D viewer module is implemented."
-            )
+            _mesh = st.session_state.get("step_mesh_data")
+            _geo  = st.session_state.get("step_geometry")
+            _stk  = st.session_state.get("stock", {})
+            if _mesh:
+                fig_mesh = build_step_mesh3d(_mesh, _stk)
+                st.plotly_chart(fig_mesh, use_container_width=True)
+                st.caption(
+                    "**Solid body** = machined part  ·  "
+                    "**Transparent box** = stock / bounding box  ·  "
+                    "Rotate: drag  ·  Zoom: scroll  ·  Pan: right-drag  ·  "
+                    "Planning reference only — not a machining simulation."
+                )
+            elif _geo and _geo.get("success"):
+                fig_wire = build_3d_view(_stk, [], step_geometry=_geo)
+                st.plotly_chart(fig_wire, use_container_width=True)
+                st.caption(
+                    "Wireframe preview — STEP edge geometry. "
+                    "Planning reference only."
+                )
+            elif st.session_state.get("step_parse_result"):
+                st.info(
+                    "3D geometry not available for this file. "
+                    "Preview requires a CadQuery-parsed STEP file."
+                )
+            else:
+                st.info("Upload a STEP file to see the interactive 3D preview here.")
 
         with st.expander("Coordinate Ranges", expanded=False):
             if r.get("converted"):
@@ -1273,7 +1326,7 @@ def page_setup_review():
             st.session_state.step_candidates = []
             st.session_state.step_candidate_warnings = []
             st.session_state.added_candidate_ids = set()
-            for _k in ("operations", "time_result", "step_parse_result", "step_geometry"):
+            for _k in ("operations", "time_result", "step_parse_result", "step_geometry", "step_mesh_data"):
                 st.session_state.pop(_k, None)
             st.session_state.uploaded_filename = None
             st.session_state.step_uploader_key += 1
