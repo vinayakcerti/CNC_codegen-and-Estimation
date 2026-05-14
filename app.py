@@ -222,9 +222,15 @@ def sidebar_nav():
 
 
 def page_upload_step():
-    st.header("1. Upload STEP File")
+    # ── Page title ────────────────────────────────────────────────────
+    st.title("Upload & Overview")
+    st.caption(
+        "Upload a STEP file to extract bounding box geometry and feature candidates. "
+        "After parsing, proceed to **4. Setup & Feature Review** to review and accept detected features."
+    )
+    st.divider()
 
-    # ── Clear / Start New ────────────────────────────────────────────
+    # ── Clear / Start New ─────────────────────────────────────────────
     if st.session_state.get("uploaded_filename"):
         cl1, cl2 = st.columns([3, 1])
         cl1.info(f"Loaded file: **{st.session_state.uploaded_filename}**")
@@ -238,6 +244,7 @@ def page_upload_step():
             st.session_state.step_uploader_key += 1
             st.rerun()
 
+    # ── File uploader (behaviour unchanged) ───────────────────────────
     uploaded = st.file_uploader(
         "Upload STEP / STP file",
         type=["step", "stp"],
@@ -308,6 +315,87 @@ def page_upload_step():
                 "Enter them manually in the fields below to continue planning."
             )
 
+    # ── Resolve display source: fresh parse or cached session result ───
+    _display_r = None
+    if parse_result and parse_result.get("success"):
+        _display_r = parse_result
+    elif st.session_state.get("step_parse_result", {}).get("success"):
+        _display_r = st.session_state.get("step_parse_result")
+
+    # ── Post-parse overview: 2-column card layout ──────────────────────
+    if _display_r:
+        r = _display_r
+
+        def _fmt(v):
+            return f"{v:,}" if v is not None else "N/A"
+
+        ov_left, ov_right = st.columns([1, 1])
+
+        with ov_left:
+            st.subheader("Parse Summary")
+            ps1, ps2 = st.columns(2)
+            ps1.metric("Parser", r.get("parser_used", "lightweight"))
+            ps2.metric("Vol. Source", r.get("volume_source", "—"))
+            ps3, ps4 = st.columns(2)
+            ps3.metric("Units", r["detected_unit_label"].split("(")[0].strip())
+            ps3.metric(
+                "Conversion",
+                f"× {r['conversion_factor']}" if r.get("converted") else "None (mm)",
+            )
+            _pt = r.get("point_count")
+            ps4.metric("Points", f"{_pt:,}" if _pt is not None else "N/A")
+            st.caption(
+                f"File: **{st.session_state.get('uploaded_filename', '—')}**  ·  "
+                f"Method: {r['detection_method']}"
+            )
+
+            st.subheader("CAD Topology")
+            tc1, tc2, tc3, tc4 = st.columns(4)
+            tc1.metric("Solids",   _fmt(r.get("solids_count")))
+            tc2.metric("Faces",    _fmt(r.get("faces_count")))
+            tc3.metric("Edges",    _fmt(r.get("edges_count")))
+            tc4.metric("Vertices", _fmt(r.get("vertices_count")))
+            if r.get("parser_used") == "cadquery":
+                st.success("CadQuery/OpenCASCADE active — full solid geometry extracted.")
+            else:
+                st.info(
+                    "Using lightweight parser — bounding box and volume are approximate. "
+                    "Topology counts are not available."
+                )
+
+        with ov_right:
+            st.subheader("3D Preview")
+            st.info(
+                "Interactive 3D preview will appear here in the next phase. "
+                "A static rotatable part view with detected features highlighted "
+                "will be enabled once the 3D viewer module is implemented."
+            )
+
+        with st.expander("Coordinate Ranges", expanded=False):
+            if r.get("converted"):
+                raw_label = r["detected_unit_label"].split("(")[0].strip()
+                range_data = {
+                    "Axis": ["X (Length)", "Y (Width)", "Z (Height)"],
+                    f"Raw Min ({raw_label})": [
+                        r["x_range_raw"][0], r["y_range_raw"][0], r["z_range_raw"][0]
+                    ],
+                    f"Raw Max ({raw_label})": [
+                        r["x_range_raw"][1], r["y_range_raw"][1], r["z_range_raw"][1]
+                    ],
+                    "Min (mm)": [r["x_range"][0], r["y_range"][0], r["z_range"][0]],
+                    "Max (mm)": [r["x_range"][1], r["y_range"][1], r["z_range"][1]],
+                    "Span (mm)": [r["length_mm"], r["width_mm"], r["height_mm"]],
+                }
+            else:
+                range_data = {
+                    "Axis": ["X (Length)", "Y (Width)", "Z (Height)"],
+                    "Min (mm)": [r["x_range"][0], r["y_range"][0], r["z_range"][0]],
+                    "Max (mm)": [r["x_range"][1], r["y_range"][1], r["z_range"][1]],
+                    "Span (mm)": [r["length_mm"], r["width_mm"], r["height_mm"]],
+                }
+            st.dataframe(pd.DataFrame(range_data), use_container_width=True, hide_index=True)
+
+    # ── Stock & Part Dimensions (inputs unchanged) ────────────────────
     st.subheader("Stock & Part Dimensions")
 
     if parse_result is not None and parse_result.get("success"):
@@ -340,6 +428,7 @@ def page_upload_step():
             help="Finished part volume — estimated at 60 % of bounding box if auto-parsed"
         )
 
+    # ── Volume Analysis (calculations unchanged) ──────────────────────
     removed = max(stock["stock_volume"] - stock["part_volume"], 0)
     removal_pct = (removed / stock["stock_volume"] * 100) if stock["stock_volume"] > 0 else 0
 
@@ -349,82 +438,23 @@ def page_upload_step():
     c2.metric("Part Volume", f"{stock['part_volume']:.2f} cm³")
     c3.metric("Removed Volume", f"{removed:.2f} cm³", delta=f"{removal_pct:.1f}% removal")
 
-    if parse_result and parse_result.get("success"):
-        st.subheader("Parsed Coordinate Ranges")
-        r = parse_result
-
-        # Build table — include raw column only when conversion happened
-        if r.get("converted"):
-            raw_label = r["detected_unit_label"].split("(")[0].strip()
-            range_data = {
-                "Axis": ["X (Length)", "Y (Width)", "Z (Height)"],
-                f"Raw Min ({raw_label})": [
-                    r["x_range_raw"][0], r["y_range_raw"][0], r["z_range_raw"][0]
-                ],
-                f"Raw Max ({raw_label})": [
-                    r["x_range_raw"][1], r["y_range_raw"][1], r["z_range_raw"][1]
-                ],
-                "Min (mm)": [r["x_range"][0], r["y_range"][0], r["z_range"][0]],
-                "Max (mm)": [r["x_range"][1], r["y_range"][1], r["z_range"][1]],
-                "Span (mm)": [r["length_mm"], r["width_mm"], r["height_mm"]],
-            }
-        else:
-            range_data = {
-                "Axis": ["X (Length)", "Y (Width)", "Z (Height)"],
-                "Min (mm)": [r["x_range"][0], r["y_range"][0], r["z_range"][0]],
-                "Max (mm)": [r["x_range"][1], r["y_range"][1], r["z_range"][1]],
-                "Span (mm)": [r["length_mm"], r["width_mm"], r["height_mm"]],
-            }
-
-        st.dataframe(pd.DataFrame(range_data), use_container_width=True, hide_index=True)
-
-        # Summary strip
-        u_col1, u_col2, u_col3, u_col4 = st.columns(4)
-        _pt_count = r.get("point_count")
-        u_col1.metric(
-            "Points Parsed",
-            f"{_pt_count:,}" if _pt_count is not None else "N/A",
-        )
-        u_col2.metric("Detected Units", r["detected_unit_label"].split("(")[0].strip())
-        u_col3.metric(
-            "Conversion Factor",
-            f"× {r['conversion_factor']}" if r["converted"] else "None (already mm)",
-        )
-        u_col4.metric("Parser", r.get("parser_used", "lightweight"))
-
+    if _display_r:
         _vol_note = (
             "Real part volume from CadQuery/OCC solid geometry."
-            if r.get("parser_used") == "cadquery"
+            if _display_r.get("parser_used") == "cadquery"
             else "Part volume estimated as 60 % of bounding-box volume — "
                  "adjust if your part has significantly different geometry."
         )
-        st.caption(f"Detection method: {r['detection_method']}. {_vol_note}")
+        st.caption(f"Detection method: {_display_r['detection_method']}. {_vol_note}")
 
-        # ── CAD Geometry Summary ──────────────────────────────────────────────
-        st.subheader("CAD Geometry Summary")
-
-        def _fmt_count(v):
-            return f"{v:,}" if v is not None else "N/A"
-
-        g1, g2, g3, g4, g5, g6 = st.columns(6)
-        g1.metric("Parser Used",   r.get("parser_used", "lightweight"))
-        g2.metric("Volume Source", r.get("volume_source", "—"))
-        g3.metric("Solids",    _fmt_count(r.get("solids_count")))
-        g4.metric("Faces",     _fmt_count(r.get("faces_count")))
-        g5.metric("Edges",     _fmt_count(r.get("edges_count")))
-        g6.metric("Vertices",  _fmt_count(r.get("vertices_count")))
-
-        if r.get("parser_used") == "cadquery":
-            st.success(
-                "Deep CAD parser active. Geometry and volume were extracted "
-                "using CadQuery/OpenCASCADE."
-            )
-        else:
-            st.info(
-                "Using lightweight parser. Geometry metadata is not available — "
-                "bounding box and volume are approximate and may not represent "
-                "the full STEP solid."
-            )
+    # ── Next step guidance ─────────────────────────────────────────────
+    if _display_r or st.session_state.get("step_candidates"):
+        _n = len(st.session_state.get("step_candidates", []))
+        _cand_str = f" **{_n} feature candidate(s) detected.**" if _n > 0 else ""
+        st.success(
+            f"STEP file loaded.{_cand_str}  "
+            "**Next →** Go to **4. Setup & Feature Review** to review and accept detected feature candidates."
+        )
 
     st.session_state.stock = stock
 
