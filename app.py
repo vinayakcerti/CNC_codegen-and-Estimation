@@ -614,14 +614,36 @@ def page_machine_setup():
 
 
 def page_tool_library():
-    st.header("3. Tool Library")
+    st.title("Tools")
+    st.caption(
+        "Review available tools, default speeds/feeds, tool depth limits, "
+        "and machining assumptions."
+    )
+    st.divider()
 
-    tab_lib, tab_sf = st.tabs(["Tool Library", "Speeds & Feeds Calculator"])
+    tools = st.session_state.tools
 
-    # ── Tab 1: Tool Library ────────────────────────────────────────────
+    # ── Summary cards ─────────────────────────────────────────────────────────
+    _end_mills = sum(1 for t in tools if t.get("tool_type") == "End Mill")
+    _drills    = sum(1 for t in tools if t.get("tool_type") in ("Drill", "Spot Drill"))
+    _special   = len(tools) - _end_mills - _drills
+
+    _tc1, _tc2, _tc3, _tc4 = st.columns(4)
+    _tc1.metric("Total Tools",     len(tools))
+    _tc2.metric("End Mills",       _end_mills)
+    _tc3.metric("Drills",          _drills)
+    _tc4.metric("Special / Other", _special)
+
+    st.divider()
+
+    tab_lib, tab_sf = st.tabs(["Tool Library", "Speeds & Feeds Reference"])
+
+    # ── Tab 1: Tool Library ───────────────────────────────────────────────────
     with tab_lib:
+        st.subheader("Tool Library")
         st.info("Edit your tool library. Changes are saved to the local database.")
-        tools = st.session_state.tools
+
+        st.subheader("Tool Details / Editor")
 
         df = pd.DataFrame(tools)
         cols_order = ["tool_number", "tool_name", "tool_type", "diameter_mm",
@@ -633,14 +655,13 @@ def page_tool_library():
             num_rows="dynamic",
             use_container_width=True,
             column_config={
-                "tool_number": st.column_config.NumberColumn("T#", min_value=1, max_value=99),
-                "tool_name": st.column_config.TextColumn("Tool Name"),
-                "tool_type": st.column_config.SelectboxColumn("Type", options=[
-                    "Spot Drill", "Drill", "End Mill", "Face Mill", "Boring", "Chamfer"]),
-                "diameter_mm": st.column_config.NumberColumn("Dia (mm)", format="%.1f"),
-                "default_spindle_rpm": st.column_config.NumberColumn("RPM"),
+                "tool_number":              st.column_config.NumberColumn("T#",             min_value=1, max_value=99),
+                "tool_name":                st.column_config.TextColumn("Tool Name"),
+                "tool_type":                st.column_config.SelectboxColumn("Type",        options=["Spot Drill", "Drill", "End Mill", "Face Mill", "Boring", "Chamfer"]),
+                "diameter_mm":              st.column_config.NumberColumn("Dia (mm)",       format="%.1f"),
+                "default_spindle_rpm":      st.column_config.NumberColumn("RPM"),
                 "default_feed_rate_mm_min": st.column_config.NumberColumn("Feed (mm/min)"),
-                "max_depth_mm": st.column_config.NumberColumn("Max Depth (mm)", format="%.1f"),
+                "max_depth_mm":             st.column_config.NumberColumn("Max Depth (mm)", format="%.1f"),
             },
         )
 
@@ -657,9 +678,9 @@ def page_tool_library():
                 save_tools_to_db(st.session_state.tools)
                 st.rerun()
 
-    # ── Tab 2: Speeds & Feeds Calculator ──────────────────────────────
+    # ── Tab 2: Speeds & Feeds Reference ──────────────────────────────────────
     with tab_sf:
-        st.subheader("Speeds & Feeds Calculator")
+        st.subheader("Speeds & Feeds Reference")
         st.caption(
             "Calculate recommended spindle RPM and feed rate from cutting speed and chip load data. "
             "Use the results to fill in your tool library."
@@ -806,6 +827,20 @@ def page_tool_library():
                 )
         else:
             st.info("No tools in library. Add tools in the Tool Library tab first.")
+
+    st.divider()
+
+    # ── Tooling Warnings ──────────────────────────────────────────────────────
+    st.subheader("Tooling Warnings")
+    st.warning(
+        "Tool list is a planning library. Verify actual tool availability, offsets, "
+        "flute length, holder clearance, and tool condition before machining."
+    )
+    st.info(
+        "Before setting up on the machine, confirm: tool stickout and flute length are "
+        "sufficient for all pockets, slots, and bored holes in this job; holder clearance "
+        "is verified for each setup; and tool condition and edge sharpness are acceptable."
+    )
 
 
 def page_material_setup():
