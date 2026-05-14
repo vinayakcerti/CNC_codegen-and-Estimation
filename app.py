@@ -1337,14 +1337,21 @@ def page_setup_review():
 
 
 def page_operation_plan():
-    st.header("6. Operation Plan")
+    st.title("Strategy / Operations")
+    st.caption(
+        "Review the proposed machining sequence, tools, feeds, setup notes, and process warnings."
+    )
+    st.divider()
 
     if not st.session_state.features:
-        st.warning("No features defined. Please go to Feature Input first.")
+        st.warning(
+            "No features defined. Upload a STEP file and accept candidates on "
+            "**4. Setup & Feature Review** first."
+        )
         return
 
     if not st.session_state.tools:
-        st.warning("No tools in library. Please go to Tool Library first.")
+        st.warning("No tools in library. Please go to **5. Tools** first.")
         return
 
     operations = plan_operations(
@@ -1354,14 +1361,86 @@ def page_operation_plan():
     )
     st.session_state.operations = operations
 
-    mat = st.session_state.selected_material
+    mat  = st.session_state.selected_material
     mach = st.session_state.selected_machine
-    st.info(f"Material: **{mat['name']}** | Machine: **{mach['machine_name']}** | Operations generated: **{len(operations)}**")
+    st.info(
+        f"Material: **{mat['name']}** | Machine: **{mach['machine_name']}** | "
+        f"Operations generated: **{len(operations)}**"
+    )
 
-    display_cols = [c for c in pd.DataFrame(operations).columns if not c.startswith("_")]
-    df = pd.DataFrame(operations)[display_cols]
-    df.columns = [c.replace("_", " ").title() for c in df.columns]
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    # ── Summary cards ─────────────────────────────────────────────────────────
+    _total_path_mm = sum(op.get("est_path_length_mm", 0) for op in operations)
+    _unique_tools  = set(op.get("tool_number") for op in operations)
+    _tool_changes  = max(len(_unique_tools) - 1, 0)
+    _has_setup2    = any(
+        op.get("feature_type") == "Face Milling"
+        and "bottom" in op.get("feature_name", "").lower()
+        for op in operations
+    )
+    _has_boring    = any(op.get("operation_type") == "Boring" for op in operations)
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("Operations",       len(operations))
+    sc2.metric("Tool Changes",     _tool_changes)
+    sc3.metric("Est. Path Length", f"{_total_path_mm:.0f} mm")
+    sc4.metric("Setup 2 Required", "Yes" if _has_setup2 else "No")
+
+    st.divider()
+
+    # ── Warnings ──────────────────────────────────────────────────────────────
+    if _has_setup2:
+        st.warning(
+            "**Setup 2 / Flip Required:** One or more operations require flipping the part. "
+            "Verify workholding and fixture clearance before machining the bottom face."
+        )
+    if _has_boring:
+        st.warning(
+            "**Boring Tool Required:** Verify boring bar minimum bore, maximum bore, reach, "
+            "and rigidity before machining."
+        )
+    st.info(
+        "**Draft / Planning Only:** These are planning-level estimates. "
+        "Verify feeds, speeds, and toolpaths in your CAM system before running on the machine."
+    )
+
+    # ── Setup 1 / Setup 2 split ───────────────────────────────────────────────
+    def _is_setup2_op(op):
+        return (
+            op.get("feature_type") == "Face Milling"
+            and "bottom" in op.get("feature_name", "").lower()
+        )
+
+    _setup1_ops = [op for op in operations if not _is_setup2_op(op)]
+    _setup2_ops = [op for op in operations if     _is_setup2_op(op)]
+
+    display_cols = (
+        [c for c in pd.DataFrame(operations).columns if not c.startswith("_")]
+        if operations else []
+    )
+
+    st.subheader("Setup 1 Operations")
+    if _setup1_ops and display_cols:
+        _df1 = pd.DataFrame(_setup1_ops)[display_cols]
+        _df1.columns = [c.replace("_", " ").title() for c in _df1.columns]
+        st.dataframe(_df1, use_container_width=True, hide_index=True)
+    else:
+        st.info("No Setup 1 operations.")
+
+    if _has_setup2:
+        st.subheader("Setup 2 / Flip Operations")
+        if _setup2_ops and display_cols:
+            _df2 = pd.DataFrame(_setup2_ops)[display_cols]
+            _df2.columns = [c.replace("_", " ").title() for c in _df2.columns]
+            st.dataframe(_df2, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ── Full operations table ─────────────────────────────────────────────────
+    st.subheader("Full Operations Table")
+    if operations and display_cols:
+        df = pd.DataFrame(operations)[display_cols]
+        df.columns = [c.replace("_", " ").title() for c in df.columns]
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
     csv = pd.DataFrame(operations).to_csv(index=False).encode()
     st.download_button(
@@ -1370,6 +1449,9 @@ def page_operation_plan():
         file_name="operation_plan.csv",
         mime="text/csv",
     )
+
+    st.divider()
+    st.success("Next: go to **7. Estimate / Pricing** to review machining time and quote.")
 
 
 def page_time_estimate():
