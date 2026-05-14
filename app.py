@@ -844,7 +844,80 @@ def page_tool_library():
 
 
 def page_material_setup():
-    st.header("4. Material Setup")
+    st.title("Stock & Setup")
+    st.caption(
+        "Review stock size, material assumptions, coordinate setup, "
+        "and preparation notes."
+    )
+    st.divider()
+
+    stock   = st.session_state.get("stock", {})
+    step_ok = bool(st.session_state.get("step_parse_result"))
+
+    # ── Summary cards ─────────────────────────────────────────────────────────
+    _l  = stock.get("length", 0) or 0
+    _w  = stock.get("width",  0) or 0
+    _h  = stock.get("height", 0) or 0
+    _sv = stock.get("stock_volume", 0) or 0
+    _pv = stock.get("part_volume",  0) or 0
+    _removed     = round(_sv - _pv, 2)
+    _removed_pct = round((_removed / _sv) * 100, 1) if _sv > 0 else 0
+
+    _c1, _c2, _c3, _c4 = st.columns(4)
+    _c1.metric("Stock (L×W×H mm)",  f"{_l} × {_w} × {_h}")
+    _c2.metric("Part Vol (cm³)",    f"{_pv:.1f}" if _pv else "—")
+    _c3.metric("Removed (cm³)",     f"{_removed:.1f}", delta=f"{_removed_pct}%")
+    _c4.metric("Setup Status",      "STEP loaded ✓" if step_ok else "No STEP")
+
+    st.divider()
+
+    # ── Section: Stock Geometry ───────────────────────────────────────────────
+    st.subheader("Stock Geometry")
+
+    if not step_ok:
+        st.info(
+            "No STEP file loaded. Upload a STEP file on **1. Upload / Overview** first "
+            "to populate stock dimensions automatically."
+        )
+
+    if stock and any([_l, _w, _h]):
+        _sg1, _sg2, _sg3 = st.columns(3)
+        _sg1.metric("Length (mm)",      _l)
+        _sg2.metric("Width (mm)",       _w)
+        _sg3.metric("Height (mm)",      _h)
+
+        _sg4, _sg5, _sg6 = st.columns(3)
+        _sg4.metric("Stock Vol (cm³)",  f"{_sv:.3f}")
+        _sg5.metric("Part Vol (cm³)",   f"{_pv:.3f}")
+        _sg6.metric("Material Removed", f"{_removed:.3f} cm³  ({_removed_pct}%)")
+        st.caption("Stock dimensions are set on **1. Upload / Overview**. Navigate there to update.")
+    else:
+        st.info("No stock data available. Go to **1. Upload / Overview** to set stock dimensions.")
+
+    st.divider()
+
+    # ── Section: Work Coordinate & Setup Assumptions ──────────────────────────
+    st.subheader("Work Coordinate & Setup Assumptions")
+    st.info(
+        "**Datum assumption:** Stock bottom-left corner = WCS origin (G54 X0 Y0 Z0). "
+        "Top face of stock = Z=0 for Setup 1."
+    )
+
+    if step_ok:
+        _pr = st.session_state.get("step_parse_result", {})
+        _xr = _pr.get("x_range", (None, None))
+        _yr = _pr.get("y_range", (None, None))
+        _zr = _pr.get("z_range", (None, None))
+        if _xr and _xr[0] is not None:
+            _co1, _co2, _co3 = st.columns(3)
+            _co1.metric("X range (mm)", f"{_xr[0]} → {_xr[1]}")
+            _co2.metric("Y range (mm)", f"{_yr[0]} → {_yr[1]}")
+            _co3.metric("Z range (mm)", f"{_zr[0]} → {_zr[1]}")
+
+    st.divider()
+
+    # ── Section: Material Assumptions ────────────────────────────────────────
+    st.subheader("Material Assumptions")
 
     materials = st.session_state.materials
     mat_names = [m["name"] for m in materials]
@@ -870,6 +943,20 @@ def page_material_setup():
     st.dataframe(pd.DataFrame(materials), use_container_width=True)
 
     st.info(f"Active material: **{st.session_state.selected_material['name']}** — Safety factor: {st.session_state.selected_material['safety_factor']}")
+
+    st.divider()
+
+    # ── Section: Setup Notes ──────────────────────────────────────────────────
+    st.subheader("Setup Notes")
+    st.warning(
+        "Verify raw stock size, datum location, workholding, and setup orientation "
+        "before machining."
+    )
+    st.info(
+        "Pre-machining checklist: confirm stock dimensions match drawing; set WCS datum "
+        "per setup plan; verify clamp and fixture clearance; check tool reach and "
+        "overhang for all operations; confirm coolant supply and chip evacuation."
+    )
 
 
 def page_feature_input():
