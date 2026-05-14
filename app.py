@@ -990,10 +990,9 @@ def page_feature_input():
 
 
 def page_setup_review():
-    st.header("5a. Setup & Feature Review")
+    st.title("Setup & Feature Review")
     st.caption(
-        "Review stock, setup assumptions, and detected/manual features "
-        "before generating the operation plan."
+        "Review detected CAD features, accept machining candidates, and prepare the operation plan."
     )
     st.divider()
 
@@ -1002,6 +1001,20 @@ def page_setup_review():
     material = st.session_state.get("selected_material")
     features = st.session_state.get("features", [])
     step_ok  = bool(st.session_state.get("step_parse_result"))
+    _candidates      = st.session_state.get("step_candidates", [])
+    _cand_warns      = st.session_state.get("step_candidate_warnings", [])
+    _added_ids       = st.session_state.get("added_candidate_ids", set())
+    _from_candidates = st.session_state.get("features_from_candidates", False)
+    _filename        = st.session_state.get("uploaded_filename")
+
+    # ── Top status cards ─────────────────────────────────────────────────────
+    tm1, tm2, tm3, tm4 = st.columns(4)
+    tm1.metric("STEP File", _filename if _filename else "None")
+    tm2.metric("CAD Candidates", len(_candidates))
+    tm3.metric("Accepted Features", len(features))
+    tm4.metric("Source", "From CAD" if _from_candidates else ("Manual / Demo" if features else "—"))
+
+    st.divider()
 
     # ── Start New Job / Reset ────────────────────────────────────────────────
     if st.session_state.pop("_job_reset_done", False):
@@ -1016,7 +1029,7 @@ def page_setup_review():
             + (f"  ·  File: **{st.session_state.uploaded_filename}**"
                if st.session_state.get("uploaded_filename") else "")
         )
-        if _rc2.button("Start New Job / Reset", type="secondary", use_container_width=True):
+        if _rc2.button("🔄 Start New Job / Reset", type="secondary", use_container_width=True):
             st.session_state.features = []
             save_features_to_db([])
             st.session_state.features_from_candidates = False
@@ -1082,10 +1095,9 @@ def page_setup_review():
     st.divider()
 
     # ── C. Current features — conflict warning + clear option ───────────────
-    _has_features        = bool(features)
-    _has_candidates      = bool(st.session_state.get("step_candidates"))
-    _from_candidates     = st.session_state.get("features_from_candidates", False)
-    _show_conflict       = _has_features and _has_candidates and not _from_candidates
+    _has_features   = bool(features)
+    _has_candidates = bool(st.session_state.get("step_candidates"))
+    _show_conflict  = _has_features and _has_candidates and not _from_candidates
 
     if _show_conflict:
         st.warning(
@@ -1099,10 +1111,10 @@ def page_setup_review():
             st.success("Feature list cleared.")
             st.rerun()
 
-    # ── C. Current Manual / Accepted Features ───────────────────────────────
+    # ── Section 1: Current Manual / Accepted Features ────────────────────────
     st.subheader("Current Manual / Accepted Features")
     if not features:
-        st.info("No features entered yet — go to page 5 to add features.")
+        st.info("No features accepted yet. Accept candidates below, or add features manually via Data Tables.")
     else:
         display_cols = [
             "feature_name", "feature_type", "quantity",
@@ -1130,19 +1142,19 @@ def page_setup_review():
             use_container_width=True,
             hide_index=True,
         )
+        st.success(
+            f"{len(features)} feature(s) accepted. "
+            "Next: go to **6. Strategy / Operations** to generate the machining sequence."
+        )
 
     st.divider()
 
-    # ── D5. Detected CAD Feature Candidates ─────────────────────────────────
+    # ── Section 2: Detected CAD Feature Candidates ───────────────────────────
     st.subheader("Detected CAD Feature Candidates")
     st.caption("Candidates are not used in operation planning until you accept them.")
 
-    _candidates   = st.session_state.get("step_candidates", [])
-    _cand_warns   = st.session_state.get("step_candidate_warnings", [])
-    _added_ids    = st.session_state.get("added_candidate_ids", set())
-
     if not _candidates:
-        st.info("No CAD feature candidates available. Use manual Feature Input.")
+        st.info("No CAD candidates available. Upload a STEP file on **1. Upload / Overview** first.")
     else:
         st.caption(
             f"{len(_candidates)} candidate(s) detected from STEP geometry. "
@@ -1241,8 +1253,8 @@ def page_setup_review():
 
     st.divider()
 
-    # ── D. Validation flags ──────────────────────────────────────────────────
-    st.subheader("Validation Flags")
+    # ── Section 3: Detection Notes ────────────────────────────────────────────
+    st.subheader("Detection Notes")
     if not features:
         st.info("No features to validate.")
     else:
@@ -1279,7 +1291,7 @@ def page_setup_review():
 
     st.divider()
 
-    # ── E. Pre-flight checklist ──────────────────────────────────────────────
+    # ── Pre-flight Checklist ──────────────────────────────────────────────────
     st.subheader("Pre-flight Checklist")
 
     tools = st.session_state.get("tools", [])
@@ -1319,7 +1331,7 @@ def page_setup_review():
 
     st.divider()
     if all_pass:
-        st.success("All checks passed — you may proceed to page 6: Operation Plan.")
+        st.success("All checks passed — you may proceed to **6. Strategy / Operations**.")
     else:
         st.warning("Resolve the items above before generating the operation plan.")
 
