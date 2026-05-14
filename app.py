@@ -1455,10 +1455,15 @@ def page_operation_plan():
 
 
 def page_time_estimate():
-    st.header("7. Time & Effort Estimate")
+    st.title("Estimate / Pricing")
+    st.caption(
+        "Review machining time, costing assumptions, tolerance impact, "
+        "currency conversion, and customer quote."
+    )
+    st.divider()
 
     if "operations" not in st.session_state or not st.session_state.operations:
-        st.warning("No operations planned. Please run Operation Plan first.")
+        st.warning("No operations planned. Please run **6. Strategy / Operations** first.")
         return
 
     result = estimate_time(
@@ -1469,20 +1474,31 @@ def page_time_estimate():
     )
     st.session_state.time_result = result
 
-    st.subheader("Time Breakdown")
+    # ── Top summary cards ─────────────────────────────────────────────────────
+    effort_color = {"Low": "🟢", "Medium": "🟡", "High": "🔴"}.get(result["effort_label"], "⚪")
+    _tc1, _tc2, _tc3, _tc4 = st.columns(4)
+    _tc1.metric("Total Machine Time", f"{result['total_machine_time_min']:.1f} min",
+                delta=f"{result['total_machine_time_min'] / 60:.2f} hrs")
+    _tc2.metric("Cutting Time",       f"{result['cutting_time_min']:.1f} min")
+    _tc3.metric("Operations",         result["num_operations"])
+    _tc4.metric("Effort Level",       f"{effort_color} {result['effort_label']}",
+                delta=f"Score: {result['effort_score_value']:.1f}")
+
+    st.divider()
+
+    # ── Time & Effort Summary ─────────────────────────────────────────────────
+    st.subheader("Time & Effort Summary")
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Setup Time", f"{result['setup_time_min']:.1f} min")
-    c2.metric("Cutting Time", f"{result['cutting_time_min']:.1f} min")
-    c3.metric("Rapid Movement", f"{result['rapid_time_min']:.2f} min")
+    c1.metric("Setup Time",       f"{result['setup_time_min']:.1f} min")
+    c2.metric("Cutting Time",     f"{result['cutting_time_min']:.1f} min")
+    c3.metric("Rapid Movement",   f"{result['rapid_time_min']:.2f} min")
     c4.metric("Tool Change Time", f"{result['tool_change_time_min']:.2f} min")
 
-    st.subheader("Total Estimates")
     d1, d2, d3 = st.columns(3)
     d1.metric("Total Machine Time", f"{result['total_machine_time_min']:.1f} min",
               delta=f"{result['total_machine_time_min']/60:.2f} hrs")
     d2.metric("Operator Effort Time", f"{result['operator_effort_min']:.1f} min")
-
-    effort_color = {"Low": "🟢", "Medium": "🟡", "High": "🔴"}.get(result["effort_label"], "⚪")
     d3.metric("Effort Score", f"{effort_color} {result['effort_label']}",
               delta=f"Score: {result['effort_score_value']:.1f}")
 
@@ -1518,6 +1534,8 @@ def page_time_estimate():
     )
 
     st.divider()
+
+    # ── Quote Configuration ───────────────────────────────────────────────────
     st.subheader("Quote Configuration")
     st.caption(
         "Enter your workshop rates and job parameters. "
@@ -1606,7 +1624,7 @@ def page_time_estimate():
             st.info("Quote currency matches costing currency — no conversion needed.")
             _show_quote = False
         else:
-            _cost_cur_code = _cost_cur.split(" ")[0]
+            _cost_cur_code  = _cost_cur.split(" ")[0]
             _quote_cur_code = _quote_cur.split(" ")[0]
             with _qcol2:
                 st.number_input(
@@ -1617,13 +1635,13 @@ def page_time_estimate():
                 )
             _exchange_rate = st.session_state.est_exchange_rate
             _qsym = _CUR_SYM[_quote_cur]
-            st.caption(
-                "Reference: "
+            st.info(
+                "Reference exchange rates: "
                 "[Xe Currency Converter](https://www.xe.com/currencyconverter/) · "
                 "[Wise Currency Converter](https://wise.com/gb/currency-converter/)"
             )
 
-    # ── Calculations ────────────────────────────────────────────────
+    # ── Calculations ─────────────────────────────────────────────────────────
     stock  = st.session_state.stock
     mat    = st.session_state.selected_material
     _density       = mat.get("density", 2.7)
@@ -1648,8 +1666,14 @@ def page_time_estimate():
     _price_per_part = _subtotal_adj + _margin_amt
     _batch_total    = _price_per_part * _batch_qty
 
-    # ── Quotation display ────────────────────────────────────────────
+    # ── Results display ───────────────────────────────────────────────────────
     st.divider()
+    st.warning(
+        "This is a quotation/planning estimate. "
+        "Final price should be reviewed by the workshop before quoting to customer."
+    )
+
+    # ── Internal Costing Estimate ─────────────────────────────────────────────
     st.subheader(f"Internal Costing Estimate ({_sym})")
 
     _qm1, _qm2, _qm3, _qm4 = st.columns(4)
@@ -1665,6 +1689,7 @@ def page_time_estimate():
         f"{_sym} {_batch_total:,.2f}",
     )
 
+    # ── Customer Quote ────────────────────────────────────────────────────────
     if _show_quote and _qsym is not None:
         _quote_price_per_part = _price_per_part / _exchange_rate
         _quote_batch_total    = _batch_total    / _exchange_rate
@@ -1680,6 +1705,10 @@ def page_time_estimate():
             f"Conversion: {_sym} {_price_per_part:,.2f} / {_exchange_rate:.4f} "
             f"= {_qsym} {_quote_price_per_part:,.2f} per part"
         )
+
+    # ── Cost Breakdown ────────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Cost Breakdown")
 
     _tol_label = st.session_state.est_tolerance.split("—")[0].strip()
     _cost_col_values = [
@@ -1717,11 +1746,6 @@ def page_time_estimate():
     _breakdown = pd.DataFrame(_breakdown_data)
     st.dataframe(_breakdown, use_container_width=True, hide_index=True)
 
-    st.info(
-        "This is a quotation/planning estimate. "
-        "Final price should be reviewed by the workshop before quoting to customer."
-    )
-
     _cost_csv = _breakdown.to_csv(index=False).encode()
     st.download_button(
         "Download Quotation Estimate (CSV)",
@@ -1729,6 +1753,9 @@ def page_time_estimate():
         file_name="quotation_estimate.csv",
         mime="text/csv",
     )
+
+    st.divider()
+    st.success("Next: go to **8. Export / Setup Sheet** to generate the setup sheet and G-code.")
 
 
 def page_visual_preview():
