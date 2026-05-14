@@ -179,23 +179,46 @@ def sidebar_nav():
         )
         st.caption("Professional CNC Planning")
         st.divider()
-        pages = [
-            "1. Upload STEP File",
-            "2. Machine Setup",
-            "3. Tool Library",
-            "4. Material Setup",
-            "5. Feature Input",
-            "5a. Setup & Feature Review",
-            "6. Operation Plan",
-            "7. Time & Effort Estimate",
-            "8. Approximate Process Preview",
-            "9. CNC Program Export",
-            "10. Job Notes & History",
-        ]
-        selected = st.radio("Navigation", pages, label_visibility="collapsed")
+
+        nav_groups = {
+            "CONFIGURE": [
+                "1. Upload / Overview",
+                "2. Material & Machine",
+                "3. Stock & Setup",
+            ],
+            "WORKFLOW": [
+                "4. Setup & Feature Review",
+                "5. Tools",
+                "6. Strategy / Operations",
+                "7. Estimate / Pricing",
+                "8. Export / Setup Sheet",
+            ],
+            "HISTORY / ADMIN": [
+                "9. History",
+                "10. Tool Library",
+                "11. Data Tables",
+            ],
+        }
+
+        if "_nav_page" not in st.session_state:
+            st.session_state._nav_page = "4. Setup & Feature Review"
+
+        for section, pages in nav_groups.items():
+            st.caption(section)
+            for page in pages:
+                is_active = st.session_state._nav_page == page
+                if st.button(
+                    page,
+                    key=f"_nav_btn_{page}",
+                    use_container_width=True,
+                    type="primary" if is_active else "secondary",
+                ):
+                    st.session_state._nav_page = page
+                    st.rerun()
+
         st.divider()
         st.warning("**SAFETY NOTICE**\nAll generated CNC code is DRAFT only. Always verify in CAM/simulator before running on a machine.")
-        return selected
+        return st.session_state._nav_page
 
 
 def page_upload_step():
@@ -1838,28 +1861,17 @@ def main():
     page = sidebar_nav()
     show_top_header()
 
-    if page == "1. Upload STEP File":
-        page_upload_step()
-    elif page == "2. Machine Setup":
-        page_machine_setup()
-    elif page == "3. Tool Library":
-        page_tool_library()
-    elif page == "4. Material Setup":
-        page_material_setup()
-    elif page == "5. Feature Input":
-        page_feature_input()
-    elif page == "5a. Setup & Feature Review":
-        page_setup_review()
-    elif page == "6. Operation Plan":
-        page_operation_plan()
-    elif page == "7. Time & Effort Estimate":
-        page_time_estimate()
-    elif page == "8. Approximate Process Preview":
-        page_visual_preview()
-    elif page == "9. CNC Program Export":
-        page_cnc_export()
-    elif page == "10. Job Notes & History":
-        page_job_notes()
+    if   page == "1. Upload / Overview":         page_upload_step()
+    elif page == "2. Material & Machine":         page_machine_setup()
+    elif page == "3. Stock & Setup":              page_material_setup()
+    elif page == "4. Setup & Feature Review":     page_setup_review()
+    elif page == "5. Tools":                      page_tool_library()
+    elif page == "6. Strategy / Operations":      page_operation_plan()
+    elif page == "7. Estimate / Pricing":         page_time_estimate()
+    elif page == "8. Export / Setup Sheet":       page_cnc_export()
+    elif page == "9. History":                    page_job_notes()
+    elif page == "10. Tool Library":              page_tool_library()
+    elif page == "11. Data Tables":               page_feature_input()
 
 
 if __name__ == "__main__":
