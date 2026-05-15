@@ -47,33 +47,34 @@ def _make_hover_text(ft_low, label, diameter, length, width, depth):
 
     All zero / missing values are omitted gracefully.
     """
+    _pfx = "Approx marker: "
     if "large hole" in ft_low or "boring" in ft_low:
         parts = []
         if diameter > 0: parts.append(f"Ø{diameter:.1f} mm")
         if depth    > 0: parts.append(f"depth {depth:.1f} mm")
-        return "Bore  " + "  ".join(parts) if parts else label
+        return _pfx + ("Bore  " + "  ".join(parts) if parts else label)
     if "hole" in ft_low:
         parts = []
         if diameter > 0: parts.append(f"Ø{diameter:.1f} mm")
         if depth    > 0: parts.append(f"depth {depth:.1f} mm")
-        return "Hole  " + "  ".join(parts) if parts else label
+        return _pfx + ("Hole  " + "  ".join(parts) if parts else label)
     if "face mill" in ft_low:
         if length > 0 and width > 0:
-            return f"Face milling  {length:.1f} × {width:.1f} mm"
-        return "Face milling"
+            return f"{_pfx}Face milling  {length:.1f} × {width:.1f} mm"
+        return f"{_pfx}Face milling"
     if "slot" in ft_low:
         dims = [f"{v:.1f}" for v in (length, width, depth) if v > 0]
-        return ("Slot  " + " × ".join(dims) + " mm") if dims else "Slot"
+        return _pfx + (("Slot  " + " × ".join(dims) + " mm") if dims else "Slot")
     if "pocket" in ft_low:
         dims = [f"{v:.1f}" for v in (length, width, depth) if v > 0]
-        return ("Pocket  " + " × ".join(dims) + " mm") if dims else "Pocket"
+        return _pfx + (("Pocket  " + " × ".join(dims) + " mm") if dims else "Pocket")
     if "step" in ft_low or "shoulder" in ft_low:
         dims = [f"{v:.1f}" for v in (length, width, depth) if v > 0]
-        return ("Step  " + " × ".join(dims) + " mm") if dims else "Step"
+        return _pfx + (("Step  " + " × ".join(dims) + " mm") if dims else "Step")
     if "chamfer" in ft_low:
         size = width or depth
-        return f"Chamfer  ~{size:.1f} mm" if size > 0 else "Chamfer"
-    return label
+        return f"{_pfx}Chamfer  ~{size:.1f} mm" if size > 0 else f"{_pfx}Chamfer"
+    return _pfx + label
 
 
 def _make_short_label(ft_low, diameter, length, width, depth):
@@ -266,7 +267,7 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
                 hoverinfo="text",
             ))
 
-        # ── Slot: solid rectangle outline at zmax ──────────────────────────
+        # ── Slot: dashed outline at zmax — clearly secondary / fallback marker ──
         elif "slot" in ft_low:
             half_x, half_y = _infer_half_xy(cand, xmin, xmax, ymin, ymax)
             rx = [x - half_x, x + half_x, x + half_x, x - half_x, x - half_x]
@@ -274,7 +275,7 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
             traces.append(go.Scatter3d(
                 x=rx, y=ry, z=[zmax] * 5,
                 mode="lines",
-                line=dict(color=color, width=3),
+                line=dict(color=color, width=1.5, dash="dash"),
                 name=ftype,
                 legendgroup=ftype,
                 showlegend=first_of_type,
@@ -339,7 +340,7 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
                     x=[x], y=[y], z=[z_lbl],
                     mode="text",
                     text=[short],
-                    textfont=dict(size=11, color=color, family="monospace"),
+                    textfont=dict(size=16, color=color, family="monospace"),
                     textposition="middle center",
                     name="",
                     legendgroup=ftype,
@@ -396,7 +397,7 @@ def _stock_box_coords_traces(x0, x1, y0, y1, z0, z1):
         i=[0,0,0,4,4,4,0,1,2,3],
         j=[1,2,4,5,6,7,4,5,6,7],
         k=[2,3,5,6,7,3,1,2,5,6],
-        opacity=0.05, color="steelblue",
+        opacity=0.10, color="steelblue",
         name="Stock / bounding box", showlegend=True,
     )
     ex, ey, ez = [], [], []
@@ -415,33 +416,56 @@ def _stock_box_coords_traces(x0, x1, y0, y1, z0, z1):
 # Mesh3d solid viewer — CadQuery tessellation data
 # ---------------------------------------------------------------------------
 
-def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False):
+def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
+                      show_stock_box=False, show_face_colors=True,
+                      show_face_milling=False, show_markers=True):
     """
     Build a rotatable Plotly Mesh3d figure from pre-computed tessellation data.
 
-    The bounding box overlay is derived from the actual vertex extents of the
-    tessellated mesh so it always encloses the part regardless of the OCC
-    coordinate origin.
+    The base part is rendered as a fully opaque light metallic grey body.
+    When candidates carry face_mesh_data, those faces are rendered as colored
+    Mesh3d overlays using the feature-type palette.  Face-milling surfaces are
+    hidden by default — they cover the entire top/bottom face and obscure the
+    base body; show_face_milling=True makes them visible.  Candidates without
+    face data fall back to Scatter3d marker shapes (show_markers controls this).
 
     Args:
-        mesh_data   : dict with keys x/y/z (vertex coord lists) and i/j/k (triangle index lists)
-        stock       : dict with length/width/height keys (mm) — retained for signature compatibility
-        candidates  : list of candidate dicts from step_candidates session key, or None/[]
-                      to suppress markers
-        show_labels : if True, add Scatter3d text annotations above each candidate marker
+        mesh_data        : dict with keys x/y/z (vertex lists) and i/j/k (triangle index lists)
+        stock            : dict with length/width/height — retained for signature compatibility
+        candidates       : list of candidate dicts; each may carry face_indices / face_mesh_data
+        show_labels      : if True, add Scatter3d text annotations above marker candidates
+        show_stock_box   : if True, overlay the semi-transparent stock bounding box
+        show_face_colors : if True, render candidates that have face_mesh_data as colored faces
+        show_face_milling: if True, include face-milling surface overlays (default OFF — they
+                           cover the whole top/bottom face and obscure the base body)
+        show_markers     : if True, render candidates without face_mesh_data as marker overlays
 
     Returns:
         plotly.graph_objects.Figure
     """
     xs, ys, zs = mesh_data["x"], mesh_data["y"], mesh_data["z"]
 
-    # Derive bounding box from actual mesh vertex coordinates (OCC coordinate system).
     xmin, xmax = min(xs), max(xs)
     ymin, ymax = min(ys), max(ys)
     zmin, zmax = min(zs), max(zs)
 
+    # ── Split candidates: internal feature faces | face-milling | markers ─────
+    _face_cands      = []   # holes, pockets, chamfers — colored by default
+    _face_mill_cands = []   # face-milling — only shown when requested
+    _marker_cands    = []   # no face data → approximate marker fallback
+    for _cand in (candidates or []):
+        _ft = _cand.get("feature_type", "")
+        if show_face_colors and _cand.get("face_mesh_data"):
+            if _ft == "Face milling":
+                _face_mill_cands.append(_cand)
+            else:
+                _face_cands.append(_cand)
+        else:
+            _marker_cands.append(_cand)
+
     fig = go.Figure()
 
+    # ── Base solid — fully opaque light metallic grey ──────────────────────────
     fig.add_trace(go.Mesh3d(
         x=xs,
         y=ys,
@@ -449,43 +473,114 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False):
         i=mesh_data["i"],
         j=mesh_data["j"],
         k=mesh_data["k"],
-        color="lightsteelblue",
-        opacity=0.88,
+        color="#DCDCDC",        # Gainsboro — light metallic grey, clean CAD appearance
+        opacity=1.0,
         flatshading=False,
         lighting=dict(
-            ambient=0.5, diffuse=0.8, specular=0.2,
-            roughness=0.5, fresnel=0.2,
+            ambient=0.55, diffuse=0.85, specular=0.25,
+            roughness=0.45, fresnel=0.15,
         ),
         lightposition=dict(x=1, y=1, z=2),
         name="Part (solid body)",
         showlegend=True,
     ))
 
-    for tr in _stock_box_coords_traces(xmin, xmax, ymin, ymax, zmin, zmax):
-        fig.add_trace(tr)
+    if show_stock_box:
+        for tr in _stock_box_coords_traces(xmin, xmax, ymin, ymax, zmin, zmax):
+            fig.add_trace(tr)
 
-    if candidates:
+    # ── Colored CAD face overlays ─────────────────────────────────────────────
+    # One Mesh3d trace per face mesh entry; legend entry appears once per type.
+    if show_face_colors:
+        _legend_shown_fc = set()
+        _active_fc = _face_cands + (_face_mill_cands if show_face_milling else [])
+        for _fc in _active_fc:
+            _ftype = _fc.get("feature_type", "Unknown")
+            _color = _feature_color(_ftype)
+            _fname = _fc.get("feature_name", _ftype)
+            for _fm in _fc.get("face_mesh_data", []):
+                _verts = _fm.get("vertices", [])
+                _tris  = _fm.get("triangles", [])
+                if not _verts or not _tris:
+                    continue
+                _first_fc = _ftype not in _legend_shown_fc
+                if _first_fc:
+                    _legend_shown_fc.add(_ftype)
+                fig.add_trace(go.Mesh3d(
+                    x=[_v[0] for _v in _verts],
+                    y=[_v[1] for _v in _verts],
+                    z=[_v[2] for _v in _verts],
+                    i=[_t[0] for _t in _tris],
+                    j=[_t[1] for _t in _tris],
+                    k=[_t[2] for _t in _tris],
+                    color=_color,
+                    opacity=0.95,
+                    flatshading=False,
+                    lighting=dict(
+                        ambient=0.6, diffuse=0.85, specular=0.3,
+                        roughness=0.4, fresnel=0.2,
+                    ),
+                    lightposition=dict(x=1, y=1, z=2),
+                    name=_ftype,
+                    legendgroup=f"face_{_ftype}",
+                    showlegend=_first_fc,
+                    hovertext=f"CAD face: {_fname}",
+                    hoverinfo="text",
+                ))
+
+    # ── Approximate markers (fallback for candidates without face data) ────────
+    if show_markers and _marker_cands:
         for tr in _candidate_marker_traces(
-            candidates, zmax, zmin,
+            _marker_cands, zmax, zmin,
             show_labels=show_labels,
             xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax,
         ):
             fig.add_trace(tr)
 
+    # ── Scene layout — CAD-style coloured axes, readable labels ───────────────
     fig.update_layout(
-        title="3D Preview — Part Shape (planning reference only)",
-        scene=dict(
-            xaxis_title="X (mm)",
-            yaxis_title="Y (mm)",
-            zaxis_title="Z (mm)",
-            aspectmode="data",
-            xaxis=dict(backgroundcolor="rgba(240,248,255,0.5)"),
-            yaxis=dict(backgroundcolor="rgba(240,248,255,0.5)"),
-            zaxis=dict(backgroundcolor="rgba(220,230,240,0.5)"),
+        title=dict(
+            text="3D Preview — Part Shape (planning reference only)",
+            font=dict(size=15),
         ),
-        height=480,
-        margin=dict(l=0, r=0, t=50, b=0),
-        legend=dict(orientation="h", yanchor="bottom", y=0),
+        scene=dict(
+            xaxis=dict(
+                title=dict(text="X (mm)", font=dict(size=14, color="#CC4444")),
+                tickfont=dict(size=11),
+                backgroundcolor="rgba(248,240,240,0.4)",
+                gridcolor="rgba(200,140,140,0.35)",
+                showline=True,
+                linecolor="#CC4444",
+                linewidth=2,
+            ),
+            yaxis=dict(
+                title=dict(text="Y (mm)", font=dict(size=14, color="#2E8B2E")),
+                tickfont=dict(size=11),
+                backgroundcolor="rgba(240,248,240,0.4)",
+                gridcolor="rgba(140,200,140,0.35)",
+                showline=True,
+                linecolor="#2E8B2E",
+                linewidth=2,
+            ),
+            zaxis=dict(
+                title=dict(text="Z (mm)", font=dict(size=14, color="#1a5fa8")),
+                tickfont=dict(size=11),
+                backgroundcolor="rgba(240,244,252,0.4)",
+                gridcolor="rgba(140,160,210,0.35)",
+                showline=True,
+                linecolor="#1a5fa8",
+                linewidth=2,
+            ),
+            aspectmode="data",
+        ),
+        height=520,
+        margin=dict(l=0, r=0, t=55, b=0),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=0,
+            font=dict(size=12),
+        ),
     )
     return fig
 

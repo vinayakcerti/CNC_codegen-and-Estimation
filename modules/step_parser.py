@@ -96,10 +96,10 @@ def _heuristic_factor(max_span: float):
 # ---------------------------------------------------------------------------
 
 _COORD3_RE = re.compile(
-    r'#(\d+)=CARTESIAN_POINT\s*\(\s*\'[^\']*\'\s*,\s*\(\s*'
-    r'([+-]?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*,\s*'
-    r'([+-]?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*,\s*'
-    r'([+-]?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\s*\)\s*\)',
+    r'#(\d+)\s*=\s*CARTESIAN_POINT\s*\(\s*\'[^\']*\'\s*,\s*\(\s*'
+    r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\s*,\s*'
+    r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\s*,\s*'
+    r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\s*\)\s*\)',
     re.IGNORECASE,
 )
 
@@ -929,6 +929,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "confidence":       "high",
             "detection_source": "cadquery_face_records",
             "detection_note":   _face_note,
+            "face_indices":     [best["face_index"]],
             "accepted": False,
             "ignored":  False,
         })
@@ -1002,6 +1003,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 f"depth={depth} mm "
                 f"({'through' if is_through else 'blind or partial'})."
             ),
+            "face_indices":     [r["face_index"]],
             "accepted": False,
             "ignored":  False,
         })
@@ -1127,6 +1129,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 f"center separation={ctr_dist:.2f} mm → "
                 f"length={slot_length} mm, width={diam_slot} mm."
             ),
+            "face_indices":     [a["rec"]["face_index"], b["rec"]["face_index"]],
             "accepted": False,
             "ignored":  False,
         })
@@ -1370,6 +1373,13 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 _yp["a"]["face_index"], _yp["b"]["face_index"],
             }
 
+            _face_idxs = [
+                _xp["a"]["face_index"], _xp["b"]["face_index"],
+                _yp["a"]["face_index"], _yp["b"]["face_index"],
+            ]
+            if _floor_face is not None:
+                _face_idxs.append(_floor_face["face_index"])
+
             candidates.append({
                 "candidate_id":     _pcid,
                 "feature_name":     _fname,
@@ -1386,6 +1396,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 "confidence":       _confidence,
                 "detection_source": _dsource,
                 "detection_note":   _pnote,
+                "face_indices":     _face_idxs,
                 "accepted": False,
                 "ignored":  False,
             })
@@ -1615,6 +1626,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                     "confidence":       "medium",
                     "detection_source": "intermediate_floor_and_shoulder_wall",
                     "detection_note":   _stnote,
+                    "face_indices":     [_sf["face_index"], _sw["face_index"], _outer_f["face_index"]],
                     "accepted": False,
                     "ignored":  False,
                 })
@@ -1701,6 +1713,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "confidence":       "medium" if _ch_n >= 3 else "low",
             "detection_source": "angled_top_plane_faces",
             "detection_note":   _ch_note,
+            "face_indices":     [_cf["face_index"] for _cf in _ch_faces],
             "accepted": False,
             "ignored":  False,
         })
@@ -1775,6 +1788,46 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                 "No feature candidates detected. "
                 "The file may lack planar ±Z faces or cylindrical features."
             )
+
+        # ── Per-face tessellation for colored face overlays ────────────────────
+        # Tessellate only the CAD faces referenced by each candidate so that
+        # build_step_mesh3d() can render exact colored surfaces instead of
+        # approximate marker shapes.  Failures per-face are silenced; the
+        # candidate falls back to its marker representation.
+        _FACE_COLOR_TYPES = {
+            "Face milling", "Hole", "Large hole / boring", "Pocket", "Chamfer",
+        }
+        try:
+            _faces_list = cq_result.faces().vals()
+            _n_faces    = len(_faces_list)
+            for _cand in candidates:
+                _ftype = _cand.get("feature_type", "")
+                _fidxs = _cand.get("face_indices", [])
+                if _ftype not in _FACE_COLOR_TYPES or not _fidxs:
+                    _cand["face_mesh_data"] = []
+                    continue
+                _face_meshes = []
+                for _fi in _fidxs:
+                    if _fi < 0 or _fi >= _n_faces:
+                        continue
+                    try:
+                        _fverts, _ftris = _faces_list[_fi].tessellate(0.15)
+                        if _fverts:
+                            _face_meshes.append({
+                                "vertices":   [[_v.x, _v.y, _v.z] for _v in _fverts],
+                                "triangles":  [[_t[0], _t[1], _t[2]] for _t in _ftris],
+                                "face_index": _fi,
+                            })
+                    except Exception:
+                        pass  # single face tessellation failure is non-fatal
+                _cand["face_mesh_data"] = _face_meshes
+        except Exception as _tess_exc:
+            warnings_out.append(
+                f"Per-face tessellation skipped: {type(_tess_exc).__name__}: {_tess_exc}"
+            )
+            for _cand in candidates:
+                if "face_mesh_data" not in _cand:
+                    _cand["face_mesh_data"] = []
 
         return {
             "success":            True,

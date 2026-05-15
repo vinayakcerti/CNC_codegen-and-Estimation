@@ -18,7 +18,7 @@ from modules.data_store import (
 from modules.operation_planner import plan_operations
 from modules.time_estimator import estimate_time
 from modules.gcode_generator import generate_gcode
-from modules.visual_preview import build_top_view, build_3d_view, build_step_mesh3d
+from modules.visual_preview import build_top_view, build_3d_view, build_step_mesh3d, FEATURE_COLORS
 from modules.step_parser import parse_step_bounding_box, parse_step_geometry, parse_step_auto
 from modules.setup_sheet import generate_setup_sheet
 from modules.speeds_feeds import (
@@ -114,7 +114,7 @@ def init_session():
         st.session_state.tools = db_tools if db_tools else get_default_tools()
     if "features" not in st.session_state:
         db_features = load_features_from_db()
-        st.session_state.features = db_features if db_features else copy.deepcopy(DEMO_FEATURES)
+        st.session_state.features = db_features if db_features else []
     if "materials" not in st.session_state:
         st.session_state.materials = get_default_materials()
     if "machines" not in st.session_state:
@@ -172,6 +172,27 @@ def init_session():
         st.session_state.step_mesh_data = None
 
 
+def reset_current_job_state():
+    """Clear all current-job state. Preserves tool/material/machine libraries."""
+    for key in (
+        "uploaded_filename", "step_parse_result", "step_geometry",
+        "step_mesh_data", "features_from_candidates", "operations", "time_result",
+    ):
+        st.session_state.pop(key, None)
+    st.session_state.features = []
+    st.session_state.step_candidates = []
+    st.session_state.step_candidate_warnings = []
+    st.session_state.added_candidate_ids = set()
+    st.session_state.stock = {
+        "length": 150.0, "width": 100.0, "height": 50.0,
+        "part_volume": 600.0, "stock_volume": 750.0,
+    }
+    st.session_state.step_uploader_key = st.session_state.get("step_uploader_key", 0) + 1
+    save_features_to_db([])
+    st.session_state._nav_page = "1. Upload / Overview"
+    st.session_state._job_reset_done = True
+
+
 def sidebar_nav():
     with st.sidebar:
         if os.path.exists(LOGO_PATH):
@@ -204,7 +225,7 @@ def sidebar_nav():
         }
 
         if "_nav_page" not in st.session_state:
-            st.session_state._nav_page = "4. Setup & Feature Review"
+            st.session_state._nav_page = "1. Upload / Overview"
 
         for section, pages in nav_groups.items():
             st.caption(section)
@@ -233,18 +254,15 @@ def page_upload_step():
     )
     st.divider()
 
+    if st.session_state.pop("_job_reset_done", False):
+        st.success("Job reset — all job data cleared. Upload a new STEP file to begin.")
+
     # ── Clear / Start New ─────────────────────────────────────────────
     if st.session_state.get("uploaded_filename"):
         cl1, cl2 = st.columns([3, 1])
         cl1.info(f"Loaded file: **{st.session_state.uploaded_filename}**")
         if cl2.button("Clear & Start New", type="secondary"):
-            for key in ("uploaded_filename", "step_parse_result", "step_geometry", "step_mesh_data"):
-                st.session_state.pop(key, None)
-            st.session_state.stock = {
-                "length": 150.0, "width": 100.0, "height": 50.0,
-                "part_volume": 600.0, "stock_volume": 750.0,
-            }
-            st.session_state.step_uploader_key += 1
+            reset_current_job_state()
             st.rerun()
 
     # ── File uploader (behaviour unchanged) ───────────────────────────
@@ -282,17 +300,20 @@ def page_upload_step():
             st.session_state.step_candidate_warnings  = parse_result.get("candidate_warnings", [])
             st.session_state.added_candidate_ids      = set()
 
-            # Tessellate for Mesh3d viewer — only when CadQuery successfully parsed the shape
+            # Tessellate for Mesh3d viewer — always attempt CadQuery regardless of which
+            # parser was used for bounding-box extraction, so the solid preview works even
+            # when parse_step_auto fell back to lightweight for some STEP files.
             _mesh_data = None
-            if parse_result.get("parser_used") == "cadquery":
-                _tmp_tess_path = None
-                try:
-                    import cadquery as cq
-                    with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as _tmp_tess:
-                        _tmp_tess.write(file_bytes)
-                        _tmp_tess_path = _tmp_tess.name
-                    _cq_tess = cq.importers.importStep(_tmp_tess_path)
-                    _verts, _tris = _cq_tess.val().tessellate(0.5)
+            _tmp_tess_path = None
+            st.session_state.pop("_tess_error", None)
+            try:
+                import cadquery as cq
+                with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as _tmp_tess:
+                    _tmp_tess.write(file_bytes)
+                    _tmp_tess_path = _tmp_tess.name
+                _cq_tess = cq.importers.importStep(_tmp_tess_path)
+                _verts, _tris = _cq_tess.val().tessellate(0.5)
+                if _verts:
                     _mesh_data = {
                         "x": [v.x for v in _verts],
                         "y": [v.y for v in _verts],
@@ -301,14 +322,16 @@ def page_upload_step():
                         "j": [t[1] for t in _tris],
                         "k": [t[2] for t in _tris],
                     }
-                except Exception:
-                    _mesh_data = None
-                finally:
-                    if _tmp_tess_path and os.path.exists(_tmp_tess_path):
-                        try:
-                            os.unlink(_tmp_tess_path)
-                        except OSError:
-                            pass
+            except ImportError:
+                pass  # CadQuery not available in this environment; solid preview unavailable
+            except Exception as _tess_exc:
+                st.session_state._tess_error = f"{type(_tess_exc).__name__}: {_tess_exc}"
+            finally:
+                if _tmp_tess_path and os.path.exists(_tmp_tess_path):
+                    try:
+                        os.unlink(_tmp_tess_path)
+                    except OSError:
+                        pass
             st.session_state.step_mesh_data = _mesh_data
 
             # Unit detection banner
@@ -402,35 +425,73 @@ def page_upload_step():
             _stk      = st.session_state.get("stock", {})
             _all_cands = st.session_state.get("step_candidates", [])
 
-            _show_markers = st.checkbox(
-                "Show feature markers",
+            # Candidate types that produce face overlays shown by default
+            # (face milling excluded — it covers the whole top/bottom face).
+            _FACE_COLOR_DEFAULT_TYPES = {"Hole", "Large hole / boring", "Pocket", "Chamfer"}
+            _has_face_colors = any(
+                bool(c.get("face_mesh_data"))
+                and c.get("feature_type", "") in _FACE_COLOR_DEFAULT_TYPES
+                for c in _all_cands
+            )
+
+            _show_stock = st.checkbox(
+                "Show stock / bounding box",
+                value=False,
+                key="_3d_show_stock",
+                help="Overlay the semi-transparent stock / bounding box on the part",
+            )
+            _show_face_colors = st.checkbox(
+                "Show CAD face colors",
                 value=True,
+                key="_3d_show_face_colors",
+                help="Color detected feature surfaces using actual CAD face geometry (holes, pockets, chamfers)",
+            )
+            _show_face_milling = st.checkbox(
+                "Show face-milling surfaces",
+                value=False,
+                key="_3d_show_face_milling",
+                help="Overlay top/bottom face-milling surfaces (covers the base body — off by default)",
+                disabled=not _show_face_colors,
+            )
+            _show_markers = st.checkbox(
+                "Show approximate markers",
+                value=not _has_face_colors,
                 key="_3d_show_markers",
-                help="Overlay color-coded markers for detected feature candidates",
+                help="Show fallback marker outlines for features without exact CAD face data (e.g. slots)",
             )
             _show_labels = st.checkbox(
-                "Show measurement labels",
+                "Show measurement labels on markers",
                 value=False,
                 key="_3d_show_labels",
                 disabled=not _show_markers,
-                help="Display dimension labels next to each feature marker (may clutter small parts)",
+                help="Display dimension labels next to each marker",
             )
 
             if _mesh:
-                _active_cands = _all_cands if _show_markers else []
                 fig_mesh = build_step_mesh3d(
                     _mesh, _stk,
-                    candidates=_active_cands,
+                    candidates=_all_cands,
                     show_labels=(_show_labels and _show_markers),
+                    show_stock_box=_show_stock,
+                    show_face_colors=_show_face_colors,
+                    show_face_milling=_show_face_milling,
+                    show_markers=_show_markers,
                 )
                 st.plotly_chart(fig_mesh, use_container_width=True)
+                _caption_parts = [
+                    "**Solid body** = machined part",
+                    "Rotate: drag  ·  Zoom: scroll  ·  Pan: right-drag",
+                    "Planning reference only — not a machining simulation.",
+                ]
+                if _show_stock:
+                    _caption_parts.insert(1, "**Transparent box** = stock / bounding box")
+                st.caption("  ·  ".join(_caption_parts))
                 st.caption(
-                    "**Solid body** = machined part  ·  "
-                    "**Transparent box** = stock / bounding box  ·  "
-                    "Rotate: drag  ·  Zoom: scroll  ·  Pan: right-drag  ·  "
-                    "Planning reference only — not a machining simulation."
+                    "Colored faces = exact CAD surfaces (holes, pockets, chamfers). "
+                    "Dashed outlines = approximate fallback markers (slots, steps)."
                 )
-            elif _geo and _geo.get("success"):
+            elif (_geo and _geo.get("success")
+                  and (_geo.get("line_segments") or _geo.get("circle_traces"))):
                 fig_wire = build_3d_view(_stk, [], step_geometry=_geo)
                 st.plotly_chart(fig_wire, use_container_width=True)
                 st.caption(
@@ -438,12 +499,39 @@ def page_upload_step():
                     "Planning reference only."
                 )
             elif st.session_state.get("step_parse_result"):
+                _tess_err = st.session_state.get("_tess_error")
+                if _tess_err:
+                    st.warning(f"3D tessellation failed: {_tess_err}")
                 st.info(
-                    "3D geometry not available for this file. "
-                    "Preview requires a CadQuery-parsed STEP file."
+                    "Solid 3D preview unavailable. Showing planning reference only. "
+                    "Upload requires CadQuery/OCC-enabled Python for the solid preview."
                 )
             else:
                 st.info("Upload a STEP file to see the interactive 3D preview here.")
+
+            st.caption(
+                "**Solid body** = finished machined part.  "
+                "**Stock box** = original bounding stock.  "
+                "Colored faces = exact CAD surfaces; "
+                "markers = approximate planning overlays."
+            )
+
+            # ── Feature color legend ───────────────────────────────────────
+            _legend_types = [
+                "Face Milling", "Hole", "Large Hole / Boring",
+                "Slot", "Pocket", "Step", "Chamfer", "Outer Profile",
+            ]
+            _swatches = "  ".join(
+                f"<span style='display:inline-block;width:12px;height:12px;"
+                f"background:{FEATURE_COLORS[ft]};border-radius:2px;"
+                f"vertical-align:middle;margin-right:3px;'></span>"
+                f"<span style='font-size:0.78rem;vertical-align:middle;'>{ft}</span>"
+                for ft in _legend_types
+            )
+            st.markdown(
+                f"<div style='margin-top:4px;line-height:2.2;'>{_swatches}</div>",
+                unsafe_allow_html=True,
+            )
 
         with st.expander("Coordinate Ranges", expanded=False):
             if r.get("converted"):
@@ -1391,9 +1479,6 @@ def page_setup_review():
     st.divider()
 
     # ── Start New Job / Reset ────────────────────────────────────────────────
-    if st.session_state.pop("_job_reset_done", False):
-        st.success("Job reset — features and candidates cleared. Upload a new STEP file on page 1.")
-
     _has_job_state = bool(features) or bool(st.session_state.get("step_candidates"))
     if _has_job_state:
         _rc1, _rc2 = st.columns([5, 1])
@@ -1404,21 +1489,7 @@ def page_setup_review():
                if st.session_state.get("uploaded_filename") else "")
         )
         if _rc2.button("🔄 Start New Job / Reset", type="secondary", use_container_width=True):
-            st.session_state.features = []
-            save_features_to_db([])
-            st.session_state.features_from_candidates = False
-            st.session_state.step_candidates = []
-            st.session_state.step_candidate_warnings = []
-            st.session_state.added_candidate_ids = set()
-            for _k in ("operations", "time_result", "step_parse_result", "step_geometry", "step_mesh_data"):
-                st.session_state.pop(_k, None)
-            st.session_state.uploaded_filename = None
-            st.session_state.step_uploader_key += 1
-            st.session_state.stock = {
-                "length": 150.0, "width": 100.0, "height": 50.0,
-                "part_volume": 600.0, "stock_volume": 750.0,
-            }
-            st.session_state._job_reset_done = True
+            reset_current_job_state()
             st.rerun()
 
     # ── A. Stock summary ─────────────────────────────────────────────────────
