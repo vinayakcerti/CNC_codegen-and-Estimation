@@ -1595,6 +1595,7 @@ def page_setup_review():
             "feature_name", "feature_type", "quantity",
             "x_pos", "y_pos", "diameter", "length", "width", "depth",
             "tolerance_note", "priority",
+            "machining_action", "selected_for_machining",
         ]
         df = pd.DataFrame(features)
         for col in display_cols:
@@ -1602,21 +1603,33 @@ def page_setup_review():
                 df[col] = None
         st.dataframe(
             df[display_cols].rename(columns={
-                "feature_name":   "Name",
-                "feature_type":   "Type",
-                "quantity":       "Qty",
-                "x_pos":          "X (mm)",
-                "y_pos":          "Y (mm)",
-                "diameter":       "Dia (mm)",
-                "length":         "L (mm)",
-                "width":          "W (mm)",
-                "depth":          "Depth (mm)",
-                "tolerance_note": "Tolerance",
-                "priority":       "Priority",
+                "feature_name":           "Name",
+                "feature_type":           "Type",
+                "quantity":               "Qty",
+                "x_pos":                  "X (mm)",
+                "y_pos":                  "Y (mm)",
+                "diameter":               "Dia (mm)",
+                "length":                 "L (mm)",
+                "width":                  "W (mm)",
+                "depth":                  "Depth (mm)",
+                "tolerance_note":         "Tolerance",
+                "priority":               "Priority",
+                "machining_action":       "Action",
+                "selected_for_machining": "Machine?",
             }),
+            column_config={
+                "Machine?": st.column_config.CheckboxColumn("Machine?"),
+            },
             use_container_width=True,
             hide_index=True,
         )
+        _n_machining = sum(1 for f in features if f.get("selected_for_machining", True))
+        _n_excluded  = len(features) - _n_machining
+        if _n_excluded > 0:
+            st.info(
+                f"{_n_machining} feature(s) selected for machining · "
+                f"{_n_excluded} excluded (Existing Geometry / Reference Only)."
+            )
         st.success(
             f"{len(features)} feature(s) accepted. "
             "Next: go to **6. Strategy / Operations** to generate the machining sequence."
@@ -1633,18 +1646,14 @@ def page_setup_review():
     else:
         _spt = st.session_state.get("starting_part_type", "Raw Block / Billet")
         if _spt != "Raw Block / Billet":
-            st.warning(
+            st.info(
                 f"**{_spt} selected.** "
-                "Detected holes, slots, and faces may already exist on this part. "
-                "Select only the features that need machining now. "
-                "Accept checkboxes and Machining Action default to "
-                "*Existing Geometry – No Machining* — tick Accept and set "
-                "action to **Machine** for features you want to cut."
+                "Detected geometry includes existing features — only tick the rows you want to machine. "
+                "Ticked rows will be added as machining features."
             )
         st.caption(
             f"{len(_candidates)} candidate(s) detected from STEP geometry. "
-            "Tick **Accept** and click **Add accepted candidates** to include "
-            "them in the feature list."
+            "Tick rows to select, then click **Add selected machining features**."
         )
         for _w in _cand_warns:
             st.warning(_w)
@@ -1674,7 +1683,7 @@ def page_setup_review():
         _edited = st.data_editor(
             pd.DataFrame(_rows),
             column_config={
-                "accept":           st.column_config.CheckboxColumn("Accept",           default=True),
+                "accept":           st.column_config.CheckboxColumn("Machine this?",     default=True),
                 "status":           st.column_config.TextColumn("Status",               disabled=True, width="small"),
                 "candidate_id":     st.column_config.TextColumn("ID",                   disabled=True, width="small"),
                 "machining_action": st.column_config.SelectboxColumn(
@@ -1705,9 +1714,7 @@ def page_setup_review():
             "slot":                "Slot",
         }
 
-        _SKIP_ACTIONS = {"Existing Geometry – No Machining", "Reference Only"}
-
-        if st.button("Add accepted candidates to feature list", type="primary"):
+        if st.button("Add selected machining features", type="primary"):
             if "added_candidate_ids" not in st.session_state:
                 st.session_state.added_candidate_ids = set()
             _lookup = {_c["candidate_id"]: _c for _c in _candidates}
@@ -1717,8 +1724,12 @@ def page_setup_review():
                 _action = str(_row.get("machining_action", "Machine"))
                 if not _row["accept"] or _cid in st.session_state.added_candidate_ids:
                     continue
-                if _action in _SKIP_ACTIONS:
+                # Reference Only = explicitly excluded even when ticked
+                if _action == "Reference Only":
                     continue
+                # Ticked row with unchanged weldment default → treat as Machine
+                if _action == "Existing Geometry – No Machining":
+                    _action = "Machine"
                 _c = _lookup.get(_cid)
                 if _c is None:
                     continue
@@ -1727,28 +1738,29 @@ def page_setup_review():
                     _c.get("feature_type", ""),
                 )
                 st.session_state.features.append({
-                    "feature_name":    _c.get("feature_name") or _ftype,
-                    "feature_type":    _ftype,
-                    "quantity":        int(_c.get("quantity")  or 1),
-                    "x_pos":           float(_c.get("x_pos")   or 0.0),
-                    "y_pos":           float(_c.get("y_pos")   or 0.0),
-                    "diameter":        float(_c.get("diameter") or 0.0),
-                    "length":          float(_c.get("length")  or 0.0),
-                    "width":           float(_c.get("width")   or 0.0),
-                    "depth":           float(_c.get("depth")   or 0.0),
-                    "tolerance_note":  _c.get("tolerance_note") or "",
-                    "priority":        int(_c.get("priority")  or 3),
-                    "machining_action": _action,
+                    "feature_name":           _c.get("feature_name") or _ftype,
+                    "feature_type":           _ftype,
+                    "quantity":               int(_c.get("quantity")  or 1),
+                    "x_pos":                  float(_c.get("x_pos")   or 0.0),
+                    "y_pos":                  float(_c.get("y_pos")   or 0.0),
+                    "diameter":               float(_c.get("diameter") or 0.0),
+                    "length":                 float(_c.get("length")  or 0.0),
+                    "width":                  float(_c.get("width")   or 0.0),
+                    "depth":                  float(_c.get("depth")   or 0.0),
+                    "tolerance_note":         _c.get("tolerance_note") or "",
+                    "priority":               int(_c.get("priority")  or 3),
+                    "machining_action":       _action,
+                    "selected_for_machining": True,
                 })
                 st.session_state.added_candidate_ids.add(_cid)
                 _n_added += 1
             if _n_added > 0:
                 st.session_state.features_from_candidates = True
                 save_features_to_db(st.session_state.features)
-                st.success(f"Added {_n_added} candidate(s) to the feature list.")
+                st.success(f"Added {_n_added} feature(s) to the machining list.")
                 st.rerun()
             else:
-                st.info("No new candidates selected — tick Accept for candidates to add.")
+                st.info("No rows ticked — tick the checkbox for each feature you want to machine.")
 
     st.divider()
 
@@ -1853,8 +1865,12 @@ def page_operation_plan():
         st.warning("No tools in library. Please go to **5. Tools** first.")
         return
 
+    _all_features       = st.session_state.features
+    _machining_features = [f for f in _all_features if f.get("selected_for_machining", True)]
+    _excluded_count     = len(_all_features) - len(_machining_features)
+
     operations = plan_operations(
-        st.session_state.features,
+        _machining_features,
         st.session_state.tools,
         st.session_state.selected_material,
     )
@@ -1866,6 +1882,10 @@ def page_operation_plan():
         f"Material: **{mat['name']}** | Machine: **{mach['machine_name']}** | "
         f"Operations generated: **{len(operations)}**"
     )
+    if _excluded_count > 0:
+        st.info(
+            f"**{_excluded_count}** existing/reference feature(s) excluded from operation planning."
+        )
 
     # ── Summary cards ─────────────────────────────────────────────────────────
     _total_path_mm = sum(op.get("est_path_length_mm", 0) for op in operations)
