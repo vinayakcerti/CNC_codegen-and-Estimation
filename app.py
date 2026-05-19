@@ -170,6 +170,8 @@ def init_session():
         st.session_state.est_exchange_rate = 1.0
     if "step_mesh_data" not in st.session_state:
         st.session_state.step_mesh_data = None
+    if "starting_part_type" not in st.session_state:
+        st.session_state.starting_part_type = "Raw Block / Billet"
 
 
 def reset_current_job_state():
@@ -256,6 +258,34 @@ def page_upload_step():
 
     if st.session_state.pop("_job_reset_done", False):
         st.success("Job reset — all job data cleared. Upload a new STEP file to begin.")
+
+    # ── Starting Part Type ────────────────────────────────────────────
+    st.subheader("What are you starting with?")
+    _PART_TYPE_OPTIONS = [
+        "Raw Block / Billet",
+        "Weldment / Fabricated Part",
+        "Casting / Forging",
+        "Existing Part / Rework",
+    ]
+    _PART_TYPE_CAPTIONS = [
+        "Making from fresh stock — all detected features treated as machining work",
+        "Already welded/fabricated — select only final machining operations",
+        "Near-shape part — select only final machining operations",
+        "Existing part to modify or repair — select only new/rework operations",
+    ]
+    _current_pt = st.session_state.get("starting_part_type", "Raw Block / Billet")
+    _pt_idx = _PART_TYPE_OPTIONS.index(_current_pt) if _current_pt in _PART_TYPE_OPTIONS else 0
+    _selected_pt = st.radio(
+        "Starting part type",
+        _PART_TYPE_OPTIONS,
+        captions=_PART_TYPE_CAPTIONS,
+        index=_pt_idx,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="_upload_part_type",
+    )
+    st.session_state.starting_part_type = _selected_pt
+    st.divider()
 
     # ── Clear / Start New ─────────────────────────────────────────────
     if st.session_state.get("uploaded_filename"):
@@ -1601,6 +1631,16 @@ def page_setup_review():
     if not _candidates:
         st.info("No CAD candidates available. Upload a STEP file on **1. Upload / Overview** first.")
     else:
+        _spt = st.session_state.get("starting_part_type", "Raw Block / Billet")
+        if _spt != "Raw Block / Billet":
+            st.warning(
+                f"**{_spt} selected.** "
+                "Detected holes, slots, and faces may already exist on this part. "
+                "Select only the features that need machining now. "
+                "Accept checkboxes and Machining Action default to "
+                "*Existing Geometry – No Machining* — tick Accept and set "
+                "action to **Machine** for features you want to cut."
+            )
         st.caption(
             f"{len(_candidates)} candidate(s) detected from STEP geometry. "
             "Tick **Accept** and click **Add accepted candidates** to include "
@@ -1609,31 +1649,39 @@ def page_setup_review():
         for _w in _cand_warns:
             st.warning(_w)
 
+        _is_raw_block = st.session_state.get("starting_part_type", "Raw Block / Billet") == "Raw Block / Billet"
+        _default_action = "Machine" if _is_raw_block else "Existing Geometry – No Machining"
         _rows = []
         for _c in _candidates:
             _cid = _c["candidate_id"]
             _rows.append({
-                "accept":         _cid not in _added_ids,
-                "status":         "Added ✓" if _cid in _added_ids else "",
-                "candidate_id":   _cid,
-                "feature_type":   _c.get("feature_type", ""),
-                "feature_name":   _c.get("feature_name", ""),
-                "confidence":     _c.get("confidence", ""),
-                "x_pos":          _c.get("x_pos"),
-                "y_pos":          _c.get("y_pos"),
-                "diameter":       _c.get("diameter"),
-                "length":         _c.get("length"),
-                "width":          _c.get("width"),
-                "depth":          _c.get("depth"),
-                "detection_note": _c.get("detection_note", ""),
+                "accept":           (_cid not in _added_ids) and _is_raw_block,
+                "status":           "Added ✓" if _cid in _added_ids else "",
+                "candidate_id":     _cid,
+                "machining_action": _default_action,
+                "feature_type":     _c.get("feature_type", ""),
+                "feature_name":     _c.get("feature_name", ""),
+                "confidence":       _c.get("confidence", ""),
+                "x_pos":            _c.get("x_pos"),
+                "y_pos":            _c.get("y_pos"),
+                "diameter":         _c.get("diameter"),
+                "length":           _c.get("length"),
+                "width":            _c.get("width"),
+                "depth":            _c.get("depth"),
+                "detection_note":   _c.get("detection_note", ""),
             })
 
         _edited = st.data_editor(
             pd.DataFrame(_rows),
             column_config={
-                "accept":       st.column_config.CheckboxColumn("Accept",       default=True),
-                "status":       st.column_config.TextColumn("Status",           disabled=True, width="small"),
-                "candidate_id": st.column_config.TextColumn("ID",               disabled=True, width="small"),
+                "accept":           st.column_config.CheckboxColumn("Accept",           default=True),
+                "status":           st.column_config.TextColumn("Status",               disabled=True, width="small"),
+                "candidate_id":     st.column_config.TextColumn("ID",                   disabled=True, width="small"),
+                "machining_action": st.column_config.SelectboxColumn(
+                    "Machining Action",
+                    options=["Machine", "Existing Geometry – No Machining", "Reference Only"],
+                    required=True,
+                ),
                 "feature_type": st.column_config.TextColumn("Type",             disabled=True),
                 "feature_name": st.column_config.TextColumn("Name",             disabled=True),
                 "confidence":   st.column_config.TextColumn("Confidence",       disabled=True, width="small"),
@@ -1657,6 +1705,8 @@ def page_setup_review():
             "slot":                "Slot",
         }
 
+        _SKIP_ACTIONS = {"Existing Geometry – No Machining", "Reference Only"}
+
         if st.button("Add accepted candidates to feature list", type="primary"):
             if "added_candidate_ids" not in st.session_state:
                 st.session_state.added_candidate_ids = set()
@@ -1664,7 +1714,10 @@ def page_setup_review():
             _n_added = 0
             for _, _row in _edited.iterrows():
                 _cid = _row["candidate_id"]
+                _action = str(_row.get("machining_action", "Machine"))
                 if not _row["accept"] or _cid in st.session_state.added_candidate_ids:
+                    continue
+                if _action in _SKIP_ACTIONS:
                     continue
                 _c = _lookup.get(_cid)
                 if _c is None:
@@ -1674,17 +1727,18 @@ def page_setup_review():
                     _c.get("feature_type", ""),
                 )
                 st.session_state.features.append({
-                    "feature_name":   _c.get("feature_name") or _ftype,
-                    "feature_type":   _ftype,
-                    "quantity":       int(_c.get("quantity")  or 1),
-                    "x_pos":          float(_c.get("x_pos")   or 0.0),
-                    "y_pos":          float(_c.get("y_pos")   or 0.0),
-                    "diameter":       float(_c.get("diameter") or 0.0),
-                    "length":         float(_c.get("length")  or 0.0),
-                    "width":          float(_c.get("width")   or 0.0),
-                    "depth":          float(_c.get("depth")   or 0.0),
-                    "tolerance_note": _c.get("tolerance_note") or "",
-                    "priority":       int(_c.get("priority")  or 3),
+                    "feature_name":    _c.get("feature_name") or _ftype,
+                    "feature_type":    _ftype,
+                    "quantity":        int(_c.get("quantity")  or 1),
+                    "x_pos":           float(_c.get("x_pos")   or 0.0),
+                    "y_pos":           float(_c.get("y_pos")   or 0.0),
+                    "diameter":        float(_c.get("diameter") or 0.0),
+                    "length":          float(_c.get("length")  or 0.0),
+                    "width":           float(_c.get("width")   or 0.0),
+                    "depth":           float(_c.get("depth")   or 0.0),
+                    "tolerance_note":  _c.get("tolerance_note") or "",
+                    "priority":        int(_c.get("priority")  or 3),
+                    "machining_action": _action,
                 })
                 st.session_state.added_candidate_ids.add(_cid)
                 _n_added += 1
