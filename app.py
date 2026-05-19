@@ -286,6 +286,136 @@ def _commit_candidate_selections(edited_df, candidates) -> int:
     return _n_added
 
 
+# Part types that carry pre-existing geometry — grouped view defaults ON for these.
+_NON_RAW_SPTS = {"Weldment / Fabricated Part", "Casting / Forging", "Existing Part / Rework"}
+
+
+def _build_candidate_groups(candidates, spt):
+    """Group candidates by (feature_type, dia_r1, len_r1, wid_r1, dep_r1).
+
+    Returns a sorted list of group dicts with keys:
+        group_key, feature_type, display_type, description,
+        count, member_ids, confidence_summary
+    """
+    _is_non_raw = spt in _NON_RAW_SPTS
+    buckets = {}
+    for c in candidates:
+        ftype  = c.get("feature_type") or "Unknown"
+        dia    = round(float(c.get("diameter") or 0), 1)
+        length = round(float(c.get("length")   or 0), 1)
+        width  = round(float(c.get("width")    or 0), 1)
+        depth  = round(float(c.get("depth")    or 0), 1)
+        buckets.setdefault((ftype, dia, length, width, depth), []).append(c)
+
+    groups = []
+    for key, members in buckets.items():
+        ftype, dia, length, width, depth = key
+
+        # Relabel Slot → "Slot-like opening" for fabricated/rework/casting
+        if _is_non_raw and ftype.lower() == "slot":
+            display_type = "Slot-like opening"
+        else:
+            display_type = ftype
+
+        # Human-readable size description
+        ftype_lower = ftype.lower()
+        if ftype_lower in ("hole", "large hole / boring"):
+            if depth > 0:
+                description = f"{display_type} Ø{dia:.1f} × {depth:.1f} mm"
+            else:
+                description = f"{display_type} Ø{dia:.1f} mm (through)"
+        elif dia > 0:
+            description = f"{display_type} Ø{dia:.1f} mm"
+        elif length > 0 and width > 0 and depth > 0:
+            description = f"{display_type} {length:.1f} × {width:.1f} × {depth:.1f} mm"
+        elif length > 0 and width > 0:
+            description = f"{display_type} {length:.1f} × {width:.1f} mm"
+        else:
+            description = display_type
+
+        # Dominant confidence label across members
+        conf_counts = {}
+        for m in members:
+            cv = str(m.get("confidence") or "unknown")
+            conf_counts[cv] = conf_counts.get(cv, 0) + 1
+        top_conf = max(conf_counts, key=conf_counts.get)
+        confidence_summary = (
+            f"{top_conf} (+{len(conf_counts) - 1} other)"
+            if len(conf_counts) > 1 else top_conf
+        )
+
+        groups.append({
+            "group_key":          key,
+            "feature_type":       ftype,
+            "display_type":       display_type,
+            "description":        description,
+            "count":              len(members),
+            "member_ids":         [m["candidate_id"] for m in members],
+            "confidence_summary": confidence_summary,
+        })
+
+    groups.sort(key=lambda g: (g["feature_type"], g["description"]))
+    return groups
+
+
+def _commit_group_selections(edited_grouped_df, groups, candidates) -> int:
+    """Commit ticked group rows to st.session_state.features.
+
+    Each ticked group expands to all its member candidates.
+    Skips members already in added_candidate_ids and Reference-Only groups.
+    Coerces ticked 'Existing Geometry – No Machining' groups to 'Machine'.
+    Returns count of individual features added.
+    """
+    if "added_candidate_ids" not in st.session_state:
+        st.session_state.added_candidate_ids = set()
+    _cand_lookup = {c["candidate_id"]: c for c in candidates}
+    _n_added = 0
+
+    for _, _row in edited_grouped_df.iterrows():
+        if not _row.get("accept", False):
+            continue
+        _action = str(_row.get("machining_action", "Machine"))
+        if _action == "Reference Only":
+            continue
+        if _action == "Existing Geometry – No Machining":
+            _action = "Machine"
+
+        _gidx = int(_row["_group_idx"])
+        if _gidx < 0 or _gidx >= len(groups):
+            continue
+        group = groups[_gidx]
+
+        for _cid in group["member_ids"]:
+            if _cid in st.session_state.added_candidate_ids:
+                continue
+            _c = _cand_lookup.get(_cid)
+            if _c is None:
+                continue
+            _ftype = _FTYPE_MAP.get(
+                (_c.get("feature_type") or "").strip().lower(),
+                _c.get("feature_type", ""),
+            )
+            st.session_state.features.append({
+                "feature_name":           _c.get("feature_name") or _ftype,
+                "feature_type":           _ftype,
+                "quantity":               int(_c.get("quantity")  or 1),
+                "x_pos":                  float(_c.get("x_pos")   or 0.0),
+                "y_pos":                  float(_c.get("y_pos")   or 0.0),
+                "diameter":               float(_c.get("diameter") or 0.0),
+                "length":                 float(_c.get("length")  or 0.0),
+                "width":                  float(_c.get("width")   or 0.0),
+                "depth":                  float(_c.get("depth")   or 0.0),
+                "tolerance_note":         _c.get("tolerance_note") or "",
+                "priority":               int(_c.get("priority")  or 3),
+                "machining_action":       _action,
+                "selected_for_machining": True,
+            })
+            st.session_state.added_candidate_ids.add(_cid)
+            _n_added += 1
+
+    return _n_added
+
+
 def init_session():
     if "tools" not in st.session_state:
         db_tools = load_tools_from_db()
@@ -2698,76 +2828,161 @@ def page_select_machining_work():
             )
             _filtered = [c for c in _candidates if c.get("feature_type", "Unknown") in _sel_types]
 
-            _rows = []
-            for _c in _filtered:
-                _cid = _c["candidate_id"]
-                _rows.append({
-                    "accept":           (_cid not in _added_ids) and _is_raw_block,
-                    "status":           "Added ✓" if _cid in _added_ids else "",
-                    "candidate_id":     _cid,
-                    "machining_action": _default_action,
-                    "feature_type":     _c.get("feature_type", ""),
-                    "feature_name":     _c.get("feature_name", ""),
-                    "confidence":       _c.get("confidence", ""),
-                    "x_pos":            _c.get("x_pos"),
-                    "y_pos":            _c.get("y_pos"),
-                    "diameter":         _c.get("diameter"),
-                    "length":           _c.get("length"),
-                    "width":            _c.get("width"),
-                    "depth":            _c.get("depth"),
-                    "detection_note":   _c.get("detection_note", ""),
-                })
-
-            with st.container(height=460):
-                _edited = st.data_editor(
-                    pd.DataFrame(_rows),
-                    column_order=[
-                        "accept", "status", "machining_action", "feature_type",
-                        "feature_name", "confidence", "x_pos", "y_pos",
-                        "diameter", "length", "width", "depth", "detection_note",
-                    ],
-                    column_config={
-                        "accept":           st.column_config.CheckboxColumn("Machine this?", default=True),
-                        "status":           st.column_config.TextColumn("Status",            disabled=True, width="small"),
-                        "candidate_id":     st.column_config.TextColumn("ID",                disabled=True, width="small"),
-                        "machining_action": st.column_config.SelectboxColumn(
-                            "Action",
-                            options=["Machine", "Existing Geometry – No Machining", "Reference Only"],
-                            required=True,
-                        ),
-                        "feature_type":   st.column_config.TextColumn("Type",         disabled=True),
-                        "feature_name":   st.column_config.TextColumn("Name",         disabled=True),
-                        "confidence":     st.column_config.TextColumn("Conf.",        disabled=True, width="small"),
-                        "x_pos":          st.column_config.NumberColumn("X (mm)",     disabled=True, format="%.2f"),
-                        "y_pos":          st.column_config.NumberColumn("Y (mm)",     disabled=True, format="%.2f"),
-                        "diameter":       st.column_config.NumberColumn("Dia (mm)",   disabled=True, format="%.2f"),
-                        "length":         st.column_config.NumberColumn("L (mm)",     disabled=True, format="%.2f"),
-                        "width":          st.column_config.NumberColumn("W (mm)",     disabled=True, format="%.2f"),
-                        "depth":          st.column_config.NumberColumn("Depth (mm)", disabled=True, format="%.2f"),
-                        "detection_note": st.column_config.TextColumn("Note",         disabled=True),
-                    },
-                    use_container_width=True,
-                    hide_index=True,
-                    key="_smw_cand_editor",
+            # ── Grouping toggle ─────────────────────────────────────────────
+            _use_grouping = st.toggle(
+                "Group similar detected geometry",
+                value=(_spt in _NON_RAW_SPTS),
+                key="_smw_group_toggle",
+                help="Combines candidates with the same type and similar dimensions into one row.",
+            )
+            if _use_grouping:
+                st.caption(
+                    "Grouped view combines similar detected geometry. "
+                    "For fabricated/rework parts, select only the groups that need machining now."
                 )
 
-            _n_ticked = int(_edited["accept"].sum()) if "accept" in _edited.columns else 0
+            if _use_grouping:
+                # ── GROUPED MODE ────────────────────────────────────────────
+                _groups = _build_candidate_groups(_filtered, _spt)
+                _group_rows = []
+                for _gi, _g in enumerate(_groups):
+                    _all_added  = all(mid in _added_ids for mid in _g["member_ids"])
+                    _some_added = any(mid in _added_ids for mid in _g["member_ids"])
+                    if _all_added:
+                        _status = "All added ✓"
+                    elif _some_added:
+                        _n_done = sum(1 for m in _g["member_ids"] if m in _added_ids)
+                        _status = f"Partial ✓ ({_n_done}/{_g['count']})"
+                    else:
+                        _status = ""
+                    _group_rows.append({
+                        "_group_idx":         _gi,
+                        "accept":             (not _all_added) and _is_raw_block,
+                        "status":             _status,
+                        "machining_action":   _default_action,
+                        "display_type":       _g["display_type"],
+                        "description":        _g["description"],
+                        "count":              _g["count"],
+                        "confidence_summary": _g["confidence_summary"],
+                    })
 
-            if st.button(
-                "Confirm & proceed to Feature Review",
-                type="primary",
-                disabled=(_n_ticked == 0),
-                help="Tick at least one feature to enable",
-            ):
-                _n_added = _commit_candidate_selections(_edited, _filtered)
-                if _n_added > 0:
-                    st.session_state.features_from_candidates = True
-                    save_features_to_db(st.session_state.features)
-                    st.success(f"Added {_n_added} feature(s). Navigating to Feature Review…")
-                    st.session_state._nav_page = "4. Setup & Feature Review"
-                    st.rerun()
-                else:
-                    st.info("All ticked rows were already added. No new features added.")
+                with st.container(height=460):
+                    _edited_grouped = st.data_editor(
+                        pd.DataFrame(_group_rows),
+                        column_order=[
+                            "accept", "status", "machining_action",
+                            "display_type", "description", "count", "confidence_summary",
+                        ],
+                        column_config={
+                            "accept":           st.column_config.CheckboxColumn("Machine this?", default=False),
+                            "status":           st.column_config.TextColumn("Status",            disabled=True, width="small"),
+                            "machining_action": st.column_config.SelectboxColumn(
+                                "Action",
+                                options=["Machine", "Existing Geometry – No Machining", "Reference Only"],
+                                required=True,
+                            ),
+                            "display_type":       st.column_config.TextColumn("Type",               disabled=True),
+                            "description":        st.column_config.TextColumn("Description / Size", disabled=True),
+                            "count":              st.column_config.NumberColumn("Count",             disabled=True, format="%d"),
+                            "confidence_summary": st.column_config.TextColumn("Confidence",          disabled=True, width="small"),
+                        },
+                        use_container_width=True,
+                        hide_index=True,
+                        key="_smw_grouped_editor",
+                    )
+
+                _n_ticked = int(_edited_grouped["accept"].sum()) if "accept" in _edited_grouped.columns else 0
+
+                if st.button(
+                    "Confirm & proceed to Feature Review",
+                    type="primary",
+                    disabled=(_n_ticked == 0),
+                    help="Tick at least one group to enable",
+                    key="_smw_confirm_grouped",
+                ):
+                    _n_added = _commit_group_selections(_edited_grouped, _groups, _filtered)
+                    if _n_added > 0:
+                        st.session_state.features_from_candidates = True
+                        save_features_to_db(st.session_state.features)
+                        st.success(f"Added {_n_added} feature(s). Navigating to Feature Review…")
+                        st.session_state._nav_page = "4. Setup & Feature Review"
+                        st.rerun()
+                    else:
+                        st.info("All ticked groups were already added. No new features added.")
+
+            else:
+                # ── FLAT / UNGROUPED MODE ───────────────────────────────────
+                _rows = []
+                for _c in _filtered:
+                    _cid = _c["candidate_id"]
+                    _rows.append({
+                        "accept":           (_cid not in _added_ids) and _is_raw_block,
+                        "status":           "Added ✓" if _cid in _added_ids else "",
+                        "candidate_id":     _cid,
+                        "machining_action": _default_action,
+                        "feature_type":     _c.get("feature_type", ""),
+                        "feature_name":     _c.get("feature_name", ""),
+                        "confidence":       _c.get("confidence", ""),
+                        "x_pos":            _c.get("x_pos"),
+                        "y_pos":            _c.get("y_pos"),
+                        "diameter":         _c.get("diameter"),
+                        "length":           _c.get("length"),
+                        "width":            _c.get("width"),
+                        "depth":            _c.get("depth"),
+                        "detection_note":   _c.get("detection_note", ""),
+                    })
+
+                with st.container(height=460):
+                    _edited = st.data_editor(
+                        pd.DataFrame(_rows),
+                        column_order=[
+                            "accept", "status", "machining_action", "feature_type",
+                            "feature_name", "confidence", "x_pos", "y_pos",
+                            "diameter", "length", "width", "depth", "detection_note",
+                        ],
+                        column_config={
+                            "accept":           st.column_config.CheckboxColumn("Machine this?", default=True),
+                            "status":           st.column_config.TextColumn("Status",            disabled=True, width="small"),
+                            "candidate_id":     st.column_config.TextColumn("ID",                disabled=True, width="small"),
+                            "machining_action": st.column_config.SelectboxColumn(
+                                "Action",
+                                options=["Machine", "Existing Geometry – No Machining", "Reference Only"],
+                                required=True,
+                            ),
+                            "feature_type":   st.column_config.TextColumn("Type",         disabled=True),
+                            "feature_name":   st.column_config.TextColumn("Name",         disabled=True),
+                            "confidence":     st.column_config.TextColumn("Conf.",        disabled=True, width="small"),
+                            "x_pos":          st.column_config.NumberColumn("X (mm)",     disabled=True, format="%.2f"),
+                            "y_pos":          st.column_config.NumberColumn("Y (mm)",     disabled=True, format="%.2f"),
+                            "diameter":       st.column_config.NumberColumn("Dia (mm)",   disabled=True, format="%.2f"),
+                            "length":         st.column_config.NumberColumn("L (mm)",     disabled=True, format="%.2f"),
+                            "width":          st.column_config.NumberColumn("W (mm)",     disabled=True, format="%.2f"),
+                            "depth":          st.column_config.NumberColumn("Depth (mm)", disabled=True, format="%.2f"),
+                            "detection_note": st.column_config.TextColumn("Note",         disabled=True),
+                        },
+                        use_container_width=True,
+                        hide_index=True,
+                        key="_smw_cand_editor",
+                    )
+
+                _n_ticked = int(_edited["accept"].sum()) if "accept" in _edited.columns else 0
+
+                if st.button(
+                    "Confirm & proceed to Feature Review",
+                    type="primary",
+                    disabled=(_n_ticked == 0),
+                    help="Tick at least one feature to enable",
+                    key="_smw_confirm_flat",
+                ):
+                    _n_added = _commit_candidate_selections(_edited, _filtered)
+                    if _n_added > 0:
+                        st.session_state.features_from_candidates = True
+                        save_features_to_db(st.session_state.features)
+                        st.success(f"Added {_n_added} feature(s). Navigating to Feature Review…")
+                        st.session_state._nav_page = "4. Setup & Feature Review"
+                        st.rerun()
+                    else:
+                        st.info("All ticked rows were already added. No new features added.")
 
     with _right:
         _render_3d_panel("_smw_3d_", large=True)
