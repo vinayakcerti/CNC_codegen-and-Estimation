@@ -58,6 +58,12 @@ def init_db():
             priority INTEGER
         )
     """)
+    # Safe migration: add intent columns if missing; existing rows get defaults
+    _feat_cols = {row[1] for row in c.execute("PRAGMA table_info(features)").fetchall()}
+    if "machining_action" not in _feat_cols:
+        c.execute("ALTER TABLE features ADD COLUMN machining_action TEXT DEFAULT 'Machine'")
+    if "selected_for_machining" not in _feat_cols:
+        c.execute("ALTER TABLE features ADD COLUMN selected_for_machining INTEGER DEFAULT 1")
     c.execute("""
         CREATE TABLE IF NOT EXISTS job_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,10 +109,13 @@ def save_features_to_db(features):
     for f in features:
         c.execute("""
             INSERT INTO features (feature_name, feature_type, quantity, x_pos, y_pos,
-                diameter, length, width, depth, tolerance_note, priority)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                diameter, length, width, depth, tolerance_note, priority,
+                machining_action, selected_for_machining)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (f["feature_name"], f["feature_type"], f["quantity"], f["x_pos"], f["y_pos"],
-              f["diameter"], f["length"], f["width"], f["depth"], f["tolerance_note"], f["priority"]))
+              f["diameter"], f["length"], f["width"], f["depth"], f["tolerance_note"], f["priority"],
+              f.get("machining_action", "Machine"),
+              1 if f.get("selected_for_machining", True) else 0))
     conn.commit()
     conn.close()
 
@@ -117,6 +126,10 @@ def load_features_from_db():
     conn.close()
     if df.empty:
         return []
+    if "selected_for_machining" in df.columns:
+        df["selected_for_machining"] = df["selected_for_machining"].astype(bool)
+    if "machining_action" not in df.columns:
+        df["machining_action"] = "Machine"
     return df.to_dict("records")
 
 
