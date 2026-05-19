@@ -169,6 +169,11 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
         help="Display dimension labels next to each marker",
     )
 
+    # Highlight IDs scoped to Select Machining Work panel only.
+    _hl_ids = (
+        st.session_state.get("_smw_highlight_candidate_ids") or set()
+    ) if key_prefix == "_smw_3d_" else set()
+
     if _mesh:
         fig_mesh = build_step_mesh3d(
             _mesh, _stk,
@@ -178,10 +183,15 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
             show_face_colors=_show_face_colors,
             show_face_milling=_show_face_milling,
             show_markers=_show_markers,
+            highlighted_candidate_ids=_hl_ids or None,
         )
         if large:
             fig_mesh.update_layout(height=620)
         st.plotly_chart(fig_mesh, use_container_width=True)
+        if _hl_ids:
+            st.caption(
+                "**Gold = highlighted** — selected group/feature from the side panel."
+            )
         _caption_parts = [
             "**Solid body** = machined part",
             "Rotate: drag  ·  Zoom: scroll  ·  Pan: right-drag",
@@ -2866,6 +2876,26 @@ def page_select_machining_work():
                         "confidence_summary": _g["confidence_summary"],
                     })
 
+                # ── Highlight selectbox (grouped) ────────────────────────────
+                _hl_group_opts = ["(none)"] + [
+                    f"{_g['description']} — {_g['count']} found"
+                    for _g in _groups
+                ]
+                _hl_group_sel = st.selectbox(
+                    "Preview / highlight group",
+                    options=_hl_group_opts,
+                    key="_smw_hl_group_sel",
+                    help="Select a group to highlight it in gold in the 3D viewer.",
+                )
+                if _hl_group_sel == "(none)" or not _groups:
+                    st.session_state._smw_highlight_candidate_ids = set()
+                else:
+                    _hl_gi = _hl_group_opts.index(_hl_group_sel) - 1
+                    if 0 <= _hl_gi < len(_groups):
+                        st.session_state._smw_highlight_candidate_ids = set(_groups[_hl_gi]["member_ids"])
+                    else:
+                        st.session_state._smw_highlight_candidate_ids = set()
+
                 with st.container(height=460):
                     _edited_grouped = st.data_editor(
                         pd.DataFrame(_group_rows),
@@ -2931,6 +2961,26 @@ def page_select_machining_work():
                         "depth":            _c.get("depth"),
                         "detection_note":   _c.get("detection_note", ""),
                     })
+
+                # ── Highlight selectbox (flat) ───────────────────────────────
+                _hl_flat_opts = ["(none)"] + [
+                    f"#{_ci + 1} {_c.get('feature_name', _c.get('feature_type', 'Unknown'))}"
+                    for _ci, _c in enumerate(_filtered)
+                ]
+                _hl_flat_sel = st.selectbox(
+                    "Preview / highlight feature",
+                    options=_hl_flat_opts,
+                    key="_smw_hl_flat_sel",
+                    help="Select a feature to highlight it in gold in the 3D viewer.",
+                )
+                if _hl_flat_sel == "(none)" or not _filtered:
+                    st.session_state._smw_highlight_candidate_ids = set()
+                else:
+                    _hl_fi = _hl_flat_opts.index(_hl_flat_sel) - 1
+                    if 0 <= _hl_fi < len(_filtered):
+                        st.session_state._smw_highlight_candidate_ids = {_filtered[_hl_fi]["candidate_id"]}
+                    else:
+                        st.session_state._smw_highlight_candidate_ids = set()
 
                 with st.container(height=460):
                     _edited = st.data_editor(

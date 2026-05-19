@@ -185,6 +185,7 @@ def _infer_half_xy(cand, xmin, xmax, ymin, ymax):
 # ---------------------------------------------------------------------------
 
 def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
+                              highlight_color=None, suppress_hl_legend=False,
                               xmin=None, xmax=None, ymin=None, ymax=None):
     """
     Build Scatter3d marker traces (and optional text label traces) for
@@ -197,26 +198,40 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
     candidates which go at z=zmin.
 
     Args:
-        candidates  : list of candidate dicts from step_candidates session key
-        zmax        : top Z coordinate of the mesh (from mesh vertex extents)
-        zmin        : bottom Z coordinate of the mesh
-        show_labels : if True, add a Scatter3d text annotation above each marker
-        xmin, xmax  : mesh X extents — used by _infer_half_xy for Section C orientation
-        ymin, ymax  : mesh Y extents — used by _infer_half_xy for Section C orientation
+        candidates        : list of candidate dicts from step_candidates session key
+        zmax              : top Z coordinate of the mesh (from mesh vertex extents)
+        zmin              : bottom Z coordinate of the mesh
+        show_labels       : if True, add a Scatter3d text annotation above each marker
+        highlight_color   : when set, ALL candidates are rendered in this color with
+                            thicker lines and grouped under the 'highlight' legend entry.
+                            Used for the SMW preview-highlight overlay pass.
+        suppress_hl_legend: when True with highlight_color, suppress the legend entry
+                            (used when a face-highlight trace already claimed it).
+        xmin, xmax        : mesh X extents — used by _infer_half_xy for Section C orientation
+        ymin, ymax        : mesh Y extents — used by _infer_half_xy for Section C orientation
 
     Returns:
         list of plotly.graph_objects.Scatter3d traces
     """
     traces = []
     legend_shown = set()
-
-    # Text labels float a small distance above the part top surface.
     z_text = zmax + max((zmax - zmin) * 0.08, 3.0)
+
+    _HL             = bool(highlight_color)
+    _hl_legend_done = suppress_hl_legend   # True = legend entry already shown elsewhere
+
+    # Line widths — thicker when rendering as the highlight overlay
+    _lw_hole   = 5   if _HL else 3
+    _lw_face   = 4   if _HL else 2
+    _lw_slot   = 4   if _HL else 1.5
+    _lw_pocket = 5   if _HL else 3
+    _lw_step   = 5   if _HL else 3
+    _marker_sz = 15  if _HL else 10
 
     for cand in candidates:
         ftype  = cand.get("feature_type", "Unknown")
         ft_low = ftype.lower()
-        color  = _feature_color(ftype)
+        color  = highlight_color if _HL else _feature_color(ftype)
 
         x        = float(cand.get("x_pos")    or 0)
         y        = float(cand.get("y_pos")    or 0)
@@ -226,9 +241,18 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
         depth    = float(cand.get("depth")    or 0)
         diameter = float(cand.get("diameter") or 0)
 
-        first_of_type = ftype not in legend_shown
-        if first_of_type:
-            legend_shown.add(ftype)
+        if _HL:
+            _show_leg  = not _hl_legend_done
+            _leg_name  = "Highlighted"
+            _leg_group = "highlight"
+            _hl_legend_done = True
+        else:
+            first_of_type = ftype not in legend_shown
+            if first_of_type:
+                legend_shown.add(ftype)
+            _show_leg  = first_of_type
+            _leg_name  = ftype
+            _leg_group = ftype
 
         hover = _make_hover_text(ft_low, label, diameter, length, width, depth)
 
@@ -241,10 +265,10 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
                 y=[y + r * math.sin(t) for t in theta],
                 z=[zmax] * len(theta),
                 mode="lines",
-                line=dict(color=color, width=3),
-                name=ftype,
-                legendgroup=ftype,
-                showlegend=first_of_type,
+                line=dict(color=color, width=_lw_hole),
+                name=_leg_name,
+                legendgroup=_leg_group,
+                showlegend=_show_leg,
                 hovertext=hover,
                 hoverinfo="text",
             ))
@@ -259,10 +283,10 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
             traces.append(go.Scatter3d(
                 x=rx, y=ry, z=[z_face] * 5,
                 mode="lines",
-                line=dict(color=color, width=2, dash="dash"),
-                name=ftype,
-                legendgroup=ftype,
-                showlegend=first_of_type,
+                line=dict(color=color, width=_lw_face, dash="dash"),
+                name=_leg_name,
+                legendgroup=_leg_group,
+                showlegend=_show_leg,
                 hovertext=hover,
                 hoverinfo="text",
             ))
@@ -275,10 +299,10 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
             traces.append(go.Scatter3d(
                 x=rx, y=ry, z=[zmax] * 5,
                 mode="lines",
-                line=dict(color=color, width=1.5, dash="dash"),
-                name=ftype,
-                legendgroup=ftype,
-                showlegend=first_of_type,
+                line=dict(color=color, width=_lw_slot, dash="dash"),
+                name=_leg_name,
+                legendgroup=_leg_group,
+                showlegend=_show_leg,
                 hovertext=hover,
                 hoverinfo="text",
             ))
@@ -291,10 +315,10 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
             traces.append(go.Scatter3d(
                 x=rx, y=ry, z=[zmax] * 5,
                 mode="lines",
-                line=dict(color=color, width=3),
-                name=ftype,
-                legendgroup=ftype,
-                showlegend=first_of_type,
+                line=dict(color=color, width=_lw_pocket),
+                name=_leg_name,
+                legendgroup=_leg_group,
+                showlegend=_show_leg,
                 hovertext=hover,
                 hoverinfo="text",
             ))
@@ -307,10 +331,10 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
                 y=[y,       y,       None, y - arm, y + arm],
                 z=[zmax] * 5,
                 mode="lines",
-                line=dict(color=color, width=3),
-                name=ftype,
-                legendgroup=ftype,
-                showlegend=first_of_type,
+                line=dict(color=color, width=_lw_step),
+                name=_leg_name,
+                legendgroup=_leg_group,
+                showlegend=_show_leg,
                 hovertext=hover,
                 hoverinfo="text",
             ))
@@ -320,10 +344,10 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
             traces.append(go.Scatter3d(
                 x=[x], y=[y], z=[zmax],
                 mode="markers",
-                marker=dict(size=10, color=color, symbol="diamond"),
-                name=ftype,
-                legendgroup=ftype,
-                showlegend=first_of_type,
+                marker=dict(size=_marker_sz, color=color, symbol="diamond"),
+                name=_leg_name,
+                legendgroup=_leg_group,
+                showlegend=_show_leg,
                 hovertext=hover,
                 hoverinfo="text",
             ))
@@ -332,7 +356,6 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
         if show_labels:
             short = _make_short_label(ft_low, diameter, length, width, depth)
             if short:
-                # Face-milling bottom label at z_text below the part (zmin offset)
                 z_lbl = (zmin - max((zmax - zmin) * 0.08, 3.0)
                          if "face mill" in ft_low and "bottom" in label.lower()
                          else z_text)
@@ -343,7 +366,7 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
                     textfont=dict(size=16, color=color, family="monospace"),
                     textposition="middle center",
                     name="",
-                    legendgroup=ftype,
+                    legendgroup=_leg_group,
                     showlegend=False,
                     hoverinfo="none",
                 ))
@@ -418,7 +441,8 @@ def _stock_box_coords_traces(x0, x1, y0, y1, z0, z1):
 
 def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
                       show_stock_box=False, show_face_colors=True,
-                      show_face_milling=False, show_markers=True):
+                      show_face_milling=False, show_markers=True,
+                      highlighted_candidate_ids=None):
     """
     Build a rotatable Plotly Mesh3d figure from pre-computed tessellation data.
 
@@ -449,13 +473,23 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
     ymin, ymax = min(ys), max(ys)
     zmin, zmax = min(zs), max(zs)
 
-    # ── Split candidates: internal feature faces | face-milling | markers ─────
-    _face_cands      = []   # holes, pockets, chamfers — colored by default
-    _face_mill_cands = []   # face-milling — only shown when requested
-    _marker_cands    = []   # no face data → approximate marker fallback
+    # ── Split candidates: highlighted | feature faces | face-milling | markers ──
+    _hl_set          = set(highlighted_candidate_ids or [])
+    _hl_face_cands   = []   # highlighted with face data — rendered gold on top
+    _hl_marker_cands = []   # highlighted without face data — gold marker overlay
+    _face_cands      = []   # non-highlighted holes/pockets/chamfers — colored by default
+    _face_mill_cands = []   # non-highlighted face-milling — only shown when requested
+    _marker_cands    = []   # non-highlighted without face data → approximate marker fallback
     for _cand in (candidates or []):
-        _ft = _cand.get("feature_type", "")
-        if show_face_colors and _cand.get("face_mesh_data"):
+        _ft  = _cand.get("feature_type", "")
+        _cid = _cand.get("candidate_id", "")
+        _is_hl = bool(_hl_set) and _cid in _hl_set
+        if _is_hl:
+            if _cand.get("face_mesh_data"):
+                _hl_face_cands.append(_cand)
+            else:
+                _hl_marker_cands.append(_cand)
+        elif show_face_colors and _cand.get("face_mesh_data"):
             if _ft == "Face milling":
                 _face_mill_cands.append(_cand)
             else:
@@ -536,6 +570,52 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
             xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax,
         ):
             fig.add_trace(tr)
+
+    # ── Highlighted CAD face overlays (gold, always on top) ──────────────────
+    # Rendered regardless of show_face_colors so the highlight is always visible.
+    _HL_COLOR        = "#FFD700"   # gold
+    _hl_legend_shown = False
+    for _fc in _hl_face_cands:
+        _fname = _fc.get("feature_name", _fc.get("feature_type", ""))
+        for _fm in _fc.get("face_mesh_data", []):
+            _verts = _fm.get("vertices", [])
+            _tris  = _fm.get("triangles", [])
+            if not _verts or not _tris:
+                continue
+            fig.add_trace(go.Mesh3d(
+                x=[_v[0] for _v in _verts],
+                y=[_v[1] for _v in _verts],
+                z=[_v[2] for _v in _verts],
+                i=[_t[0] for _t in _tris],
+                j=[_t[1] for _t in _tris],
+                k=[_t[2] for _t in _tris],
+                color=_HL_COLOR,
+                opacity=0.95,
+                flatshading=False,
+                lighting=dict(ambient=0.7, diffuse=0.9, specular=0.5,
+                              roughness=0.3, fresnel=0.3),
+                lightposition=dict(x=1, y=1, z=2),
+                name="Highlighted",
+                legendgroup="highlight",
+                showlegend=not _hl_legend_shown,
+                hovertext=f"Highlighted: {_fname}",
+                hoverinfo="text",
+            ))
+            _hl_legend_shown = True
+
+    # ── Highlighted marker overlays (shown even when show_markers=False) ──────
+    # suppress_hl_legend=True when face highlights already claimed the legend slot.
+    if _hl_marker_cands:
+        for tr in _candidate_marker_traces(
+            _hl_marker_cands, zmax, zmin,
+            show_labels=False,
+            highlight_color=_HL_COLOR,
+            suppress_hl_legend=_hl_legend_shown,
+            xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax,
+        ):
+            fig.add_trace(tr)
+            if not _hl_legend_shown:
+                _hl_legend_shown = True
 
     # ── Scene layout — CAD-style coloured axes, readable labels ───────────────
     fig.update_layout(
