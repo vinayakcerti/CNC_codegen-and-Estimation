@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import io
 import copy
+import contextlib
 import os
 import sys
 import tempfile
@@ -107,6 +108,183 @@ FEATURE_TYPES = [
     "Chamfer",
 ]
 
+_FTYPE_MAP = {
+    "face milling":        "Face Milling",
+    "hole":                "Hole",
+    "large hole / boring": "Large Hole / Boring",
+    "slot":                "Slot",
+}
+
+
+def _render_3d_panel(key_prefix: str, large: bool = False):
+    """Render the interactive 3D preview panel with toggle checkboxes.
+
+    key_prefix: unique prefix for all widget keys (avoids Streamlit duplicate-key errors).
+    large: when True, sets chart height=620 and omits the subheader.
+    """
+    if not large:
+        st.subheader("3D Preview")
+    _mesh      = st.session_state.get("step_mesh_data")
+    _geo       = st.session_state.get("step_geometry")
+    _stk       = st.session_state.get("stock", {})
+    _all_cands = st.session_state.get("step_candidates", [])
+
+    _FACE_COLOR_DEFAULT_TYPES = {"Hole", "Large hole / boring", "Pocket", "Chamfer"}
+    _has_face_colors = any(
+        bool(c.get("face_mesh_data"))
+        and c.get("feature_type", "") in _FACE_COLOR_DEFAULT_TYPES
+        for c in _all_cands
+    )
+
+    _show_stock = st.checkbox(
+        "Show stock / bounding box",
+        value=False,
+        key=f"{key_prefix}show_stock",
+        help="Overlay the semi-transparent stock / bounding box on the part",
+    )
+    _show_face_colors = st.checkbox(
+        "Show CAD face colors",
+        value=True,
+        key=f"{key_prefix}show_face_colors",
+        help="Color detected feature surfaces using actual CAD face geometry (holes, pockets, chamfers)",
+    )
+    _show_face_milling = st.checkbox(
+        "Show face-milling surfaces",
+        value=False,
+        key=f"{key_prefix}show_face_milling",
+        help="Overlay top/bottom face-milling surfaces (covers the base body — off by default)",
+        disabled=not _show_face_colors,
+    )
+    _show_markers = st.checkbox(
+        "Show approximate markers",
+        value=not _has_face_colors,
+        key=f"{key_prefix}show_markers",
+        help="Show fallback marker outlines for features without exact CAD face data (e.g. slots)",
+    )
+    _show_labels = st.checkbox(
+        "Show measurement labels on markers",
+        value=False,
+        key=f"{key_prefix}show_labels",
+        disabled=not _show_markers,
+        help="Display dimension labels next to each marker",
+    )
+
+    if _mesh:
+        fig_mesh = build_step_mesh3d(
+            _mesh, _stk,
+            candidates=_all_cands,
+            show_labels=(_show_labels and _show_markers),
+            show_stock_box=_show_stock,
+            show_face_colors=_show_face_colors,
+            show_face_milling=_show_face_milling,
+            show_markers=_show_markers,
+        )
+        if large:
+            fig_mesh.update_layout(height=620)
+        st.plotly_chart(fig_mesh, use_container_width=True)
+        _caption_parts = [
+            "**Solid body** = machined part",
+            "Rotate: drag  ·  Zoom: scroll  ·  Pan: right-drag",
+            "Planning reference only — not a machining simulation.",
+        ]
+        if _show_stock:
+            _caption_parts.insert(1, "**Transparent box** = stock / bounding box")
+        st.caption("  ·  ".join(_caption_parts))
+        st.caption(
+            "Colored faces = exact CAD surfaces (holes, pockets, chamfers). "
+            "Dashed outlines = approximate fallback markers (slots, steps)."
+        )
+    elif (_geo and _geo.get("success")
+          and (_geo.get("line_segments") or _geo.get("circle_traces"))):
+        fig_wire = build_3d_view(_stk, [], step_geometry=_geo)
+        if large:
+            fig_wire.update_layout(height=620)
+        st.plotly_chart(fig_wire, use_container_width=True)
+        st.caption(
+            "Wireframe preview — STEP edge geometry. "
+            "Planning reference only."
+        )
+    elif st.session_state.get("step_parse_result"):
+        _tess_err = st.session_state.get("_tess_error")
+        if _tess_err:
+            st.warning(f"3D tessellation failed: {_tess_err}")
+        st.info(
+            "Solid 3D preview unavailable. Showing planning reference only. "
+            "Upload requires CadQuery/OCC-enabled Python for the solid preview."
+        )
+    else:
+        st.info("Upload a STEP file to see the interactive 3D preview here.")
+
+    st.caption(
+        "**Solid body** = finished machined part.  "
+        "**Stock box** = original bounding stock.  "
+        "Colored faces = exact CAD surfaces; "
+        "markers = approximate planning overlays."
+    )
+
+    _legend_types = [
+        "Face Milling", "Hole", "Large Hole / Boring",
+        "Slot", "Pocket", "Step", "Chamfer", "Outer Profile",
+    ]
+    _swatches = "  ".join(
+        f"<span style='display:inline-block;width:12px;height:12px;"
+        f"background:{FEATURE_COLORS[ft]};border-radius:2px;"
+        f"vertical-align:middle;margin-right:3px;'></span>"
+        f"<span style='font-size:0.78rem;vertical-align:middle;'>{ft}</span>"
+        for ft in _legend_types
+    )
+    st.markdown(
+        f"<div style='margin-top:4px;line-height:2.2;'>{_swatches}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _commit_candidate_selections(edited_df, candidates) -> int:
+    """Commit ticked candidate rows to st.session_state.features.
+
+    Returns the number of features added.
+    Skips rows already in added_candidate_ids and Reference-Only rows.
+    Coerces ticked 'Existing Geometry – No Machining' rows to 'Machine'.
+    """
+    if "added_candidate_ids" not in st.session_state:
+        st.session_state.added_candidate_ids = set()
+    _lookup = {c["candidate_id"]: c for c in candidates}
+    _n_added = 0
+    for _, _row in edited_df.iterrows():
+        _cid    = _row["candidate_id"]
+        _action = str(_row.get("machining_action", "Machine"))
+        if not _row["accept"] or _cid in st.session_state.added_candidate_ids:
+            continue
+        if _action == "Reference Only":
+            continue
+        if _action == "Existing Geometry – No Machining":
+            _action = "Machine"
+        _c = _lookup.get(_cid)
+        if _c is None:
+            continue
+        _ftype = _FTYPE_MAP.get(
+            (_c.get("feature_type") or "").strip().lower(),
+            _c.get("feature_type", ""),
+        )
+        st.session_state.features.append({
+            "feature_name":           _c.get("feature_name") or _ftype,
+            "feature_type":           _ftype,
+            "quantity":               int(_c.get("quantity")  or 1),
+            "x_pos":                  float(_c.get("x_pos")   or 0.0),
+            "y_pos":                  float(_c.get("y_pos")   or 0.0),
+            "diameter":               float(_c.get("diameter") or 0.0),
+            "length":                 float(_c.get("length")  or 0.0),
+            "width":                  float(_c.get("width")   or 0.0),
+            "depth":                  float(_c.get("depth")   or 0.0),
+            "tolerance_note":         _c.get("tolerance_note") or "",
+            "priority":               int(_c.get("priority")  or 3),
+            "machining_action":       _action,
+            "selected_for_machining": True,
+        })
+        st.session_state.added_candidate_ids.add(_cid)
+        _n_added += 1
+    return _n_added
+
 
 def init_session():
     if "tools" not in st.session_state:
@@ -209,6 +387,7 @@ def sidebar_nav():
         nav_groups = {
             "CONFIGURE": [
                 "1. Upload / Overview",
+                "Select Machining Work",
                 "2. Material & Machine",
                 "3. Stock & Setup",
             ],
@@ -449,119 +628,7 @@ def page_upload_step():
                 )
 
         with ov_right:
-            st.subheader("3D Preview")
-            _mesh     = st.session_state.get("step_mesh_data")
-            _geo      = st.session_state.get("step_geometry")
-            _stk      = st.session_state.get("stock", {})
-            _all_cands = st.session_state.get("step_candidates", [])
-
-            # Candidate types that produce face overlays shown by default
-            # (face milling excluded — it covers the whole top/bottom face).
-            _FACE_COLOR_DEFAULT_TYPES = {"Hole", "Large hole / boring", "Pocket", "Chamfer"}
-            _has_face_colors = any(
-                bool(c.get("face_mesh_data"))
-                and c.get("feature_type", "") in _FACE_COLOR_DEFAULT_TYPES
-                for c in _all_cands
-            )
-
-            _show_stock = st.checkbox(
-                "Show stock / bounding box",
-                value=False,
-                key="_3d_show_stock",
-                help="Overlay the semi-transparent stock / bounding box on the part",
-            )
-            _show_face_colors = st.checkbox(
-                "Show CAD face colors",
-                value=True,
-                key="_3d_show_face_colors",
-                help="Color detected feature surfaces using actual CAD face geometry (holes, pockets, chamfers)",
-            )
-            _show_face_milling = st.checkbox(
-                "Show face-milling surfaces",
-                value=False,
-                key="_3d_show_face_milling",
-                help="Overlay top/bottom face-milling surfaces (covers the base body — off by default)",
-                disabled=not _show_face_colors,
-            )
-            _show_markers = st.checkbox(
-                "Show approximate markers",
-                value=not _has_face_colors,
-                key="_3d_show_markers",
-                help="Show fallback marker outlines for features without exact CAD face data (e.g. slots)",
-            )
-            _show_labels = st.checkbox(
-                "Show measurement labels on markers",
-                value=False,
-                key="_3d_show_labels",
-                disabled=not _show_markers,
-                help="Display dimension labels next to each marker",
-            )
-
-            if _mesh:
-                fig_mesh = build_step_mesh3d(
-                    _mesh, _stk,
-                    candidates=_all_cands,
-                    show_labels=(_show_labels and _show_markers),
-                    show_stock_box=_show_stock,
-                    show_face_colors=_show_face_colors,
-                    show_face_milling=_show_face_milling,
-                    show_markers=_show_markers,
-                )
-                st.plotly_chart(fig_mesh, use_container_width=True)
-                _caption_parts = [
-                    "**Solid body** = machined part",
-                    "Rotate: drag  ·  Zoom: scroll  ·  Pan: right-drag",
-                    "Planning reference only — not a machining simulation.",
-                ]
-                if _show_stock:
-                    _caption_parts.insert(1, "**Transparent box** = stock / bounding box")
-                st.caption("  ·  ".join(_caption_parts))
-                st.caption(
-                    "Colored faces = exact CAD surfaces (holes, pockets, chamfers). "
-                    "Dashed outlines = approximate fallback markers (slots, steps)."
-                )
-            elif (_geo and _geo.get("success")
-                  and (_geo.get("line_segments") or _geo.get("circle_traces"))):
-                fig_wire = build_3d_view(_stk, [], step_geometry=_geo)
-                st.plotly_chart(fig_wire, use_container_width=True)
-                st.caption(
-                    "Wireframe preview — STEP edge geometry. "
-                    "Planning reference only."
-                )
-            elif st.session_state.get("step_parse_result"):
-                _tess_err = st.session_state.get("_tess_error")
-                if _tess_err:
-                    st.warning(f"3D tessellation failed: {_tess_err}")
-                st.info(
-                    "Solid 3D preview unavailable. Showing planning reference only. "
-                    "Upload requires CadQuery/OCC-enabled Python for the solid preview."
-                )
-            else:
-                st.info("Upload a STEP file to see the interactive 3D preview here.")
-
-            st.caption(
-                "**Solid body** = finished machined part.  "
-                "**Stock box** = original bounding stock.  "
-                "Colored faces = exact CAD surfaces; "
-                "markers = approximate planning overlays."
-            )
-
-            # ── Feature color legend ───────────────────────────────────────
-            _legend_types = [
-                "Face Milling", "Hole", "Large Hole / Boring",
-                "Slot", "Pocket", "Step", "Chamfer", "Outer Profile",
-            ]
-            _swatches = "  ".join(
-                f"<span style='display:inline-block;width:12px;height:12px;"
-                f"background:{FEATURE_COLORS[ft]};border-radius:2px;"
-                f"vertical-align:middle;margin-right:3px;'></span>"
-                f"<span style='font-size:0.78rem;vertical-align:middle;'>{ft}</span>"
-                for ft in _legend_types
-            )
-            st.markdown(
-                f"<div style='margin-top:4px;line-height:2.2;'>{_swatches}</div>",
-                unsafe_allow_html=True,
-            )
+            _render_3d_panel("_upload_3d_")
 
         with st.expander("Coordinate Ranges", expanded=False):
             if r.get("converted"):
@@ -708,8 +775,13 @@ def page_upload_step():
         _cand_str = f" **{_n} feature candidate(s) detected.**" if _n > 0 else ""
         st.success(
             f"STEP file loaded.{_cand_str}  "
-            "**Next →** Go to **4. Setup & Feature Review** to review and accept detected feature candidates."
+            "**Next →** Select which features to machine, then review in Setup & Feature Review."
         )
+        _ng_col1, _ = st.columns([1, 3])
+        with _ng_col1:
+            if st.button("Next → Select Machining Work", type="primary", key="_upload_next_smw"):
+                st.session_state._nav_page = "Select Machining Work"
+                st.rerun()
 
     st.session_state.stock = stock
 
@@ -1632,135 +1704,107 @@ def page_setup_review():
             )
         st.success(
             f"{len(features)} feature(s) accepted. "
-            "Next: go to **6. Strategy / Operations** to generate the machining sequence."
+            "Machining features are already selected. "
+            "Continue to **6. Strategy / Operations**, or expand "
+            "**Advanced: Add more detected geometry** below if needed."
         )
+        if st.button("Next → Strategy / Operations", type="primary", key="_sfr_next_ops"):
+            st.session_state._nav_page = "6. Strategy / Operations"
+            st.rerun()
 
     st.divider()
 
     # ── Section 2: Detected CAD Feature Candidates ───────────────────────────
-    st.subheader("Detected CAD Feature Candidates")
-    st.caption("Candidates are not used in operation planning until you accept them.")
+    # When features already exist, collapse into an expander so the page reads
+    # as a review page rather than an input page.  contextlib.nullcontext()
+    # acts as a no-op context manager for the fallback (no-features) case so
+    # the rendering code below is shared without duplication.
+    _cand_ctx = (
+        st.expander("Advanced: Add more detected geometry", expanded=False)
+        if features
+        else contextlib.nullcontext()
+    )
 
-    if not _candidates:
-        st.info("No CAD candidates available. Upload a STEP file on **1. Upload / Overview** first.")
-    else:
-        _spt = st.session_state.get("starting_part_type", "Raw Block / Billet")
-        if _spt != "Raw Block / Billet":
-            st.info(
-                f"**{_spt} selected.** "
-                "Detected geometry includes existing features — only tick the rows you want to machine. "
-                "Ticked rows will be added as machining features."
-            )
-        st.caption(
-            f"{len(_candidates)} candidate(s) detected from STEP geometry. "
-            "Tick rows to select, then click **Add selected machining features**."
-        )
-        for _w in _cand_warns:
-            st.warning(_w)
+    if not features:
+        st.subheader("Detected CAD Feature Candidates")
+        st.caption("Candidates are not used in operation planning until you accept them.")
 
-        _is_raw_block = st.session_state.get("starting_part_type", "Raw Block / Billet") == "Raw Block / Billet"
-        _default_action = "Machine" if _is_raw_block else "Existing Geometry – No Machining"
-        _rows = []
-        for _c in _candidates:
-            _cid = _c["candidate_id"]
-            _rows.append({
-                "accept":           (_cid not in _added_ids) and _is_raw_block,
-                "status":           "Added ✓" if _cid in _added_ids else "",
-                "candidate_id":     _cid,
-                "machining_action": _default_action,
-                "feature_type":     _c.get("feature_type", ""),
-                "feature_name":     _c.get("feature_name", ""),
-                "confidence":       _c.get("confidence", ""),
-                "x_pos":            _c.get("x_pos"),
-                "y_pos":            _c.get("y_pos"),
-                "diameter":         _c.get("diameter"),
-                "length":           _c.get("length"),
-                "width":            _c.get("width"),
-                "depth":            _c.get("depth"),
-                "detection_note":   _c.get("detection_note", ""),
-            })
-
-        _edited = st.data_editor(
-            pd.DataFrame(_rows),
-            column_config={
-                "accept":           st.column_config.CheckboxColumn("Machine this?",     default=True),
-                "status":           st.column_config.TextColumn("Status",               disabled=True, width="small"),
-                "candidate_id":     st.column_config.TextColumn("ID",                   disabled=True, width="small"),
-                "machining_action": st.column_config.SelectboxColumn(
-                    "Machining Action",
-                    options=["Machine", "Existing Geometry – No Machining", "Reference Only"],
-                    required=True,
-                ),
-                "feature_type": st.column_config.TextColumn("Type",             disabled=True),
-                "feature_name": st.column_config.TextColumn("Name",             disabled=True),
-                "confidence":   st.column_config.TextColumn("Confidence",       disabled=True, width="small"),
-                "x_pos":        st.column_config.NumberColumn("X (mm)",         disabled=True, format="%.2f"),
-                "y_pos":        st.column_config.NumberColumn("Y (mm)",         disabled=True, format="%.2f"),
-                "diameter":     st.column_config.NumberColumn("Dia (mm)",       disabled=True, format="%.2f"),
-                "length":       st.column_config.NumberColumn("L (mm)",         disabled=True, format="%.2f"),
-                "width":        st.column_config.NumberColumn("W (mm)",         disabled=True, format="%.2f"),
-                "depth":        st.column_config.NumberColumn("Depth (mm)",     disabled=True, format="%.2f"),
-                "detection_note": st.column_config.TextColumn("Detection Note", disabled=True),
-            },
-            use_container_width=True,
-            hide_index=True,
-            key="cand_editor",
-        )
-
-        _FTYPE_MAP = {
-            "face milling":        "Face Milling",
-            "hole":                "Hole",
-            "large hole / boring": "Large Hole / Boring",
-            "slot":                "Slot",
-        }
-
-        if st.button("Add selected machining features", type="primary"):
-            if "added_candidate_ids" not in st.session_state:
-                st.session_state.added_candidate_ids = set()
-            _lookup = {_c["candidate_id"]: _c for _c in _candidates}
-            _n_added = 0
-            for _, _row in _edited.iterrows():
-                _cid = _row["candidate_id"]
-                _action = str(_row.get("machining_action", "Machine"))
-                if not _row["accept"] or _cid in st.session_state.added_candidate_ids:
-                    continue
-                # Reference Only = explicitly excluded even when ticked
-                if _action == "Reference Only":
-                    continue
-                # Ticked row with unchanged weldment default → treat as Machine
-                if _action == "Existing Geometry – No Machining":
-                    _action = "Machine"
-                _c = _lookup.get(_cid)
-                if _c is None:
-                    continue
-                _ftype = _FTYPE_MAP.get(
-                    (_c.get("feature_type") or "").strip().lower(),
-                    _c.get("feature_type", ""),
+    with _cand_ctx:
+        if not _candidates:
+            st.info("No CAD candidates available. Upload a STEP file on **1. Upload / Overview** first.")
+        else:
+            _spt = st.session_state.get("starting_part_type", "Raw Block / Billet")
+            if _spt != "Raw Block / Billet":
+                st.info(
+                    f"**{_spt} selected.** "
+                    "Detected geometry includes existing features — only tick the rows you want to machine. "
+                    "Ticked rows will be added as machining features."
                 )
-                st.session_state.features.append({
-                    "feature_name":           _c.get("feature_name") or _ftype,
-                    "feature_type":           _ftype,
-                    "quantity":               int(_c.get("quantity")  or 1),
-                    "x_pos":                  float(_c.get("x_pos")   or 0.0),
-                    "y_pos":                  float(_c.get("y_pos")   or 0.0),
-                    "diameter":               float(_c.get("diameter") or 0.0),
-                    "length":                 float(_c.get("length")  or 0.0),
-                    "width":                  float(_c.get("width")   or 0.0),
-                    "depth":                  float(_c.get("depth")   or 0.0),
-                    "tolerance_note":         _c.get("tolerance_note") or "",
-                    "priority":               int(_c.get("priority")  or 3),
-                    "machining_action":       _action,
-                    "selected_for_machining": True,
+            st.caption(
+                f"{len(_candidates)} candidate(s) detected from STEP geometry. "
+                "Tick rows to select, then click **Add selected machining features**."
+            )
+            for _w in _cand_warns:
+                st.warning(_w)
+
+            _is_raw_block = st.session_state.get("starting_part_type", "Raw Block / Billet") == "Raw Block / Billet"
+            _default_action = "Machine" if _is_raw_block else "Existing Geometry – No Machining"
+            _rows = []
+            for _c in _candidates:
+                _cid = _c["candidate_id"]
+                _rows.append({
+                    "accept":           (_cid not in _added_ids) and _is_raw_block,
+                    "status":           "Added ✓" if _cid in _added_ids else "",
+                    "candidate_id":     _cid,
+                    "machining_action": _default_action,
+                    "feature_type":     _c.get("feature_type", ""),
+                    "feature_name":     _c.get("feature_name", ""),
+                    "confidence":       _c.get("confidence", ""),
+                    "x_pos":            _c.get("x_pos"),
+                    "y_pos":            _c.get("y_pos"),
+                    "diameter":         _c.get("diameter"),
+                    "length":           _c.get("length"),
+                    "width":            _c.get("width"),
+                    "depth":            _c.get("depth"),
+                    "detection_note":   _c.get("detection_note", ""),
                 })
-                st.session_state.added_candidate_ids.add(_cid)
-                _n_added += 1
-            if _n_added > 0:
-                st.session_state.features_from_candidates = True
-                save_features_to_db(st.session_state.features)
-                st.success(f"Added {_n_added} feature(s) to the machining list.")
-                st.rerun()
-            else:
-                st.info("No rows ticked — tick the checkbox for each feature you want to machine.")
+
+            _edited = st.data_editor(
+                pd.DataFrame(_rows),
+                column_config={
+                    "accept":           st.column_config.CheckboxColumn("Machine this?",     default=True),
+                    "status":           st.column_config.TextColumn("Status",               disabled=True, width="small"),
+                    "candidate_id":     st.column_config.TextColumn("ID",                   disabled=True, width="small"),
+                    "machining_action": st.column_config.SelectboxColumn(
+                        "Machining Action",
+                        options=["Machine", "Existing Geometry – No Machining", "Reference Only"],
+                        required=True,
+                    ),
+                    "feature_type": st.column_config.TextColumn("Type",             disabled=True),
+                    "feature_name": st.column_config.TextColumn("Name",             disabled=True),
+                    "confidence":   st.column_config.TextColumn("Confidence",       disabled=True, width="small"),
+                    "x_pos":        st.column_config.NumberColumn("X (mm)",         disabled=True, format="%.2f"),
+                    "y_pos":        st.column_config.NumberColumn("Y (mm)",         disabled=True, format="%.2f"),
+                    "diameter":     st.column_config.NumberColumn("Dia (mm)",       disabled=True, format="%.2f"),
+                    "length":       st.column_config.NumberColumn("L (mm)",         disabled=True, format="%.2f"),
+                    "width":        st.column_config.NumberColumn("W (mm)",         disabled=True, format="%.2f"),
+                    "depth":        st.column_config.NumberColumn("Depth (mm)",     disabled=True, format="%.2f"),
+                    "detection_note": st.column_config.TextColumn("Detection Note", disabled=True),
+                },
+                use_container_width=True,
+                hide_index=True,
+                key="cand_editor",
+            )
+
+            if st.button("Add selected machining features", type="primary"):
+                _n_added = _commit_candidate_selections(_edited, _candidates)
+                if _n_added > 0:
+                    st.session_state.features_from_candidates = True
+                    save_features_to_db(st.session_state.features)
+                    st.success(f"Added {_n_added} feature(s) to the machining list.")
+                    st.rerun()
+                else:
+                    st.info("No rows ticked — tick the checkbox for each feature you want to machine.")
 
     st.divider()
 
@@ -2600,12 +2644,142 @@ def page_job_notes():
         ji_m2.metric("Controller", _ji_machine.get("controller", "—"))
 
 
+def page_select_machining_work():
+    st.title("Select Machining Work")
+    st.caption(
+        "Review detected CAD features, confirm which ones to machine, "
+        "then proceed to Setup & Feature Review."
+    )
+
+    _spt          = st.session_state.get("starting_part_type", "Raw Block / Billet")
+    _parse_result = st.session_state.get("step_parse_result")
+    _candidates   = st.session_state.get("step_candidates", [])
+    _added_ids    = st.session_state.get("added_candidate_ids", set())
+    _cand_warns   = st.session_state.get("step_candidate_warnings", [])
+
+    if not _parse_result:
+        st.info("No STEP file loaded. Upload a part on **1. Upload / Overview** first.")
+        return
+
+    st.markdown(
+        f"<div style='display:inline-block;padding:3px 10px;border-radius:12px;"
+        f"background:#e8f4f8;font-size:0.88rem;font-weight:600;margin-bottom:8px;'>"
+        f"Starting with: {_spt}</div>",
+        unsafe_allow_html=True,
+    )
+    st.divider()
+
+    _left, _right = st.columns([1.2, 2.8])
+
+    with _left:
+        st.subheader("Feature Candidates")
+
+        _is_raw_block   = _spt == "Raw Block / Billet"
+        _default_action = "Machine" if _is_raw_block else "Existing Geometry – No Machining"
+
+        if not _is_raw_block:
+            st.info(
+                f"**{_spt}** — existing geometry is pre-selected as 'No Machining'. "
+                "Tick only the features you want to machine."
+            )
+
+        if not _candidates:
+            st.info("No feature candidates detected from STEP file.")
+        else:
+            for _w in _cand_warns:
+                st.warning(_w)
+
+            _all_types = sorted({c.get("feature_type", "Unknown") for c in _candidates})
+            _sel_types = st.multiselect(
+                "Filter by type",
+                options=_all_types,
+                default=_all_types,
+                key="_smw_type_filter",
+            )
+            _filtered = [c for c in _candidates if c.get("feature_type", "Unknown") in _sel_types]
+
+            _rows = []
+            for _c in _filtered:
+                _cid = _c["candidate_id"]
+                _rows.append({
+                    "accept":           (_cid not in _added_ids) and _is_raw_block,
+                    "status":           "Added ✓" if _cid in _added_ids else "",
+                    "candidate_id":     _cid,
+                    "machining_action": _default_action,
+                    "feature_type":     _c.get("feature_type", ""),
+                    "feature_name":     _c.get("feature_name", ""),
+                    "confidence":       _c.get("confidence", ""),
+                    "x_pos":            _c.get("x_pos"),
+                    "y_pos":            _c.get("y_pos"),
+                    "diameter":         _c.get("diameter"),
+                    "length":           _c.get("length"),
+                    "width":            _c.get("width"),
+                    "depth":            _c.get("depth"),
+                    "detection_note":   _c.get("detection_note", ""),
+                })
+
+            with st.container(height=460):
+                _edited = st.data_editor(
+                    pd.DataFrame(_rows),
+                    column_order=[
+                        "accept", "status", "machining_action", "feature_type",
+                        "feature_name", "confidence", "x_pos", "y_pos",
+                        "diameter", "length", "width", "depth", "detection_note",
+                    ],
+                    column_config={
+                        "accept":           st.column_config.CheckboxColumn("Machine this?", default=True),
+                        "status":           st.column_config.TextColumn("Status",            disabled=True, width="small"),
+                        "candidate_id":     st.column_config.TextColumn("ID",                disabled=True, width="small"),
+                        "machining_action": st.column_config.SelectboxColumn(
+                            "Action",
+                            options=["Machine", "Existing Geometry – No Machining", "Reference Only"],
+                            required=True,
+                        ),
+                        "feature_type":   st.column_config.TextColumn("Type",         disabled=True),
+                        "feature_name":   st.column_config.TextColumn("Name",         disabled=True),
+                        "confidence":     st.column_config.TextColumn("Conf.",        disabled=True, width="small"),
+                        "x_pos":          st.column_config.NumberColumn("X (mm)",     disabled=True, format="%.2f"),
+                        "y_pos":          st.column_config.NumberColumn("Y (mm)",     disabled=True, format="%.2f"),
+                        "diameter":       st.column_config.NumberColumn("Dia (mm)",   disabled=True, format="%.2f"),
+                        "length":         st.column_config.NumberColumn("L (mm)",     disabled=True, format="%.2f"),
+                        "width":          st.column_config.NumberColumn("W (mm)",     disabled=True, format="%.2f"),
+                        "depth":          st.column_config.NumberColumn("Depth (mm)", disabled=True, format="%.2f"),
+                        "detection_note": st.column_config.TextColumn("Note",         disabled=True),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    key="_smw_cand_editor",
+                )
+
+            _n_ticked = int(_edited["accept"].sum()) if "accept" in _edited.columns else 0
+
+            if st.button(
+                "Confirm & proceed to Feature Review",
+                type="primary",
+                disabled=(_n_ticked == 0),
+                help="Tick at least one feature to enable",
+            ):
+                _n_added = _commit_candidate_selections(_edited, _filtered)
+                if _n_added > 0:
+                    st.session_state.features_from_candidates = True
+                    save_features_to_db(st.session_state.features)
+                    st.success(f"Added {_n_added} feature(s). Navigating to Feature Review…")
+                    st.session_state._nav_page = "4. Setup & Feature Review"
+                    st.rerun()
+                else:
+                    st.info("All ticked rows were already added. No new features added.")
+
+    with _right:
+        _render_3d_panel("_smw_3d_", large=True)
+
+
 def main():
     init_session()
     page = sidebar_nav()
     show_top_header()
 
     if   page == "1. Upload / Overview":         page_upload_step()
+    elif page == "Select Machining Work":         page_select_machining_work()
     elif page == "2. Material & Machine":         page_machine_setup()
     elif page == "3. Stock & Setup":              page_material_setup()
     elif page == "4. Setup & Feature Review":     page_setup_review()
