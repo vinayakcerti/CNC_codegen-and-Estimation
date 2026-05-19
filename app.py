@@ -2888,13 +2888,14 @@ def page_select_machining_work():
                     help="Select a group to highlight it in gold in the 3D viewer.",
                 )
                 if _hl_group_sel == "(none)" or not _groups:
-                    st.session_state._smw_highlight_candidate_ids = set()
+                    _hl_from_selectbox = set()
                 else:
                     _hl_gi = _hl_group_opts.index(_hl_group_sel) - 1
-                    if 0 <= _hl_gi < len(_groups):
-                        st.session_state._smw_highlight_candidate_ids = set(_groups[_hl_gi]["member_ids"])
-                    else:
-                        st.session_state._smw_highlight_candidate_ids = set()
+                    _hl_from_selectbox = (
+                        set(_groups[_hl_gi]["member_ids"]) if 0 <= _hl_gi < len(_groups) else set()
+                    )
+
+                st.caption("Ticked rows are highlighted in gold on the 3D model.")
 
                 with st.container(height=460):
                     _edited_grouped = st.data_editor(
@@ -2920,6 +2921,18 @@ def page_select_machining_work():
                         hide_index=True,
                         key="_smw_grouped_editor",
                     )
+
+                # Auto-highlight from ticked groups; fall back to selectbox (Raw Block: selectbox only)
+                _hl_from_ticks = set()
+                if "_group_idx" in _edited_grouped.columns:
+                    for _, _r in _edited_grouped.iterrows():
+                        if _r.get("accept"):
+                            _gi = int(_r["_group_idx"])
+                            if 0 <= _gi < len(_groups):
+                                _hl_from_ticks.update(_groups[_gi]["member_ids"])
+                st.session_state._smw_highlight_candidate_ids = (
+                    _hl_from_ticks if (_hl_from_ticks and not _is_raw_block) else _hl_from_selectbox
+                )
 
                 _n_ticked = int(_edited_grouped["accept"].sum()) if "accept" in _edited_grouped.columns else 0
 
@@ -2974,13 +2987,14 @@ def page_select_machining_work():
                     help="Select a feature to highlight it in gold in the 3D viewer.",
                 )
                 if _hl_flat_sel == "(none)" or not _filtered:
-                    st.session_state._smw_highlight_candidate_ids = set()
+                    _hl_from_selectbox = set()
                 else:
                     _hl_fi = _hl_flat_opts.index(_hl_flat_sel) - 1
-                    if 0 <= _hl_fi < len(_filtered):
-                        st.session_state._smw_highlight_candidate_ids = {_filtered[_hl_fi]["candidate_id"]}
-                    else:
-                        st.session_state._smw_highlight_candidate_ids = set()
+                    _hl_from_selectbox = (
+                        {_filtered[_hl_fi]["candidate_id"]} if 0 <= _hl_fi < len(_filtered) else set()
+                    )
+
+                st.caption("Ticked rows are highlighted in gold on the 3D model.")
 
                 with st.container(height=460):
                     _edited = st.data_editor(
@@ -3014,6 +3028,18 @@ def page_select_machining_work():
                         hide_index=True,
                         key="_smw_cand_editor",
                     )
+
+                # Auto-highlight from ticked rows; fall back to selectbox (Raw Block: selectbox only)
+                _hl_from_ticks = set()
+                if "candidate_id" in _edited.columns and "accept" in _edited.columns:
+                    for _, _r in _edited.iterrows():
+                        if _r.get("accept"):
+                            _cid = _r.get("candidate_id", "")
+                            if _cid:
+                                _hl_from_ticks.add(_cid)
+                st.session_state._smw_highlight_candidate_ids = (
+                    _hl_from_ticks if (_hl_from_ticks and not _is_raw_block) else _hl_from_selectbox
+                )
 
                 _n_ticked = int(_edited["accept"].sum()) if "accept" in _edited.columns else 0
 
