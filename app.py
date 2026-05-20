@@ -527,6 +527,7 @@ def sidebar_nav():
         nav_groups = {
             "CONFIGURE": [
                 "1. Upload / Overview",
+                "Part Setup",
                 "Select Machining Work",
                 "2. Material & Machine",
                 "3. Stock & Setup",
@@ -548,6 +549,7 @@ def sidebar_nav():
         # Display labels with icons — route keys are unchanged throughout the app
         _NAV_DISPLAY = {
             "1. Upload / Overview":       "📦 1. Upload / Overview",
+            "Part Setup":                 "🧱 Part Setup",
             "Select Machining Work":      "🧩 Select Machining Work",
             "2. Material & Machine":      "🏭 2. Material & Machine",
             "3. Stock & Setup":           "📐 3. Stock & Setup",
@@ -3101,12 +3103,115 @@ def page_select_machining_work():
         _render_3d_panel("_smw_3d_", large=True)
 
 
+def page_part_setup():
+    st.title("Part Setup")
+    st.caption(
+        "Review starting condition, STEP file, material, machine, and stock "
+        "before selecting machining work."
+    )
+    st.divider()
+
+    _spt  = st.session_state.get("starting_part_type", "Raw Block / Billet")
+    _mat  = st.session_state.get("selected_material") or {}
+    _mach = st.session_state.get("selected_machine")  or {}
+    _stk  = st.session_state.get("stock")             or {}
+    _fname = st.session_state.get("uploaded_filename")
+    _mesh  = st.session_state.get("step_mesh_data")
+
+    _left, _right = st.columns([2.2, 1.8])
+
+    with _left:
+        st.subheader("3D Preview")
+        if _mesh:
+            _render_3d_panel("_ps_3d_")
+        else:
+            st.info(
+                "No STEP file loaded. "
+                "Go to **📦 Upload / Overview** to upload a STEP file."
+            )
+
+        st.divider()
+        st.caption("Quick navigation")
+        _nb1, _nb2, _nb3, _nb4 = st.columns(4)
+        if _nb1.button("📦 Upload", use_container_width=True, key="_ps_nav_upload"):
+            st.session_state._nav_page = "1. Upload / Overview"
+            st.rerun()
+        if _nb2.button("🏭 Material", use_container_width=True, key="_ps_nav_mat"):
+            st.session_state._nav_page = "2. Material & Machine"
+            st.rerun()
+        if _nb3.button("📐 Stock", use_container_width=True, key="_ps_nav_stock"):
+            st.session_state._nav_page = "3. Stock & Setup"
+            st.rerun()
+        if _nb4.button("🧩 Select Work →", type="primary", use_container_width=True, key="_ps_nav_smw"):
+            st.session_state._nav_page = "Select Machining Work"
+            st.rerun()
+
+    with _right:
+        st.subheader("Setup Summary")
+
+        # Starting part type
+        _SPT_ICONS = {
+            "Raw Block / Billet":         "🧱",
+            "Weldment / Fabricated Part": "🔩",
+            "Casting / Forging":          "🪨",
+            "Existing Part / Rework":     "🔧",
+        }
+        _spt_icon = _SPT_ICONS.get(_spt, "")
+        st.markdown("**Starting Part Type**")
+        st.markdown(f"{_spt_icon} {_spt}")
+        st.divider()
+
+        # STEP file
+        st.markdown("**STEP File**")
+        if _fname:
+            st.success(f"📄 {_fname}")
+        else:
+            st.warning("No STEP file loaded")
+        st.divider()
+
+        # Material
+        st.markdown("**Material**")
+        if _mat:
+            st.markdown(f"**{_mat.get('name', '—')}**")
+            _mc1, _mc2 = st.columns(2)
+            _mc1.metric("Density", f"{_mat.get('density', '—')} g/cm³")
+            _mc2.metric("Machinability", str(_mat.get("machinability_factor", "—")))
+        else:
+            st.info("No material selected")
+        st.divider()
+
+        # Machine
+        st.markdown("**Machine**")
+        if _mach:
+            st.markdown(f"**{_mach.get('machine_name', '—')}**")
+            _mm1, _mm2 = st.columns(2)
+            _mm1.metric("Type",       _mach.get("machine_type", "—"))
+            _mm2.metric("Controller", _mach.get("controller",   "—"))
+        else:
+            st.info("No machine selected")
+        st.divider()
+
+        # Stock
+        st.markdown("**Stock**")
+        _l  = _stk.get("length", 0) or 0
+        _w  = _stk.get("width",  0) or 0
+        _h  = _stk.get("height", 0) or 0
+        _pv = _stk.get("part_volume", 0) or 0
+        if _l or _w or _h:
+            st.markdown(f"**{_l} × {_w} × {_h} mm**")
+            if _pv:
+                st.caption(f"Part volume: {_pv:.1f} cm³")
+        else:
+            st.info("No stock dimensions")
+
+
 def main():
     init_session()
     page = sidebar_nav()
     show_top_header()
 
-    if   page == "1. Upload / Overview":         page_upload_step()
+    if   page == "1. Upload / Overview":          page_upload_step()
+    elif page == "Part Setup":                    page_part_setup()
     elif page == "Select Machining Work":         page_select_machining_work()
     elif page == "2. Material & Machine":         page_machine_setup()
     elif page == "3. Stock & Setup":              page_material_setup()
