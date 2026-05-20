@@ -561,11 +561,17 @@ def sidebar_nav():
             "11. Data Tables":            "📊 11. Data Tables",
         }
 
+        _SECTION_DISPLAY = {
+            "CONFIGURE":      "Configure",
+            "WORKFLOW":       "Workflow & Estimate",
+            "HISTORY / ADMIN":"History / Admin",
+        }
+
         if "_nav_page" not in st.session_state:
             st.session_state._nav_page = "1. Upload / Overview"
 
         for section, pages in nav_groups.items():
-            st.caption(section)
+            st.caption(_SECTION_DISPLAY.get(section, section))
             for page in pages:
                 is_active = st.session_state._nav_page == page
                 if st.button(
