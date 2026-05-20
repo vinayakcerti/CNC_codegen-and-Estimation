@@ -545,6 +545,22 @@ def sidebar_nav():
             ],
         }
 
+        # Display labels with icons — route keys are unchanged throughout the app
+        _NAV_DISPLAY = {
+            "1. Upload / Overview":       "📦 1. Upload / Overview",
+            "Select Machining Work":      "🧩 Select Machining Work",
+            "2. Material & Machine":      "🏭 2. Material & Machine",
+            "3. Stock & Setup":           "📐 3. Stock & Setup",
+            "4. Setup & Feature Review":  "✅ 4. Setup & Feature Review",
+            "5. Tools":                   "🧰 5. Tools",
+            "6. Strategy / Operations":   "🛠️ 6. Strategy / Operations",
+            "7. Estimate / Pricing":      "💰 7. Estimate / Pricing",
+            "8. Export / Setup Sheet":    "📤 8. Export / Setup Sheet",
+            "9. History":                 "🕘 9. History",
+            "10. Tool Library":           "🧰 10. Tool Library",
+            "11. Data Tables":            "📊 11. Data Tables",
+        }
+
         if "_nav_page" not in st.session_state:
             st.session_state._nav_page = "1. Upload / Overview"
 
@@ -553,7 +569,7 @@ def sidebar_nav():
             for page in pages:
                 is_active = st.session_state._nav_page == page
                 if st.button(
-                    page,
+                    _NAV_DISPLAY.get(page, page),
                     key=f"_nav_btn_{page}",
                     use_container_width=True,
                     type="primary" if is_active else "secondary",
