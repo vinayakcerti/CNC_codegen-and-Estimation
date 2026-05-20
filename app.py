@@ -578,32 +578,47 @@ def page_upload_step():
     if st.session_state.pop("_job_reset_done", False):
         st.success("Job reset — all job data cleared. Upload a new STEP file to begin.")
 
-    # ── Starting Part Type ────────────────────────────────────────────
+    # ── Starting Part Type — visual cards ────────────────────────────
     st.subheader("What are you starting with?")
-    _PART_TYPE_OPTIONS = [
-        "Raw Block / Billet",
-        "Weldment / Fabricated Part",
-        "Casting / Forging",
-        "Existing Part / Rework",
-    ]
-    _PART_TYPE_CAPTIONS = [
-        "Making from fresh stock — all detected features treated as machining work",
-        "Already welded/fabricated — select only final machining operations",
-        "Near-shape part — select only final machining operations",
-        "Existing part to modify or repair — select only new/rework operations",
+    _PART_TYPES = [
+        ("Raw Block / Billet",         "🧱", "Fresh stock — detected features can be treated as machining work."),
+        ("Weldment / Fabricated Part", "🔩", "Already welded/fabricated — select only final machining operations."),
+        ("Casting / Forging",          "🪨", "Near-shape part — select only finishing/machining areas."),
+        ("Existing Part / Rework",     "🔧", "Existing component — select only new or rework operations."),
     ]
     _current_pt = st.session_state.get("starting_part_type", "Raw Block / Billet")
-    _pt_idx = _PART_TYPE_OPTIONS.index(_current_pt) if _current_pt in _PART_TYPE_OPTIONS else 0
-    _selected_pt = st.radio(
-        "Starting part type",
-        _PART_TYPE_OPTIONS,
-        captions=_PART_TYPE_CAPTIONS,
-        index=_pt_idx,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="_upload_part_type",
-    )
-    st.session_state.starting_part_type = _selected_pt
+    _pt_cols = st.columns(4, gap="small")
+    for _pti, (_pt_val, _pt_icon, _pt_desc) in enumerate(_PART_TYPES):
+        _is_sel = (_current_pt == _pt_val)
+        with _pt_cols[_pti]:
+            _border = "#1a73e8" if _is_sel else "#cccccc"
+            _bg     = "#e8f0fe" if _is_sel else "#fafafa"
+            _check  = "✅ " if _is_sel else ""
+            st.markdown(
+                f'<div style="border:2.5px solid {_border};border-radius:10px;'
+                f'padding:14px 10px 8px;background:{_bg};text-align:center;">'
+                f'<div style="font-size:2.2rem;line-height:1.2;">{_pt_icon}</div>'
+                f'<div style="font-weight:700;font-size:0.85rem;margin-top:6px;">{_check}{_pt_val}</div>'
+                f'<div style="font-size:0.77rem;color:#555;margin-top:5px;line-height:1.35;">{_pt_desc}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            if _is_sel:
+                st.button(
+                    "✓ Selected",
+                    key=f"_pt_card_{_pti}",
+                    disabled=True,
+                    use_container_width=True,
+                    type="primary",
+                )
+            else:
+                if st.button(
+                    "Select",
+                    key=f"_pt_card_{_pti}",
+                    use_container_width=True,
+                ):
+                    st.session_state.starting_part_type = _pt_val
+                    st.rerun()
     st.divider()
 
     # ── Clear / Start New ─────────────────────────────────────────────
