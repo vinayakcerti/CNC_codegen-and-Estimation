@@ -3112,8 +3112,6 @@ def page_part_setup():
     st.divider()
 
     _spt  = st.session_state.get("starting_part_type", "Raw Block / Billet")
-    _mat  = st.session_state.get("selected_material") or {}
-    _mach = st.session_state.get("selected_machine")  or {}
     _stk  = st.session_state.get("stock")             or {}
     _fname = st.session_state.get("uploaded_filename")
     _mesh  = st.session_state.get("step_mesh_data")
@@ -3169,40 +3167,126 @@ def page_part_setup():
             st.warning("No STEP file loaded")
         st.divider()
 
-        # Material
-        st.markdown("**Material**")
-        if _mat:
-            st.markdown(f"**{_mat.get('name', '—')}**")
-            _mc1, _mc2 = st.columns(2)
-            _mc1.metric("Density", f"{_mat.get('density', '—')} g/cm³")
-            _mc2.metric("Machinability", str(_mat.get("machinability_factor", "—")))
-        else:
-            st.info("No material selected")
-        st.divider()
+        # ── Material — editable expander ─────────────────────────────────
+        _materials = st.session_state.materials
+        _mat_names = [m["name"] for m in _materials]
+        _cur_mat   = (st.session_state.get("selected_material") or {}).get("name", "")
+        _ps_mat_default = next((i for i, n in enumerate(_mat_names) if n == _cur_mat), 0)
 
-        # Machine
-        st.markdown("**Machine**")
-        if _mach:
-            st.markdown(f"**{_mach.get('machine_name', '—')}**")
-            _mm1, _mm2 = st.columns(2)
-            _mm1.metric("Type",       _mach.get("machine_type", "—"))
-            _mm2.metric("Controller", _mach.get("controller",   "—"))
-        else:
-            st.info("No machine selected")
-        st.divider()
+        with st.expander(f"🏭 Material — {_cur_mat or '—'}", expanded=False):
+            _ps_mat_idx = st.selectbox(
+                "Material profile",
+                range(len(_mat_names)),
+                format_func=lambda i: _mat_names[i],
+                index=_ps_mat_default,
+                key="ps_mat_sel",
+            )
+            _ps_mat = copy.deepcopy(_materials[_ps_mat_idx])
+            _pmc1, _pmc2, _pmc3 = st.columns(3)
+            with _pmc1:
+                _ps_mat["density"] = st.number_input(
+                    "Density (g/cm³)", value=float(_ps_mat["density"]), step=0.1,
+                    key="ps_density",
+                )
+            with _pmc2:
+                _ps_mat["machinability_factor"] = st.number_input(
+                    "Machinability", value=float(_ps_mat["machinability_factor"]),
+                    min_value=0.1, max_value=2.0, step=0.05,
+                    key="ps_mach_factor",
+                )
+            with _pmc3:
+                _ps_mat["safety_factor"] = st.number_input(
+                    "Safety factor", value=float(_ps_mat["safety_factor"]),
+                    min_value=1.0, max_value=3.0, step=0.05,
+                    key="ps_safety_factor",
+                )
+            if st.button("Apply Material", key="ps_apply_material", use_container_width=True):
+                st.session_state.materials[_ps_mat_idx] = _ps_mat
+                st.session_state.selected_material = _ps_mat
+                st.success(f"Material **{_ps_mat['name']}** applied.")
+            else:
+                st.session_state.selected_material = _ps_mat
 
-        # Stock
-        st.markdown("**Stock**")
+        # ── Machine — editable expander ──────────────────────────────────
+        _machines      = st.session_state.machines
+        _machine_names = [m["machine_name"] for m in _machines]
+        _cur_mach      = (st.session_state.get("selected_machine") or {}).get("machine_name", "")
+        _ps_mach_default = next((i for i, n in enumerate(_machine_names) if n == _cur_mach), 0)
+
+        with st.expander(f"🔩 Machine — {_cur_mach or '—'}", expanded=False):
+            _ps_mach_idx = st.selectbox(
+                "Machine profile",
+                range(len(_machine_names)),
+                format_func=lambda i: _machine_names[i],
+                index=_ps_mach_default,
+                key="ps_mach_sel",
+            )
+            _ps_mach = copy.deepcopy(_machines[_ps_mach_idx])
+            _pmm1, _pmm2 = st.columns(2)
+            with _pmm1:
+                _ps_mach["machine_name"] = st.text_input(
+                    "Machine name", value=_ps_mach["machine_name"], key="ps_mach_name",
+                )
+                _MACH_TYPES = ["VMC","CNC Milling","CNC Turning","HMC","Turn-Mill","Gang Turning","Swiss Type"]
+                _ps_mach["machine_type"] = st.selectbox(
+                    "Machine type", _MACH_TYPES,
+                    index=_MACH_TYPES.index(_ps_mach["machine_type"]) if _ps_mach["machine_type"] in _MACH_TYPES else 0,
+                    key="ps_mach_type",
+                )
+                _CTRLS = [
+                    "Fanuc 0i-MF","Fanuc 0i-TF","Fanuc 31i","Fanuc 32i",
+                    "Siemens 828D","Siemens 840D","Mazatrol",
+                    "Mitsubishi M70","Mitsubishi M80","Haas","Generic",
+                ]
+                _ps_mach["controller"] = st.selectbox(
+                    "Controller", _CTRLS,
+                    index=_CTRLS.index(_ps_mach["controller"]) if _ps_mach["controller"] in _CTRLS else 10,
+                    key="ps_controller",
+                )
+                _ps_mach["max_spindle_rpm"] = st.number_input(
+                    "Max spindle RPM", value=int(_ps_mach["max_spindle_rpm"]),
+                    min_value=100, step=100, key="ps_max_rpm",
+                )
+            with _pmm2:
+                _ps_mach["max_feed_rate"] = st.number_input(
+                    "Max feed (mm/min)", value=int(_ps_mach["max_feed_rate"]),
+                    min_value=100, step=100, key="ps_max_feed",
+                )
+                _ps_mach["rapid_feed_rate"] = st.number_input(
+                    "Rapid feed (mm/min)", value=int(_ps_mach["rapid_feed_rate"]),
+                    min_value=100, step=100, key="ps_rapid_feed",
+                )
+                _ps_mach["tool_change_time_s"] = st.number_input(
+                    "Tool change (s)", value=int(_ps_mach["tool_change_time_s"]),
+                    min_value=1, step=1, key="ps_tool_change_time",
+                )
+                _ps_mach["setup_time_min"] = st.number_input(
+                    "Setup time (min)", value=int(_ps_mach["setup_time_min"]),
+                    min_value=1, step=1, key="ps_setup_time",
+                )
+            if st.button("Apply Machine Settings", key="ps_apply_machine", use_container_width=True):
+                st.session_state.machines[_ps_mach_idx] = _ps_mach
+                st.session_state.selected_machine = _ps_mach
+                st.success(f"Machine **{_ps_mach['machine_name']}** applied.")
+            else:
+                st.session_state.selected_machine = _ps_mach
+
+        # ── Stock — summary only ──────────────────────────────────────────
         _l  = _stk.get("length", 0) or 0
         _w  = _stk.get("width",  0) or 0
         _h  = _stk.get("height", 0) or 0
         _pv = _stk.get("part_volume", 0) or 0
-        if _l or _w or _h:
-            st.markdown(f"**{_l} × {_w} × {_h} mm**")
-            if _pv:
-                st.caption(f"Part volume: {_pv:.1f} cm³")
-        else:
-            st.info("No stock dimensions")
+        _stk_label = f"📐 Stock — {_l} × {_w} × {_h} mm" if (_l or _w or _h) else "📐 Stock — not set"
+        with st.expander(_stk_label, expanded=False):
+            if _l or _w or _h:
+                st.markdown(f"**{_l} × {_w} × {_h} mm**")
+                if _pv:
+                    st.caption(f"Part volume: {_pv:.1f} cm³")
+            else:
+                st.info("No stock dimensions")
+            if st.button("Edit in Stock & Setup →", key="ps_nav_stock_exp", use_container_width=True):
+                st.session_state._nav_page = "3. Stock & Setup"
+                st.rerun()
 
 
 def main():
