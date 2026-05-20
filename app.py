@@ -3271,22 +3271,44 @@ def page_part_setup():
             else:
                 st.session_state.selected_machine = _ps_mach
 
-        # ── Stock — summary only ──────────────────────────────────────────
-        _l  = _stk.get("length", 0) or 0
-        _w  = _stk.get("width",  0) or 0
-        _h  = _stk.get("height", 0) or 0
-        _pv = _stk.get("part_volume", 0) or 0
-        _stk_label = f"📐 Stock — {_l} × {_w} × {_h} mm" if (_l or _w or _h) else "📐 Stock — not set"
+        # ── Stock — editable expander ─────────────────────────────────────
+        _l  = _stk.get("length", 150.0) or 150.0
+        _w  = _stk.get("width",  100.0) or 100.0
+        _h  = _stk.get("height",  50.0) or  50.0
+        _sv = _stk.get("stock_volume", 0) or 0
+        _pv = _stk.get("part_volume",  0) or 0
+        _stk_label = f"📐 Stock — {_l} × {_w} × {_h} mm" if _sv else "📐 Stock — not set"
         with st.expander(_stk_label, expanded=False):
-            if _l or _w or _h:
-                st.markdown(f"**{_l} × {_w} × {_h} mm**")
-                if _pv:
-                    st.caption(f"Part volume: {_pv:.1f} cm³")
-            else:
-                st.info("No stock dimensions")
-            if st.button("Edit in Stock & Setup →", key="ps_nav_stock_exp", use_container_width=True):
-                st.session_state._nav_page = "3. Stock & Setup"
+            _ps_sl, _ps_sw, _ps_sh = st.columns(3)
+            _new_l = _ps_sl.number_input(
+                "Length (mm)", value=float(_l), min_value=0.001, step=0.5, key="ps_stock_length",
+            )
+            _new_w = _ps_sw.number_input(
+                "Width (mm)",  value=float(_w), min_value=0.001, step=0.5, key="ps_stock_width",
+            )
+            _new_h = _ps_sh.number_input(
+                "Height (mm)", value=float(_h), min_value=0.001, step=0.5, key="ps_stock_height",
+            )
+            _new_sv = (_new_l * _new_w * _new_h) / 1000.0  # mm³ → cm³
+            if st.button("Apply Stock", key="ps_apply_stock", use_container_width=True):
+                st.session_state.stock["length"]       = _new_l
+                st.session_state.stock["width"]        = _new_w
+                st.session_state.stock["height"]       = _new_h
+                st.session_state.stock["stock_volume"] = round(_new_sv, 3)
+                st.success(f"Stock updated: {_new_l} × {_new_w} × {_new_h} mm")
                 st.rerun()
+            st.divider()
+            _sm1, _sm2, _sm3 = st.columns(3)
+            _sm1.metric("Stock vol (cm³)", f"{_new_sv:.2f}")
+            if _pv:
+                _removed     = max(_new_sv - _pv, 0)
+                _removed_pct = (_removed / _new_sv * 100) if _new_sv > 0 else 0
+                _sm2.metric("Part vol (cm³)", f"{_pv:.2f}")
+                _sm3.metric("Removed", f"{_removed:.2f} cm³", delta=f"{_removed_pct:.1f}%")
+            else:
+                _sm2.metric("Part vol (cm³)", "—")
+                _sm3.metric("Removed", "—")
+                st.caption("Upload a STEP file to calculate part volume and removed material.")
 
 
 def main():
