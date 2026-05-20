@@ -509,7 +509,7 @@ def reset_current_job_state():
     }
     st.session_state.step_uploader_key = st.session_state.get("step_uploader_key", 0) + 1
     save_features_to_db([])
-    st.session_state._nav_page = "1. Upload / Overview"
+    st.session_state._nav_page = "Part Setup"
     st.session_state._job_reset_done = True
 
 
@@ -526,9 +526,9 @@ def sidebar_nav():
 
         nav_groups = {
             "CONFIGURE": [
-                "1. Upload / Overview",
                 "Part Setup",
                 "Select Machining Work",
+                "1. Upload / Overview",
                 "2. Material & Machine",
                 "3. Stock & Setup",
             ],
@@ -548,11 +548,11 @@ def sidebar_nav():
 
         # Display labels with icons — route keys are unchanged throughout the app
         _NAV_DISPLAY = {
-            "1. Upload / Overview":       "📦 1. Upload / Overview",
             "Part Setup":                 "🧱 Part Setup",
             "Select Machining Work":      "🧩 Select Machining Work",
-            "2. Material & Machine":      "🏭 2. Material & Machine",
-            "3. Stock & Setup":           "📐 3. Stock & Setup",
+            "1. Upload / Overview":       "📦 Upload Details",
+            "2. Material & Machine":      "🏭 Material & Machine Details",
+            "3. Stock & Setup":           "📐 Stock Details",
             "4. Setup & Feature Review":  "✅ 4. Setup & Feature Review",
             "5. Tools":                   "🧰 5. Tools",
             "6. Strategy / Operations":   "🛠️ 6. Strategy / Operations",
@@ -570,7 +570,7 @@ def sidebar_nav():
         }
 
         if "_nav_page" not in st.session_state:
-            st.session_state._nav_page = "1. Upload / Overview"
+            st.session_state._nav_page = "Part Setup"
 
         for section, pages in nav_groups.items():
             st.caption(_SECTION_DISPLAY.get(section, section))
@@ -3108,6 +3108,15 @@ def page_part_setup():
     st.caption(
         "Review starting condition, STEP file, material, machine, and stock "
         "before selecting machining work."
+    )
+
+    if st.session_state.pop("_job_reset_done", False):
+        st.success("Job reset — all data cleared. Upload a new STEP file to begin.")
+
+    st.info(
+        "**Start here:** upload or review the part STEP file on "
+        "**📦 Upload Details**, choose material and machine, set stock dimensions, "
+        "then continue to **🧩 Select Machining Work**."
     )
     st.divider()
 
