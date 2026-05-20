@@ -220,13 +220,17 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
     _HL             = bool(highlight_color)
     _hl_legend_done = suppress_hl_legend   # True = legend entry already shown elsewhere
 
-    # Line widths — thicker when rendering as the highlight overlay
-    _lw_hole   = 5   if _HL else 3
-    _lw_face   = 4   if _HL else 2
-    _lw_slot   = 4   if _HL else 1.5
-    _lw_pocket = 5   if _HL else 3
-    _lw_step   = 5   if _HL else 3
-    _marker_sz = 15  if _HL else 10
+    # Line widths — significantly thicker in highlight mode for clear visibility
+    _lw_hole   = 10  if _HL else 3
+    _lw_face   = 8   if _HL else 2
+    _lw_slot   = 8   if _HL else 1.5
+    _lw_pocket = 10  if _HL else 3
+    _lw_step   = 10  if _HL else 3
+    _marker_sz = 20  if _HL else 10
+
+    # Near-black shadow drawn behind the gold line for contrast
+    _SHADOW_C = "#111111"
+    _SHADOW_W = 5   # extra width beyond the gold line
 
     for cand in candidates:
         ftype  = cand.get("feature_type", "Unknown")
@@ -260,51 +264,79 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
         if "hole" in ft_low or "boring" in ft_low:
             r = (diameter / 2) if diameter > 0 else 5.0
             theta = [math.radians(a) for a in range(0, 370, 10)]
+            cx = [x + r * math.cos(t) for t in theta]
+            cy = [y + r * math.sin(t) for t in theta]
+            if _HL:
+                traces.append(go.Scatter3d(
+                    x=cx, y=cy, z=[zmax] * len(theta), mode="lines",
+                    line=dict(color=_SHADOW_C, width=_lw_hole + _SHADOW_W),
+                    name="", legendgroup=_leg_group, showlegend=False, hoverinfo="none",
+                ))
             traces.append(go.Scatter3d(
-                x=[x + r * math.cos(t) for t in theta],
-                y=[y + r * math.sin(t) for t in theta],
-                z=[zmax] * len(theta),
+                x=cx, y=cy, z=[zmax] * len(theta),
                 mode="lines",
                 line=dict(color=color, width=_lw_hole),
-                name=_leg_name,
-                legendgroup=_leg_group,
-                showlegend=_show_leg,
-                hovertext=hover,
-                hoverinfo="text",
+                name=_leg_name, legendgroup=_leg_group, showlegend=_show_leg,
+                hovertext=hover, hoverinfo="text",
             ))
 
-        # ── Face Milling: dashed rectangle at zmax or zmin ─────────────────
+        # ── Face Milling: filled surface (HL) or dashed rectangle (normal) ──
         elif "face mill" in ft_low:
             z_face = zmin if "bottom" in label.lower() else zmax
             half_l = (length / 2) if length > 0 else 30.0
             half_w = (width  / 2) if width  > 0 else 30.0
             rx = [x - half_l, x + half_l, x + half_l, x - half_l, x - half_l]
             ry = [y - half_w, y - half_w, y + half_w, y + half_w, y - half_w]
-            traces.append(go.Scatter3d(
-                x=rx, y=ry, z=[z_face] * 5,
-                mode="lines",
-                line=dict(color=color, width=_lw_face, dash="dash"),
-                name=_leg_name,
-                legendgroup=_leg_group,
-                showlegend=_show_leg,
-                hovertext=hover,
-                hoverinfo="text",
-            ))
+            if _HL:
+                # Filled gold rectangle so the full face area is visibly highlighted
+                fx = [x - half_l, x + half_l, x + half_l, x - half_l]
+                fy = [y - half_w, y - half_w, y + half_w, y + half_w]
+                traces.append(go.Mesh3d(
+                    x=fx, y=fy, z=[z_face] * 4,
+                    i=[0, 0], j=[1, 2], k=[2, 3],
+                    color=color, opacity=0.65, flatshading=True,
+                    name=_leg_name, legendgroup=_leg_group, showlegend=_show_leg,
+                    hovertext=hover, hoverinfo="text",
+                ))
+                # Shadow border
+                traces.append(go.Scatter3d(
+                    x=rx, y=ry, z=[z_face] * 5, mode="lines",
+                    line=dict(color=_SHADOW_C, width=_lw_face + _SHADOW_W),
+                    name="", legendgroup=_leg_group, showlegend=False, hoverinfo="none",
+                ))
+                # Gold border (solid, not dashed)
+                traces.append(go.Scatter3d(
+                    x=rx, y=ry, z=[z_face] * 5, mode="lines",
+                    line=dict(color=color, width=_lw_face),
+                    name=_leg_name, legendgroup=_leg_group, showlegend=False,
+                    hovertext=hover, hoverinfo="text",
+                ))
+            else:
+                traces.append(go.Scatter3d(
+                    x=rx, y=ry, z=[z_face] * 5,
+                    mode="lines",
+                    line=dict(color=color, width=_lw_face, dash="dash"),
+                    name=_leg_name, legendgroup=_leg_group, showlegend=_show_leg,
+                    hovertext=hover, hoverinfo="text",
+                ))
 
         # ── Slot: dashed outline at zmax — clearly secondary / fallback marker ──
         elif "slot" in ft_low:
             half_x, half_y = _infer_half_xy(cand, xmin, xmax, ymin, ymax)
             rx = [x - half_x, x + half_x, x + half_x, x - half_x, x - half_x]
             ry = [y - half_y, y - half_y, y + half_y, y + half_y, y - half_y]
+            if _HL:
+                traces.append(go.Scatter3d(
+                    x=rx, y=ry, z=[zmax] * 5, mode="lines",
+                    line=dict(color=_SHADOW_C, width=_lw_slot + _SHADOW_W),
+                    name="", legendgroup=_leg_group, showlegend=False, hoverinfo="none",
+                ))
             traces.append(go.Scatter3d(
                 x=rx, y=ry, z=[zmax] * 5,
                 mode="lines",
                 line=dict(color=color, width=_lw_slot, dash="dash"),
-                name=_leg_name,
-                legendgroup=_leg_group,
-                showlegend=_show_leg,
-                hovertext=hover,
-                hoverinfo="text",
+                name=_leg_name, legendgroup=_leg_group, showlegend=_show_leg,
+                hovertext=hover, hoverinfo="text",
             ))
 
         # ── Pocket: solid rectangle outline at zmax ─────────────────────────
@@ -312,31 +344,37 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
             half_x, half_y = _infer_half_xy(cand, xmin, xmax, ymin, ymax)
             rx = [x - half_x, x + half_x, x + half_x, x - half_x, x - half_x]
             ry = [y - half_y, y - half_y, y + half_y, y + half_y, y - half_y]
+            if _HL:
+                traces.append(go.Scatter3d(
+                    x=rx, y=ry, z=[zmax] * 5, mode="lines",
+                    line=dict(color=_SHADOW_C, width=_lw_pocket + _SHADOW_W),
+                    name="", legendgroup=_leg_group, showlegend=False, hoverinfo="none",
+                ))
             traces.append(go.Scatter3d(
                 x=rx, y=ry, z=[zmax] * 5,
                 mode="lines",
                 line=dict(color=color, width=_lw_pocket),
-                name=_leg_name,
-                legendgroup=_leg_group,
-                showlegend=_show_leg,
-                hovertext=hover,
-                hoverinfo="text",
+                name=_leg_name, legendgroup=_leg_group, showlegend=_show_leg,
+                hovertext=hover, hoverinfo="text",
             ))
 
         # ── Step / Shoulder: cross marker at (x, y, zmax) ──────────────────
         elif "step" in ft_low or "shoulder" in ft_low:
             arm = 8.0
+            sx_pts = [x - arm, x + arm, None, x,       x      ]
+            sy_pts = [y,       y,       None, y - arm, y + arm]
+            if _HL:
+                traces.append(go.Scatter3d(
+                    x=sx_pts, y=sy_pts, z=[zmax] * 5, mode="lines",
+                    line=dict(color=_SHADOW_C, width=_lw_step + _SHADOW_W),
+                    name="", legendgroup=_leg_group, showlegend=False, hoverinfo="none",
+                ))
             traces.append(go.Scatter3d(
-                x=[x - arm, x + arm, None, x,       x      ],
-                y=[y,       y,       None, y - arm, y + arm],
-                z=[zmax] * 5,
+                x=sx_pts, y=sy_pts, z=[zmax] * 5,
                 mode="lines",
                 line=dict(color=color, width=_lw_step),
-                name=_leg_name,
-                legendgroup=_leg_group,
-                showlegend=_show_leg,
-                hovertext=hover,
-                hoverinfo="text",
+                name=_leg_name, legendgroup=_leg_group, showlegend=_show_leg,
+                hovertext=hover, hoverinfo="text",
             ))
 
         # ── Chamfer: diamond marker at (x, y, zmax) ────────────────────────
@@ -344,12 +382,12 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
             traces.append(go.Scatter3d(
                 x=[x], y=[y], z=[zmax],
                 mode="markers",
-                marker=dict(size=_marker_sz, color=color, symbol="diamond"),
-                name=_leg_name,
-                legendgroup=_leg_group,
-                showlegend=_show_leg,
-                hovertext=hover,
-                hoverinfo="text",
+                marker=dict(
+                    size=_marker_sz, color=color, symbol="diamond",
+                    line=dict(color=_SHADOW_C, width=3) if _HL else dict(),
+                ),
+                name=_leg_name, legendgroup=_leg_group, showlegend=_show_leg,
+                hovertext=hover, hoverinfo="text",
             ))
 
         # ── Optional text label floating above the marker ──────────────────
@@ -359,11 +397,12 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
                 z_lbl = (zmin - max((zmax - zmin) * 0.08, 3.0)
                          if "face mill" in ft_low and "bottom" in label.lower()
                          else z_text)
+                _lbl_size = 22 if _HL else 16
                 traces.append(go.Scatter3d(
                     x=[x], y=[y], z=[z_lbl],
                     mode="text",
                     text=[short],
-                    textfont=dict(size=16, color=color, family="monospace"),
+                    textfont=dict(size=_lbl_size, color=color, family="monospace"),
                     textposition="middle center",
                     name="",
                     legendgroup=_leg_group,
@@ -573,6 +612,7 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
 
     # ── Highlighted CAD face overlays (gold, always on top) ──────────────────
     # Rendered regardless of show_face_colors so the highlight is always visible.
+    # flatshading=True + high ambient → uniform bold gold, not washed out by lighting.
     _HL_COLOR        = "#FFD700"   # gold
     _hl_legend_shown = False
     for _fc in _hl_face_cands:
@@ -590,10 +630,10 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
                 j=[_t[1] for _t in _tris],
                 k=[_t[2] for _t in _tris],
                 color=_HL_COLOR,
-                opacity=0.95,
-                flatshading=False,
-                lighting=dict(ambient=0.7, diffuse=0.9, specular=0.5,
-                              roughness=0.3, fresnel=0.3),
+                opacity=1.0,
+                flatshading=True,
+                lighting=dict(ambient=0.95, diffuse=0.6, specular=0.7,
+                              roughness=0.15, fresnel=0.5),
                 lightposition=dict(x=1, y=1, z=2),
                 name="Highlighted",
                 legendgroup="highlight",
