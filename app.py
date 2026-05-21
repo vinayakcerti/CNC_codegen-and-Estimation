@@ -590,6 +590,62 @@ def sidebar_nav():
         return st.session_state._nav_page
 
 
+def _parse_and_tessellate(file_bytes: bytes, filename: str):
+    """Parse a STEP file, tessellate for 3D preview, and store all results in session state.
+
+    Returns the parse_result dict so the caller can show unit-conversion / error banners.
+    """
+    st.session_state.uploaded_filename = filename
+
+    parse_result = parse_step_auto(file_bytes)
+    geo_result   = parse_step_geometry(file_bytes)
+
+    if parse_result["success"]:
+        st.session_state.step_parse_result      = parse_result
+        st.session_state.step_geometry          = geo_result
+        st.session_state.stock["length"]        = parse_result["length_mm"]
+        st.session_state.stock["width"]         = parse_result["width_mm"]
+        st.session_state.stock["height"]        = parse_result["height_mm"]
+        st.session_state.stock["stock_volume"]  = parse_result["stock_volume_cm3"]
+        st.session_state.stock["part_volume"]   = parse_result["part_volume_cm3"]
+        st.session_state.step_candidates         = parse_result.get("candidate_features", [])
+        st.session_state.step_candidate_warnings = parse_result.get("candidate_warnings", [])
+        st.session_state.added_candidate_ids     = set()
+
+        _mesh_data     = None
+        _tmp_tess_path = None
+        st.session_state.pop("_tess_error", None)
+        try:
+            import cadquery as cq
+            with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as _tmp_tess:
+                _tmp_tess.write(file_bytes)
+                _tmp_tess_path = _tmp_tess.name
+            _cq_tess = cq.importers.importStep(_tmp_tess_path)
+            _verts, _tris = _cq_tess.val().tessellate(0.5)
+            if _verts:
+                _mesh_data = {
+                    "x": [v.x for v in _verts],
+                    "y": [v.y for v in _verts],
+                    "z": [v.z for v in _verts],
+                    "i": [t[0] for t in _tris],
+                    "j": [t[1] for t in _tris],
+                    "k": [t[2] for t in _tris],
+                }
+        except ImportError:
+            pass
+        except Exception as _tess_exc:
+            st.session_state._tess_error = f"{type(_tess_exc).__name__}: {_tess_exc}"
+        finally:
+            if _tmp_tess_path and os.path.exists(_tmp_tess_path):
+                try:
+                    os.unlink(_tmp_tess_path)
+                except OSError:
+                    pass
+        st.session_state.step_mesh_data = _mesh_data
+
+    return parse_result
+
+
 def page_upload_step():
     # ── Page title ────────────────────────────────────────────────────
     st.title("Upload & Overview")
@@ -3105,70 +3161,122 @@ def page_select_machining_work():
 
 def page_part_setup():
     st.title("Part Setup")
-    st.caption(
-        "Review starting condition, STEP file, material, machine, and stock "
-        "before selecting machining work."
-    )
+    st.caption("Upload a STEP file and configure material, machine, and stock to begin planning.")
 
     if st.session_state.pop("_job_reset_done", False):
         st.success("Job reset — all data cleared. Upload a new STEP file to begin.")
 
-    st.info(
-        "**Start here:** upload or review the part STEP file on "
-        "**📦 Upload Details**, choose material and machine, set stock dimensions, "
-        "then continue to **🧩 Select Machining Work**."
-    )
-    st.divider()
-
-    _spt  = st.session_state.get("starting_part_type", "Raw Block / Billet")
-    _stk  = st.session_state.get("stock")             or {}
+    _spt   = st.session_state.get("starting_part_type", "Raw Block / Billet")
+    _stk   = st.session_state.get("stock") or {}
     _fname = st.session_state.get("uploaded_filename")
     _mesh  = st.session_state.get("step_mesh_data")
 
     _left, _right = st.columns([2.2, 1.8])
 
+    # ── Left column: upload area or large 3D preview ──────────────────────
     with _left:
-        st.subheader("3D Preview")
         if _mesh:
-            _render_3d_panel("_ps_3d_")
+            st.subheader("3D Preview")
+            _render_3d_panel("_ps_3d_", large=True)
+            _pr = st.session_state.get("step_parse_result") or {}
+            if _pr.get("success"):
+                _psu1, _psu2, _psu3 = st.columns(3)
+                _psu1.metric("L (mm)", f"{_pr.get('length_mm', 0):.1f}")
+                _psu2.metric("W (mm)", f"{_pr.get('width_mm', 0):.1f}")
+                _psu3.metric("H (mm)", f"{_pr.get('height_mm', 0):.1f}")
+            _cl1, _cl2 = st.columns([3, 1])
+            _cl1.caption(f"Loaded: **{_fname}**")
+            if _cl2.button("Clear & Start New", type="secondary", key="ps_clear_job"):
+                reset_current_job_state()
+                st.rerun()
         else:
+            st.subheader("Upload STEP File")
             st.info(
-                "No STEP file loaded. "
-                "Go to **📦 Upload / Overview** to upload a STEP file."
+                "Upload a STEP or STP file to extract bounding box geometry, "
+                "part volume, and feature candidates."
             )
+            _ps_uploaded = st.file_uploader(
+                "Upload STEP / STP file",
+                type=["step", "stp"],
+                help="Supported: STEP AP203, AP214, AP242 (ASCII format)",
+                key="ps_step_uploader",
+            )
+            if _ps_uploaded:
+                _ps_bytes = _ps_uploaded.read()
+                with st.spinner("Parsing STEP file..."):
+                    _ps_result = _parse_and_tessellate(_ps_bytes, _ps_uploaded.name)
+                if _ps_result["success"]:
+                    if _ps_result.get("converted"):
+                        _raw_lbl = _ps_result["detected_unit_label"].split("(")[0].strip()
+                        st.warning(
+                            f"Unit conversion applied: file coordinates are in **{_raw_lbl}** "
+                            f"(detected via {_ps_result['detection_method']}) — "
+                            f"multiplied by **{_ps_result['conversion_factor']}** to convert to mm."
+                        )
+                    else:
+                        st.success(
+                            f"Units confirmed as **mm** "
+                            f"(detected via {_ps_result['detection_method']}) — no conversion needed."
+                        )
+                    for _pw in _ps_result.get("warnings", []):
+                        st.warning(_pw)
+                    if _ps_result.get("cadquery_warning"):
+                        st.warning(f"**CadQuery fallback:** {_ps_result['cadquery_warning']}")
+                    _n_cands = len(st.session_state.get("step_candidates", []))
+                    st.success(f"Parsed — **{_n_cands} feature candidate(s)** detected.")
+                    st.rerun()
+                else:
+                    st.warning(f"**STEP parse failed:** {_ps_result['message']}")
+                    _pdet = _ps_result.get("detail")
+                    _psug = _ps_result.get("suggestion")
+                    if _pdet or _psug:
+                        with st.expander("Why did this happen? / Suggested action", expanded=True):
+                            if _pdet:
+                                st.markdown(f"**Why:** {_pdet}")
+                            if _psug:
+                                st.markdown(f"**Action:** {_psug}")
 
-        st.divider()
-        st.caption("Quick navigation")
-        _nb1, _nb2, _nb3, _nb4 = st.columns(4)
-        if _nb1.button("📦 Upload", use_container_width=True, key="_ps_nav_upload"):
-            st.session_state._nav_page = "1. Upload / Overview"
-            st.rerun()
-        if _nb2.button("🏭 Material", use_container_width=True, key="_ps_nav_mat"):
-            st.session_state._nav_page = "2. Material & Machine"
-            st.rerun()
-        if _nb3.button("📐 Stock", use_container_width=True, key="_ps_nav_stock"):
-            st.session_state._nav_page = "3. Stock & Setup"
-            st.rerun()
-        if _nb4.button("🧩 Select Work →", type="primary", use_container_width=True, key="_ps_nav_smw"):
-            st.session_state._nav_page = "Select Machining Work"
-            st.rerun()
-
+    # ── Right column: part type cards + configure + next ─────────────────
     with _right:
-        st.subheader("Setup Summary")
+        st.subheader("Starting Part Type")
+        _PART_TYPES_PS = [
+            ("Raw Block / Billet",         "🧱", "Fresh stock — detected features can be treated as machining work."),
+            ("Weldment / Fabricated Part", "🔩", "Already welded/fabricated — select only final machining operations."),
+            ("Casting / Forging",          "🪨", "Near-shape part — select only finishing/machining areas."),
+            ("Existing Part / Rework",     "🔧", "Existing component — select only new or rework operations."),
+        ]
+        _ps_pt_cols = st.columns(2, gap="small")
+        for _pti, (_pt_val, _pt_icon, _pt_desc) in enumerate(_PART_TYPES_PS):
+            _is_sel = (_spt == _pt_val)
+            with _ps_pt_cols[_pti % 2]:
+                _border = "#1a73e8" if _is_sel else "#cccccc"
+                _bg     = "#e8f0fe" if _is_sel else "#fafafa"
+                _check  = "✅ " if _is_sel else ""
+                st.markdown(
+                    f'<div style="border:2.5px solid {_border};border-radius:10px;'
+                    f'padding:10px 8px 6px;background:{_bg};text-align:center;margin-bottom:8px;">'
+                    f'<div style="font-size:1.8rem;line-height:1.2;">{_pt_icon}</div>'
+                    f'<div style="font-weight:700;font-size:0.8rem;margin-top:5px;">{_check}{_pt_val}</div>'
+                    f'<div style="font-size:0.72rem;color:#555;margin-top:4px;line-height:1.3;">{_pt_desc}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                if _is_sel:
+                    st.button(
+                        "✓ Selected",
+                        key=f"ps_pt_card_{_pti}",
+                        disabled=True,
+                        use_container_width=True,
+                        type="primary",
+                    )
+                else:
+                    if st.button("Select", key=f"ps_pt_card_{_pti}", use_container_width=True):
+                        st.session_state.starting_part_type = _pt_val
+                        st.rerun()
 
-        # Starting part type
-        _SPT_ICONS = {
-            "Raw Block / Billet":         "🧱",
-            "Weldment / Fabricated Part": "🔩",
-            "Casting / Forging":          "🪨",
-            "Existing Part / Rework":     "🔧",
-        }
-        _spt_icon = _SPT_ICONS.get(_spt, "")
-        st.markdown("**Starting Part Type**")
-        st.markdown(f"{_spt_icon} {_spt}")
         st.divider()
 
-        # STEP file
+        # STEP file status
         st.markdown("**STEP File**")
         if _fname:
             st.success(f"📄 {_fname}")
@@ -3298,7 +3406,7 @@ def page_part_setup():
             _new_h = _ps_sh.number_input(
                 "Height (mm)", value=float(_h), min_value=0.001, step=0.5, key="ps_stock_height",
             )
-            _new_sv = (_new_l * _new_w * _new_h) / 1000.0  # mm³ → cm³
+            _new_sv = (_new_l * _new_w * _new_h) / 1000.0
             if st.button("Apply Stock", key="ps_apply_stock", use_container_width=True):
                 st.session_state.stock["length"]       = _new_l
                 st.session_state.stock["width"]        = _new_w
@@ -3318,6 +3426,27 @@ def page_part_setup():
                 _sm2.metric("Part vol (cm³)", "—")
                 _sm3.metric("Removed", "—")
                 st.caption("Upload a STEP file to calculate part volume and removed material.")
+
+        # ── Next → Select Machining Work ──────────────────────────────────
+        st.divider()
+        if _fname:
+            if st.button(
+                "🧩 Next → Select Machining Work",
+                type="primary",
+                use_container_width=True,
+                key="ps_next_smw",
+            ):
+                st.session_state._nav_page = "Select Machining Work"
+                st.rerun()
+        else:
+            st.button(
+                "🧩 Next → Select Machining Work",
+                type="primary",
+                use_container_width=True,
+                key="ps_next_smw",
+                disabled=True,
+                help="Upload a STEP file first",
+            )
 
 
 def main():
