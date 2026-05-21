@@ -43,18 +43,76 @@ APP_NAME = "CNC Plan and Process Pro"
 APP_TAGLINE = "Professional CNC Planning for Modern Workshops"
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "public", "logo.png")
 
+# ── Navigation constants ──────────────────────────────────────────────────────
+_SECTION_TABS = {
+    "CONFIGURE": [
+        ("Part Setup",                "🧱 Part Setup"),
+        ("Select Machining Work",     "🧩 Select Work"),
+        ("4. Setup & Feature Review", "✅ Feature Review"),
+    ],
+    "WORKFLOW": [
+        ("6. Strategy / Operations",  "🛠️ Strategy"),
+        ("7. Estimate / Pricing",     "💰 Estimate"),
+        ("8. Export / Setup Sheet",   "📤 Export"),
+    ],
+    "HISTORY / ADMIN": [
+        ("9. History",        "🕘 History"),
+        ("5. Tools",          "🧰 Tools"),
+        ("11. Data Tables",   "📊 Data Tables"),
+    ],
+}
+
+# Derived: route key → section (built from _SECTION_TABS so it stays in sync)
+_PAGE_TO_SECTION: dict[str, str] = {
+    route_key: section
+    for section, tabs in _SECTION_TABS.items()
+    for route_key, _ in tabs
+}
+# Orphaned/hidden pages — map to their nearest section as a fallback
+_PAGE_TO_SECTION.update({
+    "1. Upload / Overview":  "CONFIGURE",
+    "2. Material & Machine": "CONFIGURE",
+    "3. Stock & Setup":      "CONFIGURE",
+    "10. Tool Library":      "HISTORY / ADMIN",
+})
+
 
 def show_top_header():
-    col_title, col_logo = st.columns([8, 1.2])
-    with col_title:
-        st.markdown(
-            f"<span style='font-size:1.15rem;font-weight:600;color:#555;'>{APP_TAGLINE}</span>",
-            unsafe_allow_html=True,
-        )
-    with col_logo:
-        if os.path.exists(LOGO_PATH):
-            st.image(LOGO_PATH, width=120)
+    st.markdown(
+        f"<span style='font-size:1.0rem;font-weight:600;color:#777;'>{APP_TAGLINE}</span>",
+        unsafe_allow_html=True,
+    )
     st.divider()
+
+
+def top_tabs(page: str) -> str:
+    """Render a horizontal row of workflow step buttons above the page content.
+
+    Derives the active section from _PAGE_TO_SECTION, then renders one button
+    per tab in that section.  The button matching the current _nav_page is
+    highlighted primary; all others are secondary.  Clicking any button sets
+    _nav_page to that route key and triggers a rerun.
+
+    Returns st.session_state._nav_page (updated if a tab was clicked).
+    """
+    active_section = _PAGE_TO_SECTION.get(page, "CONFIGURE")
+    tabs = _SECTION_TABS[active_section]
+
+    _tab_cols = st.columns(len(tabs))
+    for _col, (route_key, label) in zip(_tab_cols, tabs):
+        with _col:
+            if st.button(
+                label,
+                key=f"_top_tab_{route_key}",
+                use_container_width=True,
+                type="primary" if page == route_key else "secondary",
+            ):
+                st.session_state._nav_page = route_key
+                st.rerun()
+
+    st.divider()
+    return st.session_state._nav_page
+
 
 DEMO_FEATURES = [
     {
@@ -515,78 +573,46 @@ def reset_current_job_state():
 
 def sidebar_nav():
     with st.sidebar:
-        if os.path.exists(LOGO_PATH):
-            st.image(LOGO_PATH, width=160)
+        # ── App title (text only — logo appears at the bottom) ────────────
         st.markdown(
-            f"<div style='font-size:1.05rem;font-weight:700;margin-top:0.2rem;'>⚙️ {APP_NAME}</div>",
+            "<div style='font-size:1.1rem;font-weight:700;padding:0.3rem 0 0.1rem;'>"
+            "⚙️ CNC Plan & Process Pro</div>",
             unsafe_allow_html=True,
         )
-        st.caption("Professional CNC Planning")
+        st.caption("Professional CNC planning")
         st.divider()
 
-        nav_groups = {
-            "CONFIGURE": [
-                "Part Setup",
-                "Select Machining Work",
-                "1. Upload / Overview",
-                "2. Material & Machine",
-                "3. Stock & Setup",
-            ],
-            "WORKFLOW": [
-                "4. Setup & Feature Review",
-                "5. Tools",
-                "6. Strategy / Operations",
-                "7. Estimate / Pricing",
-                "8. Export / Setup Sheet",
-            ],
-            "HISTORY / ADMIN": [
-                "9. History",
-                "10. Tool Library",
-                "11. Data Tables",
-            ],
-        }
-
-        # Display labels with icons — route keys are unchanged throughout the app
-        _NAV_DISPLAY = {
-            "Part Setup":                 "🧱 Part Setup",
-            "Select Machining Work":      "🧩 Select Machining Work",
-            "1. Upload / Overview":       "📦 Upload Details",
-            "2. Material & Machine":      "🏭 Material & Machine Details",
-            "3. Stock & Setup":           "📐 Stock Details",
-            "4. Setup & Feature Review":  "✅ 4. Setup & Feature Review",
-            "5. Tools":                   "🧰 5. Tools",
-            "6. Strategy / Operations":   "🛠️ 6. Strategy / Operations",
-            "7. Estimate / Pricing":      "💰 7. Estimate / Pricing",
-            "8. Export / Setup Sheet":    "📤 8. Export / Setup Sheet",
-            "9. History":                 "🕘 9. History",
-            "10. Tool Library":           "🧰 10. Tool Library",
-            "11. Data Tables":            "📊 11. Data Tables",
-        }
-
-        _SECTION_DISPLAY = {
-            "CONFIGURE":      "Configure",
-            "WORKFLOW":       "Workflow & Estimate",
-            "HISTORY / ADMIN":"History / Admin",
-        }
-
+        # ── Workflow section buttons ───────────────────────────────────────
         if "_nav_page" not in st.session_state:
             st.session_state._nav_page = "Part Setup"
 
-        for section, pages in nav_groups.items():
-            st.caption(_SECTION_DISPLAY.get(section, section))
-            for page in pages:
-                is_active = st.session_state._nav_page == page
-                if st.button(
-                    _NAV_DISPLAY.get(page, page),
-                    key=f"_nav_btn_{page}",
-                    use_container_width=True,
-                    type="primary" if is_active else "secondary",
-                ):
-                    st.session_state._nav_page = page
-                    st.rerun()
+        _active_section = _PAGE_TO_SECTION.get(st.session_state._nav_page, "CONFIGURE")
 
+        # (section_key, button_label, default_page_for_that_section)
+        _WORKFLOW_BUTTONS = [
+            ("CONFIGURE",       "⚙️ Configure",          "Part Setup"),
+            ("WORKFLOW",        "📋 Workflow & Estimate", "6. Strategy / Operations"),
+            ("HISTORY / ADMIN", "🕘 History / Admin",     "9. History"),
+        ]
+
+        for _sec_key, _sec_label, _default_page in _WORKFLOW_BUTTONS:
+            if st.button(
+                _sec_label,
+                key=f"_nav_section_{_sec_key}",
+                use_container_width=True,
+                type="primary" if _active_section == _sec_key else "secondary",
+            ):
+                st.session_state._nav_page = _default_page
+                st.rerun()
+
+        # ── Bottom: small logo + safety notice ────────────────────────────
         st.divider()
-        st.warning("**SAFETY NOTICE**\nAll generated CNC code is DRAFT only. Always verify in CAM/simulator before running on a machine.")
+        if os.path.exists(LOGO_PATH):
+            st.image(LOGO_PATH, width=64)
+        st.warning(
+            "**SAFETY NOTICE**\nAll generated CNC code is DRAFT only. "
+            "Always verify in CAM/simulator before running on a machine."
+        )
         return st.session_state._nav_page
 
 
@@ -3453,6 +3479,7 @@ def main():
     init_session()
     page = sidebar_nav()
     show_top_header()
+    page = top_tabs(page)
 
     if   page == "1. Upload / Overview":          page_upload_step()
     elif page == "Part Setup":                    page_part_setup()
