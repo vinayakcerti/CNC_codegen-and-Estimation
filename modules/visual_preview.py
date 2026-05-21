@@ -554,7 +554,7 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
             roughness=0.45, fresnel=0.15,
         ),
         lightposition=dict(x=1, y=1, z=2),
-        name="Part (solid body)",
+        name="Part body",
         showlegend=True,
     ))
 
@@ -697,9 +697,14 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
         margin=dict(l=0, r=0, t=55, b=0),
         legend=dict(
             orientation="h",
+            x=0.02,
+            y=0.02,
+            xanchor="left",
             yanchor="bottom",
-            y=0,
-            font=dict(size=12),
+            font=dict(size=14),
+            bgcolor="rgba(255,255,255,0.75)",
+            bordercolor="rgba(0,0,0,0.15)",
+            borderwidth=1,
         ),
     )
     return fig

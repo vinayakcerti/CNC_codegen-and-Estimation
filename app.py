@@ -175,10 +175,10 @@ _FTYPE_MAP = {
 
 
 def _render_3d_panel(key_prefix: str, large: bool = False):
-    """Render the interactive 3D preview panel with toggle checkboxes.
+    """Render the interactive 3D preview panel with horizontal viewer controls.
 
     key_prefix: unique prefix for all widget keys (avoids Streamlit duplicate-key errors).
-    large: when True, sets chart height=620 and omits the subheader.
+    large: when True, sets chart height=680 and omits the subheader.
     """
     if not large:
         st.subheader("3D Preview")
@@ -194,33 +194,35 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
         for c in _all_cands
     )
 
-    _show_stock = st.checkbox(
-        "Show stock / bounding box",
+    # ── Viewer controls — compact horizontal row ──────────────────────────
+    _vc1, _vc2, _vc3, _vc4, _vc5 = st.columns(5)
+    _show_stock = _vc1.checkbox(
+        "Show stock",
         value=False,
         key=f"{key_prefix}show_stock",
         help="Overlay the semi-transparent stock / bounding box on the part",
     )
-    _show_face_colors = st.checkbox(
-        "Show CAD face colors",
+    _show_face_colors = _vc2.checkbox(
+        "CAD face colors",
         value=True,
         key=f"{key_prefix}show_face_colors",
-        help="Color detected feature surfaces using actual CAD face geometry (holes, pockets, chamfers)",
+        help="Color detected feature surfaces using actual CAD face geometry",
     )
-    _show_face_milling = st.checkbox(
-        "Show face-milling surfaces",
+    _show_face_milling = _vc3.checkbox(
+        "Face-milling",
         value=False,
         key=f"{key_prefix}show_face_milling",
-        help="Overlay top/bottom face-milling surfaces (covers the base body — off by default)",
+        help="Overlay top/bottom face-milling surfaces (off by default)",
         disabled=not _show_face_colors,
     )
-    _show_markers = st.checkbox(
-        "Show approximate markers",
+    _show_markers = _vc4.checkbox(
+        "Markers",
         value=not _has_face_colors,
         key=f"{key_prefix}show_markers",
-        help="Show fallback marker outlines for features without exact CAD face data (e.g. slots)",
+        help="Show fallback marker outlines for features without CAD face data",
     )
-    _show_labels = st.checkbox(
-        "Show measurement labels on markers",
+    _show_labels = _vc5.checkbox(
+        "Labels",
         value=False,
         key=f"{key_prefix}show_labels",
         disabled=not _show_markers,
@@ -243,68 +245,77 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
             show_markers=_show_markers,
             highlighted_candidate_ids=_hl_ids or None,
         )
+        fig_mesh.update_layout(
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                x=0.02,
+                y=0.02,
+                xanchor="left",
+                yanchor="bottom",
+                font=dict(size=14),
+                bgcolor="rgba(255,255,255,0.75)",
+                bordercolor="rgba(0,0,0,0.15)",
+                borderwidth=1,
+            ),
+        )
         if large:
-            fig_mesh.update_layout(height=620)
+            fig_mesh.update_layout(height=680)
         st.plotly_chart(fig_mesh, use_container_width=True)
-        if _hl_ids:
-            st.caption(
-                "**Gold = highlighted** — selected group/feature from the side panel."
-            )
-        _caption_parts = [
-            "**Solid body** = machined part",
-            "Rotate: drag  ·  Zoom: scroll  ·  Pan: right-drag",
-            "Planning reference only — not a machining simulation.",
+
+        # ── Custom readable legend (stays on page even when chart is fullscreened) ──
+        _LEGEND_ITEMS: list[tuple[str, str]] = [
+            ("#9E9E9E", "Part body"),
+            ("#87CEEB", "Face Milling"),
+            ("#1E90FF", "Hole"),
+            ("#8B008B", "Large Hole / Boring"),
+            ("#FF8C00", "Slot / Slot-like opening"),
+            ("#228B22", "Pocket"),
+            ("#8B4513", "Step"),
+            ("#DA70D6", "Chamfer"),
+            ("#2F4F4F", "Outer Profile"),
         ]
         if _show_stock:
-            _caption_parts.insert(1, "**Transparent box** = stock / bounding box")
-        st.caption("  ·  ".join(_caption_parts))
-        st.caption(
-            "Colored faces = exact CAD surfaces (holes, pockets, chamfers). "
-            "Dashed outlines = approximate fallback markers (slots, steps)."
+            _LEGEND_ITEMS.insert(1, ("#D3D3D3", "Stock / bounding box"))
+        if _hl_ids:
+            _LEGEND_ITEMS.append(("#FFD700", "Highlighted selection"))
+        _swatch_html = "".join(
+            f"<span style='display:inline-flex;align-items:center;gap:5px;"
+            f"margin:0 14px 5px 0;white-space:nowrap;'>"
+            f"<span style='width:13px;height:13px;background:{_lc};border-radius:2px;"
+            f"display:inline-block;border:1px solid rgba(0,0,0,0.18);flex-shrink:0;'></span>"
+            f"<span style='font-size:13px;color:#333;'>{_ll}</span></span>"
+            for _lc, _ll in _LEGEND_ITEMS
         )
+        st.markdown(
+            f"<div style='display:flex;flex-wrap:wrap;margin:6px 0 4px;'>"
+            f"{_swatch_html}</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<div style='font-size:12px;color:#666;margin-top:2px;'>"
+            "Rotate: drag &nbsp;·&nbsp; Zoom: scroll &nbsp;·&nbsp; Pan: right-drag"
+            " &nbsp;·&nbsp; Planning preview only — verify toolpaths in CAM.</div>",
+            unsafe_allow_html=True,
+        )
+
     elif (_geo and _geo.get("success")
           and (_geo.get("line_segments") or _geo.get("circle_traces"))):
         fig_wire = build_3d_view(_stk, [], step_geometry=_geo)
         if large:
-            fig_wire.update_layout(height=620)
+            fig_wire.update_layout(height=680)
         st.plotly_chart(fig_wire, use_container_width=True)
-        st.caption(
-            "Wireframe preview — STEP edge geometry. "
-            "Planning reference only."
-        )
+        st.caption("Wireframe preview — STEP edge geometry · Planning reference only.")
     elif st.session_state.get("step_parse_result"):
         _tess_err = st.session_state.get("_tess_error")
         if _tess_err:
             st.warning(f"3D tessellation failed: {_tess_err}")
         st.info(
-            "Solid 3D preview unavailable. Showing planning reference only. "
+            "Solid 3D preview unavailable. "
             "Upload requires CadQuery/OCC-enabled Python for the solid preview."
         )
     else:
         st.info("Upload a STEP file to see the interactive 3D preview here.")
-
-    st.caption(
-        "**Solid body** = finished machined part.  "
-        "**Stock box** = original bounding stock.  "
-        "Colored faces = exact CAD surfaces; "
-        "markers = approximate planning overlays."
-    )
-
-    _legend_types = [
-        "Face Milling", "Hole", "Large Hole / Boring",
-        "Slot", "Pocket", "Step", "Chamfer", "Outer Profile",
-    ]
-    _swatches = "  ".join(
-        f"<span style='display:inline-block;width:12px;height:12px;"
-        f"background:{FEATURE_COLORS[ft]};border-radius:2px;"
-        f"vertical-align:middle;margin-right:3px;'></span>"
-        f"<span style='font-size:0.78rem;vertical-align:middle;'>{ft}</span>"
-        for ft in _legend_types
-    )
-    st.markdown(
-        f"<div style='margin-top:4px;line-height:2.2;'>{_swatches}</div>",
-        unsafe_allow_html=True,
-    )
 
 
 def _commit_candidate_selections(edited_df, candidates) -> int:
@@ -572,8 +583,40 @@ def reset_current_job_state():
 
 
 def sidebar_nav():
+    import base64 as _b64
+    _logo_img_html = ""
+    if os.path.exists(LOGO_PATH):
+        with open(LOGO_PATH, "rb") as _lf:
+            _logo_b64 = _b64.b64encode(_lf.read()).decode()
+        _logo_img_html = (
+            f'<img src="data:image/png;base64,{_logo_b64}" '
+            f'style="width:90px;display:block;margin-bottom:6px;" />'
+        )
+
     with st.sidebar:
-        # ── App title (text only — logo appears at the bottom) ────────────
+        # ── CSS: fixed-position bottom branding ───────────────────────────
+        st.markdown(
+            """
+<style>
+.cnc-sidebar-brand {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 22rem;
+    background: var(--background-color, #ffffff);
+    padding: 0.6rem 1rem 0.75rem;
+    border-top: 1px solid rgba(49,51,63,0.15);
+    z-index: 99;
+}
+section[data-testid="stSidebar"] > div:first-child {
+    padding-bottom: 160px !important;
+}
+</style>
+""",
+            unsafe_allow_html=True,
+        )
+
+        # ── App title ─────────────────────────────────────────────────────
         st.markdown(
             "<div style='font-size:1.1rem;font-weight:700;padding:0.3rem 0 0.1rem;'>"
             "⚙️ CNC Plan & Process Pro</div>",
@@ -582,13 +625,12 @@ def sidebar_nav():
         st.caption("Professional CNC planning")
         st.divider()
 
-        # ── Workflow section buttons ───────────────────────────────────────
+        # ── Workflow section buttons ──────────────────────────────────────
         if "_nav_page" not in st.session_state:
             st.session_state._nav_page = "Part Setup"
 
         _active_section = _PAGE_TO_SECTION.get(st.session_state._nav_page, "CONFIGURE")
 
-        # (section_key, button_label, default_page_for_that_section)
         _WORKFLOW_BUTTONS = [
             ("CONFIGURE",       "⚙️ Configure",          "Part Setup"),
             ("WORKFLOW",        "📋 Workflow & Estimate", "6. Strategy / Operations"),
@@ -605,14 +647,19 @@ def sidebar_nav():
                 st.session_state._nav_page = _default_page
                 st.rerun()
 
-        # ── Bottom: small logo + safety notice ────────────────────────────
-        st.divider()
-        if os.path.exists(LOGO_PATH):
-            st.image(LOGO_PATH, width=64)
-        st.warning(
-            "**SAFETY NOTICE**\nAll generated CNC code is DRAFT only. "
-            "Always verify in CAM/simulator before running on a machine."
+        # ── Fixed-position bottom branding block ──────────────────────────
+        st.markdown(
+            f'<div class="cnc-sidebar-brand">'
+            f'{_logo_img_html}'
+            f'<div style="font-size:11px;font-weight:700;color:#c04000;margin-bottom:3px;">'
+            f'⚠️ SAFETY NOTICE</div>'
+            f'<div style="font-size:10.5px;color:#555;line-height:1.45;">'
+            f'All generated CNC code is DRAFT only. '
+            f'Always verify in CAM/simulator before running on a machine.</div>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
+
         return st.session_state._nav_page
 
 
@@ -2930,9 +2977,16 @@ def page_select_machining_work():
     )
     st.divider()
 
-    _left, _right = st.columns([1.2, 2.8])
+    # Capture previous highlight IDs so the rerun-on-change guard below works
+    # even though the 3D panel (left) renders before the selection panel (right).
+    _prev_hl_ids = st.session_state.get("_smw_highlight_candidate_ids") or set()
+
+    _left, _right = st.columns([2.2, 1.8])
 
     with _left:
+        _render_3d_panel("_smw_3d_", large=True)
+
+    with _right:
         st.subheader("Feature Candidates")
 
         _is_raw_block   = _spt == "Raw Block / Billet"
@@ -3051,9 +3105,12 @@ def page_select_machining_work():
                             _gi = int(_r["_group_idx"])
                             if 0 <= _gi < len(_groups):
                                 _hl_from_ticks.update(_groups[_gi]["member_ids"])
-                st.session_state._smw_highlight_candidate_ids = (
+                _new_hl_ids = (
                     _hl_from_ticks if (_hl_from_ticks and not _is_raw_block) else _hl_from_selectbox
                 )
+                st.session_state._smw_highlight_candidate_ids = _new_hl_ids
+                if _new_hl_ids != _prev_hl_ids:
+                    st.rerun()
 
                 _n_ticked = int(_edited_grouped["accept"].sum()) if "accept" in _edited_grouped.columns else 0
 
@@ -3158,9 +3215,12 @@ def page_select_machining_work():
                             _cid = _r.get("candidate_id", "")
                             if _cid:
                                 _hl_from_ticks.add(_cid)
-                st.session_state._smw_highlight_candidate_ids = (
+                _new_hl_ids = (
                     _hl_from_ticks if (_hl_from_ticks and not _is_raw_block) else _hl_from_selectbox
                 )
+                st.session_state._smw_highlight_candidate_ids = _new_hl_ids
+                if _new_hl_ids != _prev_hl_ids:
+                    st.rerun()
 
                 _n_ticked = int(_edited["accept"].sum()) if "accept" in _edited.columns else 0
 
@@ -3181,40 +3241,32 @@ def page_select_machining_work():
                     else:
                         st.info("All ticked rows were already added. No new features added.")
 
-    with _right:
-        _render_3d_panel("_smw_3d_", large=True)
-
 
 def page_part_setup():
-    st.title("Part Setup")
+    # State reads first — needed for the header clear button
+    _fname = st.session_state.get("uploaded_filename")
+    _spt   = st.session_state.get("starting_part_type", "Raw Block / Billet")
+    _stk   = st.session_state.get("stock") or {}
+    _mesh  = st.session_state.get("step_mesh_data")
+
+    # ── Page header: title + clear button aligned right ──────────────────
+    _ph_title, _ph_clear = st.columns([5, 1])
+    _ph_title.title("Part Setup")
+    if _fname:
+        if _ph_clear.button("Clear & Start New", type="secondary", key="ps_clear_job"):
+            reset_current_job_state()
+            st.rerun()
     st.caption("Upload a STEP file and configure material, machine, and stock to begin planning.")
 
     if st.session_state.pop("_job_reset_done", False):
         st.success("Job reset — all data cleared. Upload a new STEP file to begin.")
-
-    _spt   = st.session_state.get("starting_part_type", "Raw Block / Billet")
-    _stk   = st.session_state.get("stock") or {}
-    _fname = st.session_state.get("uploaded_filename")
-    _mesh  = st.session_state.get("step_mesh_data")
 
     _left, _right = st.columns([2.2, 1.8])
 
     # ── Left column: upload area or large 3D preview ──────────────────────
     with _left:
         if _mesh:
-            st.subheader("3D Preview")
             _render_3d_panel("_ps_3d_", large=True)
-            _pr = st.session_state.get("step_parse_result") or {}
-            if _pr.get("success"):
-                _psu1, _psu2, _psu3 = st.columns(3)
-                _psu1.metric("L (mm)", f"{_pr.get('length_mm', 0):.1f}")
-                _psu2.metric("W (mm)", f"{_pr.get('width_mm', 0):.1f}")
-                _psu3.metric("H (mm)", f"{_pr.get('height_mm', 0):.1f}")
-            _cl1, _cl2 = st.columns([3, 1])
-            _cl1.caption(f"Loaded: **{_fname}**")
-            if _cl2.button("Clear & Start New", type="secondary", key="ps_clear_job"):
-                reset_current_job_state()
-                st.rerun()
         else:
             st.subheader("Upload STEP File")
             st.info(
