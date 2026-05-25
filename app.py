@@ -3000,29 +3000,19 @@ def page_select_machining_work():
                 )
 
             if _use_grouping:
-                # ── GROUPED MODE ────────────────────────────────────────────
+                # ── GROUPED MODE (card-style selection) ─────────────────────
                 _groups = _build_candidate_groups(_filtered, _spt)
-                _group_rows = []
+
+                # Pre-seed widget keys so checkboxes/selects have correct defaults
+                # before any user interaction on this render.
                 for _gi, _g in enumerate(_groups):
-                    _all_added  = all(mid in _added_ids for mid in _g["member_ids"])
-                    _some_added = any(mid in _added_ids for mid in _g["member_ids"])
-                    if _all_added:
-                        _status = "All added ✓"
-                    elif _some_added:
-                        _n_done = sum(1 for m in _g["member_ids"] if m in _added_ids)
-                        _status = f"Partial ✓ ({_n_done}/{_g['count']})"
-                    else:
-                        _status = ""
-                    _group_rows.append({
-                        "_group_idx":         _gi,
-                        "accept":             (not _all_added) and _is_raw_block,
-                        "status":             _status,
-                        "machining_action":   _default_action,
-                        "display_type":       _g["display_type"],
-                        "description":        _g["description"],
-                        "count":              _g["count"],
-                        "confidence_summary": _g["confidence_summary"],
-                    })
+                    _ka = f"_smw_card_accept_{_gi}"
+                    _kx = f"_smw_card_action_{_gi}"
+                    if _ka not in st.session_state:
+                        _seed_all_added = all(mid in _added_ids for mid in _g["member_ids"])
+                        st.session_state[_ka] = (not _seed_all_added) and _is_raw_block
+                    if _kx not in st.session_state:
+                        st.session_state[_kx] = _default_action
 
                 # ── Highlight selectbox (grouped) ────────────────────────────
                 _hl_group_opts = ["(none)"] + [
@@ -3043,41 +3033,68 @@ def page_select_machining_work():
                         set(_groups[_hl_gi]["member_ids"]) if 0 <= _hl_gi < len(_groups) else set()
                     )
 
-                st.caption("Ticked rows are highlighted in gold on the 3D model.")
+                st.caption("Check groups to machine — ticked cards highlight gold in the 3D viewer.")
 
-                with st.container(height=460):
-                    _edited_grouped = st.data_editor(
-                        pd.DataFrame(_group_rows),
-                        column_order=[
-                            "accept", "status", "machining_action",
-                            "display_type", "description", "count", "confidence_summary",
-                        ],
-                        column_config={
-                            "accept":           st.column_config.CheckboxColumn("Machine this?", default=False),
-                            "status":           st.column_config.TextColumn("Status",            disabled=True, width="small"),
-                            "machining_action": st.column_config.SelectboxColumn(
-                                "Action",
-                                options=["Machine", "Existing Geometry – No Machining", "Reference Only"],
-                                required=True,
-                            ),
-                            "display_type":       st.column_config.TextColumn("Type",               disabled=True),
-                            "description":        st.column_config.TextColumn("Description / Size", disabled=True),
-                            "count":              st.column_config.NumberColumn("Count",             disabled=True, format="%d"),
-                            "confidence_summary": st.column_config.TextColumn("Confidence",          disabled=True, width="small"),
-                        },
-                        use_container_width=True,
-                        hide_index=True,
-                        key="_smw_grouped_editor",
-                    )
+                _FTYPE_ICON = {
+                    "Hole": "🔵", "Large Hole / Boring": "🟣",
+                    "Pocket": "🟢", "Slot": "🟠", "Step": "🟡",
+                    "Face Milling": "⬜", "Outer Profile": "🔷", "Chamfer": "🔸",
+                }
+                _ACTION_OPTS = ["Machine", "Existing Geometry – No Machining", "Reference Only"]
 
-                # Auto-highlight from ticked groups; fall back to selectbox (Raw Block: selectbox only)
+                with st.container(height=420):
+                    for _gi, _g in enumerate(_groups):
+                        _all_added  = all(mid in _added_ids for mid in _g["member_ids"])
+                        _some_added = any(mid in _added_ids for mid in _g["member_ids"])
+                        _icon = _FTYPE_ICON.get(_g["feature_type"], "◾")
+                        if _all_added:
+                            _badge = (
+                                "<span style='background:#d1fae5;color:#065f46;"
+                                "border-radius:3px;padding:1px 5px;font-size:10px;"
+                                "font-weight:600;'>All added ✓</span>"
+                            )
+                        elif _some_added:
+                            _nd = sum(1 for _m in _g["member_ids"] if _m in _added_ids)
+                            _badge = (
+                                f"<span style='background:#fef3c7;color:#92400e;"
+                                f"border-radius:3px;padding:1px 5px;font-size:10px;"
+                                f"font-weight:600;'>Partial ✓ ({_nd}/{_g['count']})</span>"
+                            )
+                        else:
+                            _badge = ""
+                        _cc1, _cc2, _cc3 = st.columns([0.45, 2.7, 1.85])
+                        with _cc1:
+                            st.checkbox(
+                                "",
+                                key=f"_smw_card_accept_{_gi}",
+                                disabled=_all_added,
+                                label_visibility="collapsed",
+                            )
+                        with _cc2:
+                            st.markdown(
+                                f"**{_icon} {_g['display_type']}** &nbsp;·&nbsp; {_g['description']}"
+                                f"<br><span style='font-size:11px;color:#555;'>"
+                                f"{_g['count']} found &nbsp;·&nbsp; conf: {_g['confidence_summary']}"
+                                + (f" &nbsp;{_badge}" if _badge else "")
+                                + "</span>",
+                                unsafe_allow_html=True,
+                            )
+                        with _cc3:
+                            st.selectbox(
+                                "",
+                                options=_ACTION_OPTS,
+                                key=f"_smw_card_action_{_gi}",
+                                disabled=_all_added,
+                                label_visibility="collapsed",
+                            )
+                        st.divider()
+
+                # Collect checked state after all cards are rendered
                 _hl_from_ticks = set()
-                if "_group_idx" in _edited_grouped.columns:
-                    for _, _r in _edited_grouped.iterrows():
-                        if _r.get("accept"):
-                            _gi = int(_r["_group_idx"])
-                            if 0 <= _gi < len(_groups):
-                                _hl_from_ticks.update(_groups[_gi]["member_ids"])
+                for _gi, _g in enumerate(_groups):
+                    if st.session_state.get(f"_smw_card_accept_{_gi}", False):
+                        _hl_from_ticks.update(_g["member_ids"])
+
                 _new_hl_ids = (
                     _hl_from_ticks if (_hl_from_ticks and not _is_raw_block) else _hl_from_selectbox
                 )
@@ -3085,7 +3102,33 @@ def page_select_machining_work():
                 if _new_hl_ids != _prev_hl_ids:
                     st.rerun()
 
-                _n_ticked = int(_edited_grouped["accept"].sum()) if "accept" in _edited_grouped.columns else 0
+                _n_ticked = sum(
+                    1 for _gi in range(len(_groups))
+                    if st.session_state.get(f"_smw_card_accept_{_gi}", False)
+                )
+
+                with st.expander("Advanced: flat group table"):
+                    _adv_rows = []
+                    for _gi, _g in enumerate(_groups):
+                        _aa = all(mid in _added_ids for mid in _g["member_ids"])
+                        _sa = any(mid in _added_ids for mid in _g["member_ids"])
+                        if _aa:
+                            _ast = "All added ✓"
+                        elif _sa:
+                            _nad = sum(1 for _m in _g["member_ids"] if _m in _added_ids)
+                            _ast = f"Partial ✓ ({_nad}/{_g['count']})"
+                        else:
+                            _ast = ""
+                        _adv_rows.append({
+                            "accept":      st.session_state.get(f"_smw_card_accept_{_gi}", False),
+                            "status":      _ast,
+                            "action":      st.session_state.get(f"_smw_card_action_{_gi}", _default_action),
+                            "type":        _g["display_type"],
+                            "description": _g["description"],
+                            "count":       _g["count"],
+                            "confidence":  _g["confidence_summary"],
+                        })
+                    st.dataframe(pd.DataFrame(_adv_rows), use_container_width=True, hide_index=True)
 
                 if st.button(
                     "Confirm & proceed to Feature Review",
@@ -3094,7 +3137,15 @@ def page_select_machining_work():
                     help="Tick at least one group to enable",
                     key="_smw_confirm_grouped",
                 ):
-                    _n_added = _commit_group_selections(_edited_grouped, _groups, _filtered)
+                    _card_df = pd.DataFrame([
+                        {
+                            "_group_idx":       _gi,
+                            "accept":           st.session_state.get(f"_smw_card_accept_{_gi}", False),
+                            "machining_action": st.session_state.get(f"_smw_card_action_{_gi}", _default_action),
+                        }
+                        for _gi in range(len(_groups))
+                    ])
+                    _n_added = _commit_group_selections(_card_df, _groups, _filtered)
                     if _n_added > 0:
                         st.session_state.features_from_candidates = True
                         save_features_to_db(st.session_state.features)
