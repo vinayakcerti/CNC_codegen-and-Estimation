@@ -583,39 +583,7 @@ def reset_current_job_state():
 
 
 def sidebar_nav():
-    import base64 as _b64
-    _logo_img_html = ""
-    if os.path.exists(LOGO_PATH):
-        with open(LOGO_PATH, "rb") as _lf:
-            _logo_b64 = _b64.b64encode(_lf.read()).decode()
-        _logo_img_html = (
-            f'<img src="data:image/png;base64,{_logo_b64}" '
-            f'style="width:90px;display:block;margin-bottom:6px;" />'
-        )
-
     with st.sidebar:
-        # ── CSS: fixed-position bottom branding ───────────────────────────
-        st.markdown(
-            """
-<style>
-.cnc-sidebar-brand {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    width: 22rem;
-    background: var(--background-color, #ffffff);
-    padding: 0.6rem 1rem 0.75rem;
-    border-top: 1px solid rgba(49,51,63,0.15);
-    z-index: 99;
-}
-section[data-testid="stSidebar"] > div:first-child {
-    padding-bottom: 160px !important;
-}
-</style>
-""",
-            unsafe_allow_html=True,
-        )
-
         # ── App title ─────────────────────────────────────────────────────
         st.markdown(
             "<div style='font-size:1.1rem;font-weight:700;padding:0.3rem 0 0.1rem;'>"
@@ -647,16 +615,21 @@ section[data-testid="stSidebar"] > div:first-child {
                 st.session_state._nav_page = _default_page
                 st.rerun()
 
-        # ── Fixed-position bottom branding block ──────────────────────────
+        # ── Branding block — directly below workflow buttons ─────────────
+        st.divider()
+        if os.path.exists(LOGO_PATH):
+            st.image(LOGO_PATH, width=75)
         st.markdown(
-            f'<div class="cnc-sidebar-brand">'
-            f'{_logo_img_html}'
-            f'<div style="font-size:11px;font-weight:700;color:#c04000;margin-bottom:3px;">'
-            f'⚠️ SAFETY NOTICE</div>'
-            f'<div style="font-size:10.5px;color:#555;line-height:1.45;">'
-            f'All generated CNC code is DRAFT only. '
-            f'Always verify in CAM/simulator before running on a machine.</div>'
-            f'</div>',
+            "<div style='"
+            "background:#fffbe6;border:1px solid #ffe58f;border-radius:4px;"
+            "padding:7px 9px;margin-top:4px;"
+            "'>"
+            "<div style='font-size:11px;font-weight:700;color:#874d00;"
+            "margin-bottom:3px;'>⚠️ SAFETY NOTICE</div>"
+            "<div style='font-size:11px;color:#5c3d00;line-height:1.35;'>"
+            "Generated CNC code is DRAFT only. "
+            "Always verify in CAM/simulator before machining.</div>"
+            "</div>",
             unsafe_allow_html=True,
         )
 

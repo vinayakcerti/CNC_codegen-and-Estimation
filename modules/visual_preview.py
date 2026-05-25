@@ -475,6 +475,58 @@ def _stock_box_coords_traces(x0, x1, y0, y1, z0, z1):
 
 
 # ---------------------------------------------------------------------------
+# Feature overlay helpers — normal offset + boundary edges
+# ---------------------------------------------------------------------------
+
+def _face_avg_normal(verts, tris):
+    """Return the average unit normal of a face mesh as (nx, ny, nz).
+
+    Averages per-triangle normals (each weighted equally) then renormalises.
+    Falls back to (0, 0, 1) for degenerate meshes.
+    """
+    nx = ny = nz = 0.0
+    for t in tris:
+        v0, v1, v2 = verts[t[0]], verts[t[1]], verts[t[2]]
+        e1x = v1[0] - v0[0]; e1y = v1[1] - v0[1]; e1z = v1[2] - v0[2]
+        e2x = v2[0] - v0[0]; e2y = v2[1] - v0[1]; e2z = v2[2] - v0[2]
+        cx = e1y * e2z - e1z * e2y
+        cy = e1z * e2x - e1x * e2z
+        cz = e1x * e2y - e1y * e2x
+        mag = math.sqrt(cx * cx + cy * cy + cz * cz)
+        if mag > 0:
+            nx += cx / mag; ny += cy / mag; nz += cz / mag
+    mag2 = math.sqrt(nx * nx + ny * ny + nz * nz)
+    return (nx / mag2, ny / mag2, nz / mag2) if mag2 > 0 else (0.0, 0.0, 1.0)
+
+
+def _offset_verts(verts, tris, offset_mm):
+    """Return vertices shifted by offset_mm along the face average normal."""
+    nx, ny, nz = _face_avg_normal(verts, tris)
+    return [[v[0] + offset_mm * nx, v[1] + offset_mm * ny, v[2] + offset_mm * nz]
+            for v in verts]
+
+
+def _boundary_edge_coords(verts, tris):
+    """Return (xs, ys, zs) of boundary edges (edges belonging to exactly one triangle).
+
+    xs/ys/zs contain None separators between disconnected segments, ready for
+    a Scatter3d trace.  Boundary edges form the visible outline of the face.
+    """
+    from collections import Counter
+    edge_cnt = Counter()
+    for t in tris:
+        for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+            edge_cnt[tuple(sorted((a, b)))] += 1
+    xs, ys, zs = [], [], []
+    for (a, b), cnt in edge_cnt.items():
+        if cnt == 1:
+            xs += [verts[a][0], verts[b][0], None]
+            ys += [verts[a][1], verts[b][1], None]
+            zs += [verts[a][2], verts[b][2], None]
+    return xs, ys, zs
+
+
+# ---------------------------------------------------------------------------
 # Mesh3d solid viewer — CadQuery tessellation data
 # ---------------------------------------------------------------------------
 
@@ -537,22 +589,23 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
             _marker_cands.append(_cand)
 
     fig = go.Figure()
+    _HL_COLOR = "#FFD700"   # gold
 
-    # ── Base solid — fully opaque light metallic grey ──────────────────────────
+    # Normal-offset amount: at least 0.2 mm, or 0.1 % of bounding-box diagonal.
+    # This physically moves each overlay face in front of the base mesh surface
+    # so the overlay passes the depth test regardless of the comparison mode.
+    _bbox_diag = math.sqrt((xmax - xmin) ** 2 + (ymax - ymin) ** 2 + (zmax - zmin) ** 2)
+    _offset    = max(0.2, _bbox_diag * 0.001)
+
+    # ── Base solid — rendered first, fully opaque metallic grey ──────────────
     fig.add_trace(go.Mesh3d(
-        x=xs,
-        y=ys,
-        z=zs,
-        i=mesh_data["i"],
-        j=mesh_data["j"],
-        k=mesh_data["k"],
-        color="#DCDCDC",        # Gainsboro — light metallic grey, clean CAD appearance
+        x=xs, y=ys, z=zs,
+        i=mesh_data["i"], j=mesh_data["j"], k=mesh_data["k"],
+        color="#DCDCDC",
         opacity=1.0,
         flatshading=False,
-        lighting=dict(
-            ambient=0.55, diffuse=0.85, specular=0.25,
-            roughness=0.45, fresnel=0.15,
-        ),
+        lighting=dict(ambient=0.55, diffuse=0.85, specular=0.25,
+                      roughness=0.45, fresnel=0.15),
         lightposition=dict(x=1, y=1, z=2),
         name="Part body",
         showlegend=True,
@@ -562,8 +615,12 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
         for tr in _stock_box_coords_traces(xmin, xmax, ymin, ymax, zmin, zmax):
             fig.add_trace(tr)
 
-    # ── Colored CAD face overlays ─────────────────────────────────────────────
-    # One Mesh3d trace per face mesh entry; legend entry appears once per type.
+    # ── Colored CAD face overlays — rendered after base, offset outward ───────
+    # Each face mesh is shifted _offset mm along its average face normal so the
+    # overlay vertices sit physically in front of the base surface.  The depth
+    # test then passes for the overlay, making it visible.  Boundary edges are
+    # added as thick Scatter3d lines to guarantee the feature outline is always
+    # visible even if residual z-fighting affects the filled face.
     if show_face_colors:
         _legend_shown_fc = set()
         _active_fc = _face_cands + (_face_mill_cands if show_face_milling else [])
@@ -579,20 +636,19 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
                 _first_fc = _ftype not in _legend_shown_fc
                 if _first_fc:
                     _legend_shown_fc.add(_ftype)
+                _ov = _offset_verts(_verts, _tris, _offset)
                 fig.add_trace(go.Mesh3d(
-                    x=[_v[0] for _v in _verts],
-                    y=[_v[1] for _v in _verts],
-                    z=[_v[2] for _v in _verts],
-                    i=[_t[0] for _t in _tris],
-                    j=[_t[1] for _t in _tris],
-                    k=[_t[2] for _t in _tris],
+                    x=[v[0] for v in _ov],
+                    y=[v[1] for v in _ov],
+                    z=[v[2] for v in _ov],
+                    i=[t[0] for t in _tris],
+                    j=[t[1] for t in _tris],
+                    k=[t[2] for t in _tris],
                     color=_color,
-                    opacity=0.95,
-                    flatshading=False,
-                    lighting=dict(
-                        ambient=0.6, diffuse=0.85, specular=0.3,
-                        roughness=0.4, fresnel=0.2,
-                    ),
+                    opacity=1.0,
+                    flatshading=True,
+                    lighting=dict(ambient=0.85, diffuse=0.4, specular=0.1,
+                                  roughness=0.5, fresnel=0.05),
                     lightposition=dict(x=1, y=1, z=2),
                     name=_ftype,
                     legendgroup=f"face_{_ftype}",
@@ -600,20 +656,19 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
                     hovertext=f"CAD face: {_fname}",
                     hoverinfo="text",
                 ))
+                _bx, _by, _bz = _boundary_edge_coords(_ov, _tris)
+                if _bx:
+                    fig.add_trace(go.Scatter3d(
+                        x=_bx, y=_by, z=_bz,
+                        mode="lines",
+                        line=dict(color=_color, width=4),
+                        name=_ftype,
+                        legendgroup=f"face_{_ftype}",
+                        showlegend=False,
+                        hoverinfo="none",
+                    ))
 
-    # ── Approximate markers (fallback for candidates without face data) ────────
-    if show_markers and _marker_cands:
-        for tr in _candidate_marker_traces(
-            _marker_cands, zmax, zmin,
-            show_labels=show_labels,
-            xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax,
-        ):
-            fig.add_trace(tr)
-
-    # ── Highlighted CAD face overlays (gold, always on top) ──────────────────
-    # Rendered regardless of show_face_colors so the highlight is always visible.
-    # flatshading=True + high ambient → uniform bold gold, not washed out by lighting.
-    _HL_COLOR        = "#FFD700"   # gold
+    # ── Highlighted CAD face overlays — 2× offset, always on top ─────────────
     _hl_legend_shown = False
     for _fc in _hl_face_cands:
         _fname = _fc.get("feature_name", _fc.get("feature_type", ""))
@@ -622,13 +677,14 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
             _tris  = _fm.get("triangles", [])
             if not _verts or not _tris:
                 continue
+            _ov_hl = _offset_verts(_verts, _tris, _offset * 2)
             fig.add_trace(go.Mesh3d(
-                x=[_v[0] for _v in _verts],
-                y=[_v[1] for _v in _verts],
-                z=[_v[2] for _v in _verts],
-                i=[_t[0] for _t in _tris],
-                j=[_t[1] for _t in _tris],
-                k=[_t[2] for _t in _tris],
+                x=[v[0] for v in _ov_hl],
+                y=[v[1] for v in _ov_hl],
+                z=[v[2] for v in _ov_hl],
+                i=[t[0] for t in _tris],
+                j=[t[1] for t in _tris],
+                k=[t[2] for t in _tris],
                 color=_HL_COLOR,
                 opacity=1.0,
                 flatshading=True,
@@ -642,9 +698,28 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
                 hoverinfo="text",
             ))
             _hl_legend_shown = True
+            _bx, _by, _bz = _boundary_edge_coords(_ov_hl, _tris)
+            if _bx:
+                fig.add_trace(go.Scatter3d(
+                    x=_bx, y=_by, z=_bz,
+                    mode="lines",
+                    line=dict(color=_HL_COLOR, width=5),
+                    name="Highlighted",
+                    legendgroup="highlight",
+                    showlegend=False,
+                    hoverinfo="none",
+                ))
+
+    # ── Approximate markers (fallback for candidates without face data) ────────
+    if show_markers and _marker_cands:
+        for tr in _candidate_marker_traces(
+            _marker_cands, zmax, zmin,
+            show_labels=show_labels,
+            xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax,
+        ):
+            fig.add_trace(tr)
 
     # ── Highlighted marker overlays (shown even when show_markers=False) ──────
-    # suppress_hl_legend=True when face highlights already claimed the legend slot.
     if _hl_marker_cands:
         for tr in _candidate_marker_traces(
             _hl_marker_cands, zmax, zmin,
