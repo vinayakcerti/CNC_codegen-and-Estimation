@@ -12,6 +12,11 @@ DB_TIMEOUT_SECONDS = 5
 
 
 DB_ERRORS = (sqlite3.Error, OSError, pd.errors.DatabaseError)
+_DB_STATUS = {
+    "available": True,
+    "last_error": None,
+    "last_operation": None,
+}
 
 
 @contextmanager
@@ -26,7 +31,20 @@ def _db_connection():
 
 
 def _log_db_error(operation, exc):
+    _DB_STATUS["available"] = False
+    _DB_STATUS["last_error"] = f"{type(exc).__name__}: {exc}"
+    _DB_STATUS["last_operation"] = operation
     print(f"Local database {operation} failed: {type(exc).__name__}: {exc}")
+
+
+def _mark_db_available():
+    _DB_STATUS["available"] = True
+    _DB_STATUS["last_error"] = None
+    _DB_STATUS["last_operation"] = None
+
+
+def get_database_status():
+    return dict(_DB_STATUS)
 
 
 def load_json(filename):
@@ -95,6 +113,7 @@ def init_db():
                     note TEXT
                 )
             """)
+        _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("initialization", exc)
 
@@ -111,6 +130,7 @@ def save_tools_to_db(tools):
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (t["tool_number"], t["tool_name"], t["tool_type"], t["diameter_mm"],
                       t["default_spindle_rpm"], t["default_feed_rate_mm_min"], t["max_depth_mm"]))
+        _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("tool save", exc)
 
@@ -119,6 +139,7 @@ def load_tools_from_db():
     try:
         with _db_connection() as conn:
             df = pd.read_sql_query("SELECT * FROM tools ORDER BY tool_number", conn)
+        _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("tool load", exc)
         return []
@@ -142,6 +163,7 @@ def save_features_to_db(features):
                       f["diameter"], f["length"], f["width"], f["depth"], f["tolerance_note"], f["priority"],
                       f.get("machining_action", "Machine"),
                       1 if f.get("selected_for_machining", True) else 0))
+        _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("feature save", exc)
 
@@ -150,6 +172,7 @@ def load_features_from_db():
     try:
         with _db_connection() as conn:
             df = pd.read_sql_query("SELECT * FROM features ORDER BY priority", conn)
+        _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("feature load", exc)
         return []
@@ -170,6 +193,7 @@ def add_job_note(stage: str, author: str, note_type: str, note: str):
                 "INSERT INTO job_notes (timestamp, stage, author, note_type, note) VALUES (?, ?, ?, ?, ?)",
                 (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), stage, author, note_type, note),
             )
+        _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("job note save", exc)
 
@@ -178,6 +202,7 @@ def load_job_notes():
     try:
         with _db_connection() as conn:
             df = pd.read_sql_query("SELECT * FROM job_notes ORDER BY id DESC", conn)
+        _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("job note load", exc)
         return []
@@ -191,6 +216,7 @@ def delete_job_note(note_id: int):
         with _db_connection() as conn:
             c = conn.cursor()
             c.execute("DELETE FROM job_notes WHERE id = ?", (note_id,))
+        _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("job note delete", exc)
 
@@ -200,6 +226,7 @@ def clear_all_job_notes():
         with _db_connection() as conn:
             c = conn.cursor()
             c.execute("DELETE FROM job_notes")
+        _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("job note clear", exc)
 

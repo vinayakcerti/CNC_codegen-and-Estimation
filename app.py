@@ -16,6 +16,7 @@ from modules.data_store import (
     save_tools_to_db, load_tools_from_db,
     save_features_to_db, load_features_from_db,
     add_job_note, load_job_notes, delete_job_note, clear_all_job_notes,
+    get_database_status,
 )
 from modules.operation_planner import plan_operations
 from modules.time_estimator import estimate_time
@@ -657,6 +658,15 @@ def sidebar_nav():
             "</div>",
             unsafe_allow_html=True,
         )
+        db_status = get_database_status()
+        if not db_status.get("available", True):
+            st.warning(
+                "Local database is offline. The app is using default tools and "
+                "in-session job data until the database becomes available."
+            )
+            with st.expander("Database detail", expanded=False):
+                st.caption(f"Last operation: {db_status.get('last_operation') or 'unknown'}")
+                st.caption(db_status.get("last_error") or "No error detail available.")
 
         return st.session_state._nav_page
 
