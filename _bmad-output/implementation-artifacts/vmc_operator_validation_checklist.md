@@ -1,179 +1,159 @@
 # VMC Operator Validation Checklist
 
-**Purpose:** Structured review by a real VMC machinist / CNC operator before the app is used for production quoting or planning.  
-**Instructions:** Load each sample in the app, step through all pages (Feature Review → Operation Plan → Time Estimate → CNC Export), and complete the fields below. Mark each item ✅ Pass / ⚠️ Concern / ❌ Fail.  
-**Reviewer:** ___________________________  
-**Date:** ___________________________  
-**App version / branch:** v2-feature-review-engine  
+**Purpose:** Structured review by a real VMC machinist / CNC operator before the app is used for production quoting or planning.
+**Instructions:** Load each sample in the app, step through the current VMC workflow, and mark each item Pass / Concern / Fail.
+**Reviewer:** ___________________________
+**Date:** ___________________________
+**App version / branch:** v2-feature-review-engine
 
 ---
 
-## How to Run Each Sample
+## Standard Workflow
 
-1. Open the app (`streamlit run app.py`)
-2. Go to **1. Upload STEP File** — upload the sample file
-3. Go to **5a. Setup & Feature Review** — accept all detected candidates
-4. Go to **6. Operation Plan** — review operations table
-5. Go to **7. Time & Effort Estimate** — review time and cost estimate
-6. Go to **9. CNC Program Export** — review draft G-code and setup sheet
+1. Open the app at `http://localhost:8503/`.
+2. Go to **Part Setup** and upload the sample STEP file.
+3. Keep **Raw Block / Billet** unless the sample is intentionally a casting, forging, weldment, or rework part.
+4. Go to **Select Work** and accept only the intended machining groups.
+5. Go to **Feature Review** and confirm the accepted feature list and validation notes.
+6. Go to **Strategy** and review operation order, tools, setup split, and warnings.
+7. Go to **Estimate** and review machining time, cost, tolerance, and quote currency.
+8. Go to **Export** and review the setup sheet plus draft CNC warnings. Do not run the G-code.
 
 ---
 
-## Sample 1: M01_vmc_basic_plate_holes.step
+## Sample 1: M03_vmc_blind_rectangular_pocket.step
 
-**Description:** Basic plate with 4 through-holes Ø8 mm.  
-**Expected features:** Face milling ×2, Hole ×4  
-**Expected operations:** Face Mill (top) → Spot Drill ×4 → Drill ×4 → Face Mill (bottom)
+**Purpose:** Pocket baseline and pricing path.
+**Expected features:** Face milling x2, Pocket x1.
+**Expected operations:** Face Mill top -> Rough Pocket -> Finish Pocket -> Face Mill bottom.
 
-| Check | ✅ / ⚠️ / ❌ | Comments |
+| Check | Pass / Concern / Fail | Comments |
 |---|---|---|
-| Feature detection correct? (Face milling ×2, Hole ×4) | | |
-| Operation sequence practical for VMC? | | |
-| Tool choice acceptable? (spot drill, drill, face mill) | | |
-| Speeds and feeds realistic for mild steel? | | |
-| Time estimate believable for this part? | | |
-| Setup sheet understandable to a new operator? | | |
-| Draft G-code structure acceptable as a draft/reference? | | |
-| Any dangerous or misleading instruction? | | |
-| **Operator comments:** | | |
-
----
-
-## Sample 2: M02_vmc_slot_plate.step
-
-**Description:** Plate with a single flat-ended through-slot (no rounded ends).  
-**Expected features:** Face milling ×2, Slot ×1  
-**Expected operations:** Face Mill (top) → Rough End Mill (slot) → Finish End Mill (slot) → Face Mill (bottom)
-
-| Check | ✅ / ⚠️ / ❌ | Comments |
-|---|---|---|
-| Feature detection correct? (Slot detected, not Pocket) | | |
-| Slot dimensions believable from geometry? | | |
-| Operation sequence practical? (rough then finish) | | |
-| Notes mention depth/radial passes and corner radius check? | | |
-| Notes mention flute length check for finish pass? | | |
-| Tool choice acceptable? (end mill for slot) | | |
-| Speeds and feeds realistic? | | |
-| Time estimate believable? | | |
+| Feature detection correct? | | |
+| Pocket depth and dimensions believable? | | |
+| Rough/finish operation sequence practical? | | |
+| Tool choice acceptable for pocketing? | | |
+| Notes mention depth/radial passes and flute length checks? | | |
+| Estimate and INR quote believable? | | |
 | Setup sheet understandable? | | |
-| Draft G-code structure acceptable? | | |
 | Any dangerous or misleading instruction? | | |
-| **Operator comments:** | | |
 
 ---
 
-## Sample 3: M03_vmc_blind_rectangular_pocket.step
+## Sample 2: M07_vmc_chamfered_plate.step
 
-**Description:** Plate with one blind rectangular pocket (has a floor face, depth ≈12 mm).  
-**Expected features:** Face milling ×2, Pocket ×1  
-**Expected operations:** Face Mill (top) → Rough End Mill (pocket) → Finish End Mill (pocket) → Face Mill (bottom)
+**Purpose:** Chamfer detection and chamfer operation planning.
+**Expected features:** Face milling x2, Hole x4, Chamfer x1.
+**Expected operations:** Face Mill top -> Spot Drill -> Drill -> Chamfer -> Face Mill bottom.
 
-| Check | ✅ / ⚠️ / ❌ | Comments |
+| Check | Pass / Concern / Fail | Comments |
 |---|---|---|
-| Feature detection correct? (Pocket detected with floor face) | | |
-| Pocket depth realistic? | | |
-| Operation sequence practical? (rough then finish) | | |
-| Notes mention depth/radial passes and corner radius check? | | |
-| Notes mention flute length check? | | |
+| Chamfer detected and not missed? | | |
+| Chamfer size estimate reasonable? | | |
+| Operation order practical? | | |
+| Chamfer note mentions chamfer mill/countersink and edge verification? | | |
 | Tool choice acceptable? | | |
-| Speeds and feeds realistic? | | |
 | Time estimate believable? | | |
-| Setup sheet understandable? | | |
-| Draft G-code structure acceptable? | | |
+| Draft G-code and setup sheet warnings clear? | | |
 | Any dangerous or misleading instruction? | | |
-| **Operator comments:** | | |
 
 ---
 
-## Sample 4: M05_vmc_large_bore_plate.step
+## Sample 3: M02_vmc_slot_plate.step
 
-**Description:** Plate with one large bore (Ø35 mm) and two pilot holes.  
-**Expected features:** Face milling ×2, Large hole / boring ×1, Hole ×2  
-**Expected operations:** Face Mill (top) → Spot Drill ×2 → Pilot Drill ×1 → Drill ×2 → Boring → Face Mill (bottom)
+**Purpose:** Flat-ended slot classification.
+**Expected features:** Face milling x2, Slot x1.
+**Expected operations:** Face Mill top -> Rough Slot -> Finish Slot -> Face Mill bottom.
 
-| Check | ✅ / ⚠️ / ❌ | Comments |
+| Check | Pass / Concern / Fail | Comments |
 |---|---|---|
-| Feature detection correct? (boring + pilot holes) | | |
-| Operation sequence practical? (pilot drill before boring) | | |
-| Boring note mentions min bore, max bore, reach, rigidity? | | |
-| Boring note includes final diameter? | | |
-| Tool choice acceptable? (boring bar) | | |
-| Speeds and feeds realistic for boring Ø35? | | |
+| Slot detected as Slot, not Pocket? | | |
+| Slot dimensions believable? | | |
+| Rough/finish sequence practical? | | |
+| Notes mention depth/radial passes and corner radius check? | | |
+| Tool choice acceptable? | | |
 | Time estimate believable? | | |
 | Setup sheet understandable? | | |
-| Draft G-code uses G76 fine boring cycle? | | |
 | Any dangerous or misleading instruction? | | |
-| **Operator comments:** | | |
 
 ---
 
-## Sample 5: M07_vmc_chamfered_plate.step
+## Sample 4: 17b_top_milled_step_shoulder-Body.step
 
-**Description:** Plate with 4 through-holes and top outer-edge chamfers (45°, ~2 mm).  
-**Expected features:** Face milling ×2, Hole ×4, Chamfer ×1  
-**Expected operations:** Face Mill (top) → Spot Drill → Drill → Chamfer → Face Mill (bottom)
+**Purpose:** Step/shoulder detection and planning.
+**Expected features:** Face milling x2, Step x1.
+**Expected operations:** Face Mill top -> Rough Step -> Finish Step -> Face Mill bottom.
 
-| Check | ✅ / ⚠️ / ❌ | Comments |
+| Check | Pass / Concern / Fail | Comments |
 |---|---|---|
-| Feature detection correct? (Chamfer detected, not missed) | | |
-| Chamfer size estimate reasonable (~2 mm)? | | |
-| Operation sequence practical? (chamfer after drilling) | | |
-| Chamfer note mentions chamfer mill / countersink tool? | | |
-| Chamfer note says to verify edge selection? | | |
-| Tool choice acceptable? (chamfer tool) | | |
-| Speeds and feeds realistic? | | |
-| Time estimate believable? | | |
+| Step detected as Step, not Slot/Pocket? | | |
+| Step dimensions and depth believable? | | |
+| Rough/finish step sequence practical? | | |
+| Notes mention depth/radial passes and tool reach? | | |
+| Tool choice acceptable? | | |
+| Path length and time estimate believable? | | |
 | Setup sheet understandable? | | |
-| Draft G-code chamfer section acceptable as draft? | | |
 | Any dangerous or misleading instruction? | | |
-| **Operator comments:** | | |
 
 ---
 
-## Sample 6: 17b_top_milled_step_shoulder-Body.step
+## Sample 5: M05_vmc_large_bore_plate.step
 
-**Description:** Top-milled step shoulder (Y-direction, 90×30 mm floor, depth 12 mm).  
-**Expected features:** Face milling ×2, Step ×1  
-**Expected operations:** Face Mill (top) → Rough End Mill (step) → Finish End Mill (step) → Face Mill (bottom)
+**Purpose:** Large bore and boring notes.
+**Expected features:** Face milling x2, Hole x2, Large hole / boring x1.
+**Expected operations:** Face Mill top -> Spot Drill/Drill pilot features -> Boring -> Face Mill bottom.
 
-| Check | ✅ / ⚠️ / ❌ | Comments |
+| Check | Pass / Concern / Fail | Comments |
 |---|---|---|
-| Feature detection correct? (Step detected, not Pocket/Slot) | | |
-| Step dimensions realistic? (length≈90, width≈30, depth≈12) | | |
-| Operation sequence practical? | | |
-| Rough note mentions depth/radial passes? | | |
-| Finish note mentions tool reach and flute length check? | | |
-| Tool choice acceptable? (end mill for step) | | |
-| Rough path length estimate believable? (≈900 mm) | | |
-| Finish path length estimate believable? (≈180 mm) | | |
+| Boring feature detected correctly? | | |
+| Pilot holes and large bore not confused? | | |
+| Boring note mentions min bore, max bore, reach, and rigidity? | | |
+| Boring operation order practical? | | |
+| Tool choice acceptable? | | |
 | Time estimate believable? | | |
-| Setup sheet understandable? | | |
-| Draft G-code structure acceptable? | | |
+| Draft G-code and setup sheet warnings clear? | | |
 | Any dangerous or misleading instruction? | | |
-| **Operator comments:** | | |
+
+---
+
+## Sample 6: 25_vmc_job_plate_all_basic_features.step
+
+**Purpose:** Mixed-feature sanity check.
+**Expected features:** Face milling x2, Slot x2, Large hole / boring x1, Chamfer x1.
+
+| Check | Pass / Concern / Fail | Comments |
+|---|---|---|
+| Mixed feature detection correct? | | |
+| Select Work grouping is easy to understand? | | |
+| 3D colors/highlights make machining intent clear? | | |
+| Operation plan is practical enough for first-pass quoting? | | |
+| Estimate is believable for a mixed VMC plate? | | |
+| Export output is clearly draft-only? | | |
+| Any dangerous or misleading instruction? | | |
 
 ---
 
 ## Overall App Feedback
 
-| Item | ✅ / ⚠️ / ❌ | Comments |
+| Item | Pass / Concern / Fail | Comments |
 |---|---|---|
-| Draft CNC warning on export page clear enough? | | |
-| G-code header warning strong enough? | | |
-| Setup 2 separator visible in G-code when needed? | | |
-| Setup sheet layout readable and print-friendly? | | |
-| Time estimates within believable range (±50%)? | | |
-| Cost estimates within believable range? | | |
+| Upload and parse flow clear? | | |
+| Starting Part Type choices understandable? | | |
+| Select Work cards map to real machining intent? | | |
+| Feature Review validation useful? | | |
+| Strategy page operation order credible? | | |
+| Estimate page assumptions editable and understandable? | | |
+| Export safety warning strong enough? | | |
+| Setup sheet readable for shop-floor handover? | | |
 | Would you trust this app for first-pass quoting? | | |
 | Would you use this app to brief a new operator? | | |
-| **Any instructions that could cause a machine crash or injury?** | | |
-| **General comments / suggested improvements:** | | |
+| Any instruction that could cause scrap, machine damage, or injury? | | |
 
 ---
 
 ## Sign-off
 
-| | |
+| Field | Response |
 |---|---|
 | Reviewer name | |
 | Role / experience | |

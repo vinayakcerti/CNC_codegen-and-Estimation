@@ -78,6 +78,60 @@ _PAGE_TO_SECTION.update({
     "10. Tool Library":      "HISTORY / ADMIN",
 })
 
+VMC_HANDOVER_SAMPLES = [
+    (
+        "M03_vmc_blind_rectangular_pocket.step",
+        "Pocket baseline",
+        "Face milling x2, Pocket x1; rough + finish pocket operations; INR quote path.",
+    ),
+    (
+        "M07_vmc_chamfered_plate.step",
+        "Chamfer baseline",
+        "Face milling x2, Hole x4, Chamfer x1; chamfer tool guidance appears.",
+    ),
+    (
+        "M02_vmc_slot_plate.step",
+        "Flat slot baseline",
+        "Face milling x2, Slot x1; classified as Slot, not Pocket.",
+    ),
+    (
+        "17b_top_milled_step_shoulder-Body.step",
+        "Step shoulder baseline",
+        "Face milling x2, Step x1; rough + finish step operations.",
+    ),
+    (
+        "M05_vmc_large_bore_plate.step",
+        "Boring baseline",
+        "Face milling x2, Hole x2, Large hole / boring x1; boring safety notes.",
+    ),
+]
+
+
+def render_vmc_handover_test_pack():
+    with st.expander("VMC handover test pack", expanded=False):
+        st.caption(
+            "Run these samples before asking a machinist or customer to review the VMC flow."
+        )
+        st.markdown(
+            """
+**Standard path for every sample**
+
+1. Part Setup: upload the STEP file and confirm the stock summary.
+2. Select Work: accept only the intended machining groups.
+3. Feature Review: confirm accepted features and validation notes.
+4. Strategy: review operation sequence, setup split, tools, and process warnings.
+5. Estimate: check time, cost, tolerance, and quote currency assumptions.
+6. Export: inspect the setup sheet and draft CNC warnings. Do not run the G-code.
+"""
+        )
+        _sample_rows = [
+            "| STEP sample | Purpose | Pass signal |",
+            "|---|---|---|",
+        ]
+        for sample, purpose, pass_signal in VMC_HANDOVER_SAMPLES:
+            _sample_rows.append(f"| `{sample}` | {purpose} | {pass_signal} |")
+        st.markdown("\n".join(_sample_rows))
+
 
 def show_top_header():
     st.markdown(
@@ -2694,6 +2748,7 @@ def page_cnc_export():
         "This is draft planning code only. Verify in CAM/simulator and by a qualified "
         "CNC programmer before use on any real machine."
     )
+    render_vmc_handover_test_pack()
 
     if "operations" not in st.session_state or not st.session_state.operations:
         st.warning("No operations available. Please run **6. Strategy / Operations** first.")
