@@ -1,26 +1,100 @@
 import json
 import os
 import sqlite3
+import tempfile
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
 from contextlib import contextmanager
 
 DATA_DIR = Path(__file__).parent.parent / "data"
-DB_PATH = Path(__file__).parent.parent / "cnc_planner.db"
+PROJECT_ROOT = Path(__file__).parent.parent
+LEGACY_DB_PATH = PROJECT_ROOT / "cnc_planner.db"
 DB_TIMEOUT_SECONDS = 5
 
 
 DB_ERRORS = (sqlite3.Error, OSError, pd.errors.DatabaseError)
+_DB_PATH_OVERRIDDEN = bool(os.getenv("CNC_PLANNER_DB_PATH"))
 _DB_STATUS = {
     "available": True,
     "last_error": None,
     "last_operation": None,
+    "path": None,
+    "legacy_path": str(LEGACY_DB_PATH),
+    "migration_error": None,
+    "migrated_from_legacy": False,
 }
+
+
+def _default_db_path():
+    override = os.getenv("CNC_PLANNER_DB_PATH")
+    if override:
+        return Path(override).expanduser()
+
+    local_app_data = os.getenv("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "CNC Plan and Process Pro" / "cnc_planner.db"
+
+    return Path.home() / ".cnc_plan_process_pro" / "cnc_planner.db"
+
+
+def _fallback_db_path():
+    return Path(tempfile.gettempdir()) / "CNC Plan and Process Pro" / "cnc_planner.db"
+
+
+DB_PATH = _default_db_path()
+_DB_STATUS["path"] = str(DB_PATH)
+
+
+def _ensure_db_parent():
+    global DB_PATH
+    try:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        if _DB_PATH_OVERRIDDEN:
+            raise
+        fallback_path = _fallback_db_path()
+        fallback_path.parent.mkdir(parents=True, exist_ok=True)
+        _DB_STATUS["migration_error"] = (
+            f"Preferred database path unavailable; using fallback {fallback_path}"
+        )
+        DB_PATH = fallback_path
+        _DB_STATUS["path"] = str(DB_PATH)
+
+
+def _try_migrate_legacy_db():
+    if DB_PATH == LEGACY_DB_PATH or DB_PATH.exists() or not LEGACY_DB_PATH.exists():
+        return
+    try:
+        _ensure_db_parent()
+        if DB_PATH.exists():
+            return
+        src = sqlite3.connect(LEGACY_DB_PATH, timeout=DB_TIMEOUT_SECONDS)
+        try:
+            dst = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
+            try:
+                src.backup(dst)
+                _DB_STATUS["migrated_from_legacy"] = True
+                _DB_STATUS["migration_error"] = None
+            finally:
+                dst.close()
+        finally:
+            src.close()
+    except DB_ERRORS as exc:
+        _DB_STATUS["migration_error"] = f"{type(exc).__name__}: {exc}"
+        print(f"Legacy database migration skipped: {type(exc).__name__}: {exc}")
+        try:
+            if DB_PATH.exists():
+                DB_PATH.unlink()
+        except OSError as cleanup_exc:
+            _DB_STATUS["migration_error"] += (
+                f"; partial cleanup failed: {type(cleanup_exc).__name__}: {cleanup_exc}"
+            )
 
 
 @contextmanager
 def _db_connection():
+    _ensure_db_parent()
     conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
     try:
         conn.execute("PRAGMA busy_timeout = 5000")
@@ -41,9 +115,11 @@ def _mark_db_available():
     _DB_STATUS["available"] = True
     _DB_STATUS["last_error"] = None
     _DB_STATUS["last_operation"] = None
+    _DB_STATUS["path"] = str(DB_PATH)
 
 
 def get_database_status():
+    _DB_STATUS["path"] = str(DB_PATH)
     return dict(_DB_STATUS)
 
 
@@ -67,6 +143,7 @@ def get_default_machines():
 
 def init_db():
     try:
+        _try_migrate_legacy_db()
         with _db_connection() as conn:
             c = conn.cursor()
             c.execute("""

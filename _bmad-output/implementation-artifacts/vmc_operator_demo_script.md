@@ -47,7 +47,7 @@ Open:
 http://localhost:8503/
 ```
 
-If the sidebar shows **Local database is offline**, continue the demo. The app will use default tools and in-session job data.
+The app stores its local SQLite data outside the repo, preferring the user's local app-data folder and falling back to a local temp folder if Windows blocks app-data creation. If the sidebar shows **Local database is offline**, continue the demo. The app will use default tools and in-session job data.
 
 ---
 

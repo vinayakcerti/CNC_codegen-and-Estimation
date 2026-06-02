@@ -719,8 +719,11 @@ def sidebar_nav():
                 "in-session job data until the database becomes available."
             )
             with st.expander("Database detail", expanded=False):
+                st.caption(f"Active path: {db_status.get('path') or 'unknown'}")
                 st.caption(f"Last operation: {db_status.get('last_operation') or 'unknown'}")
                 st.caption(db_status.get("last_error") or "No error detail available.")
+                if db_status.get("migration_error"):
+                    st.caption(f"Legacy migration: {db_status['migration_error']}")
 
         return st.session_state._nav_page
 
