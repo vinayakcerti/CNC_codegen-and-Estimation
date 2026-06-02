@@ -724,7 +724,7 @@ def page_upload_step():
     st.title("Upload & Overview")
     st.caption(
         "Upload a STEP file to extract bounding box geometry and feature candidates. "
-        "After parsing, proceed to **4. Setup & Feature Review** to review and accept detected features."
+        "After parsing, proceed to **Select Machining Work** to choose what to machine."
     )
     st.divider()
 
@@ -971,7 +971,7 @@ def page_upload_step():
         if _cands_tbl:
             st.caption(
                 "Detected from STEP file — planning reference only. "
-                "Accept features on **4. Setup & Feature Review**."
+                "Select machinable groups on **Select Machining Work**."
             )
 
             def _fv(v):
@@ -2211,7 +2211,7 @@ def page_operation_plan():
     if not st.session_state.features:
         st.warning(
             "No features defined. Upload a STEP file and accept candidates on "
-            "**4. Setup & Feature Review** first."
+            "**Select Machining Work** first."
         )
         return
 
@@ -2966,17 +2966,21 @@ def page_select_machining_work():
     _candidates   = st.session_state.get("step_candidates", [])
     _added_ids    = st.session_state.get("added_candidate_ids", set())
     _cand_warns   = st.session_state.get("step_candidate_warnings", [])
+    _features     = st.session_state.get("features", [])
 
     if not _parse_result:
         st.info("No STEP file loaded. Upload a part on **1. Upload / Overview** first.")
+        if st.button("Go to Part Setup", type="primary", key="_smw_go_part_setup"):
+            st.session_state._nav_page = "Part Setup"
+            st.rerun()
         return
 
-    st.markdown(
-        f"<div style='display:inline-block;padding:3px 10px;border-radius:12px;"
-        f"background:#e8f4f8;font-size:0.88rem;font-weight:600;margin-bottom:8px;'>"
-        f"Starting with: {_spt}</div>",
-        unsafe_allow_html=True,
-    )
+    _job_file = st.session_state.get("uploaded_filename") or "STEP loaded"
+    _jm1, _jm2, _jm3, _jm4 = st.columns(4)
+    _jm1.metric("STEP File", _job_file)
+    _jm2.metric("Detected", len(_candidates))
+    _jm3.metric("Selected", len(_features))
+    _jm4.metric("Starting From", _spt)
     st.divider()
 
     # Capture previous highlight IDs so the rerun-on-change guard below works
