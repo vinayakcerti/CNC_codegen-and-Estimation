@@ -4,28 +4,62 @@ import os
 import tempfile
 
 # ---------------------------------------------------------------------------
-# Optional CadQuery import — must not raise if cadquery is not installed
+# Optional CadQuery / OCC imports
 # ---------------------------------------------------------------------------
+#
+# Keep CadQuery out of module import. When OpenCASCADE's native DLL state is
+# broken, importing cadquery can terminate python.exe before Python exception
+# handling runs. Lazy-loading lets Streamlit start and the lightweight STEP
+# parser remain available.
 
-try:
-    import cadquery as cq
-    _CADQUERY_AVAILABLE = True
-except ImportError:
-    _CADQUERY_AVAILABLE = False
-except Exception:
-    # Catch any other import-time error (e.g. missing OCC shared libs)
-    _CADQUERY_AVAILABLE = False
-
-# Optional OCC BRepAdaptor — bundled inside cadquery-ocp, used for precise
-# cylinder radius and axis extraction.  Only attempted when CadQuery loaded.
+cq = None
+_CADQUERY_AVAILABLE = None
 _OCC_ADAPTOR_AVAILABLE = False
-if _CADQUERY_AVAILABLE:
+_BRepAdaptor = None
+_GeomAbsCylinder = None
+
+
+def _load_cadquery():
+    """Return cadquery module if available, else None."""
+    global cq, _CADQUERY_AVAILABLE
+
+    if _CADQUERY_AVAILABLE is not None:
+        return cq if _CADQUERY_AVAILABLE else None
+
+    if os.environ.get("CNC_DISABLE_CADQUERY", "").strip().lower() in {"1", "true", "yes"}:
+        _CADQUERY_AVAILABLE = False
+        return None
+
     try:
-        from OCC.Core.BRepAdaptor import BRepAdaptor_Surface as _BRepAdaptor
-        from OCC.Core.GeomAbs import GeomAbs_Cylinder as _GeomAbsCylinder
+        import cadquery as _cq
+        cq = _cq
+        _CADQUERY_AVAILABLE = True
+        _load_occ_adaptor()
+        return cq
+    except ImportError:
+        _CADQUERY_AVAILABLE = False
+        return None
+    except Exception:
+        # Non-native import errors can still be handled here. Native OCC crashes
+        # may terminate the process before this block runs.
+        _CADQUERY_AVAILABLE = False
+        return None
+
+
+def _load_occ_adaptor():
+    """Load optional OCC surface adaptors after CadQuery is loaded."""
+    global _OCC_ADAPTOR_AVAILABLE, _BRepAdaptor, _GeomAbsCylinder
+
+    if _OCC_ADAPTOR_AVAILABLE:
+        return
+    try:
+        from OCC.Core.BRepAdaptor import BRepAdaptor_Surface as _BRepAdaptorLocal
+        from OCC.Core.GeomAbs import GeomAbs_Cylinder as _GeomAbsCylinderLocal
+        _BRepAdaptor = _BRepAdaptorLocal
+        _GeomAbsCylinder = _GeomAbsCylinderLocal
         _OCC_ADAPTOR_AVAILABLE = True
     except (ImportError, Exception):
-        pass
+        _OCC_ADAPTOR_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Unit detection helpers
@@ -641,9 +675,11 @@ def parse_step_with_cadquery(file_path: str) -> dict:
     Requires: cadquery installed (not in requirements.txt for Cloud deploy).
     Units: OCC always works in mm for STEP, so no unit conversion is needed.
     """
-    import cadquery as cq  # local import to make the dependency explicit
+    _cq = _load_cadquery()
+    if _cq is None:
+        raise ImportError("CadQuery is not available")
 
-    result = cq.importers.importStep(file_path)
+    result = _cq.importers.importStep(file_path)
     bb = result.val().BoundingBox()
 
     length = round(bb.xmax - bb.xmin, 3)
@@ -759,7 +795,7 @@ def parse_step_auto(file_bytes: bytes) -> dict:
     The returned dict is always compatible with parse_step_bounding_box output.
     Extra keys (parser_used, removed_volume_cm3, cadquery_warning) are additive.
     """
-    if not _CADQUERY_AVAILABLE:
+    if _load_cadquery() is None:
         result = parse_step_bounding_box(file_bytes)
         result["parser_used"]        = "lightweight"
         result["volume_source"]      = "bbox_estimate_60_percent"
@@ -1740,7 +1776,8 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
     warnings_out = []
 
     try:
-        if not _CADQUERY_AVAILABLE:
+        _cq = _load_cadquery()
+        if _cq is None:
             return {
                 "success": False,
                 "candidate_features": [],
@@ -1751,8 +1788,6 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                 ],
             }
 
-        import cadquery as cq  # local re-import makes the dependency explicit
-
         if not os.path.isfile(file_path):
             return {
                 "success": False,
@@ -1761,7 +1796,7 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                 "warnings": [f"File not found: {file_path}"],
             }
 
-        cq_result = cq.importers.importStep(file_path)
+        cq_result = _cq.importers.importStep(file_path)
 
         bb = cq_result.val().BoundingBox()
         part_bbox = {

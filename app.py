@@ -4,6 +4,7 @@ import json
 import io
 import copy
 import contextlib
+import hashlib
 import os
 import sys
 import tempfile
@@ -437,6 +438,12 @@ def _build_candidate_groups(candidates, spt):
     return groups
 
 
+def _group_widget_suffix(group) -> str:
+    """Stable suffix for grouped selection widgets."""
+    raw = "|".join(str(part) for part in group["group_key"])
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:10]
+
+
 def _commit_group_selections(edited_grouped_df, groups, candidates) -> int:
     """Commit ticked group rows to st.session_state.features.
 
@@ -662,6 +669,8 @@ def _parse_and_tessellate(file_bytes: bytes, filename: str):
         _tmp_tess_path = None
         st.session_state.pop("_tess_error", None)
         try:
+            if os.environ.get("CNC_DISABLE_CADQUERY", "").strip().lower() in {"1", "true", "yes"}:
+                raise ImportError("CadQuery disabled by CNC_DISABLE_CADQUERY")
             import cadquery as cq
             with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as _tmp_tess:
                 _tmp_tess.write(file_bytes)
@@ -2989,7 +2998,7 @@ def page_select_machining_work():
             # ── Grouping toggle ─────────────────────────────────────────────
             _use_grouping = st.toggle(
                 "Group similar detected geometry",
-                value=(_spt in _NON_RAW_SPTS),
+                value=True,
                 key="_smw_group_toggle",
                 help="Combines candidates with the same type and similar dimensions into one row.",
             )
@@ -3006,10 +3015,13 @@ def page_select_machining_work():
                 # Pre-seed widget keys so checkboxes/selects have correct defaults
                 # before any user interaction on this render.
                 for _gi, _g in enumerate(_groups):
-                    _ka = f"_smw_card_accept_{_gi}"
-                    _kx = f"_smw_card_action_{_gi}"
-                    if _ka not in st.session_state:
-                        _seed_all_added = all(mid in _added_ids for mid in _g["member_ids"])
+                    _suffix = _group_widget_suffix(_g)
+                    _ka = f"_smw_card_accept_{_suffix}"
+                    _kx = f"_smw_card_action_{_suffix}"
+                    _seed_all_added = all(mid in _added_ids for mid in _g["member_ids"])
+                    if _seed_all_added:
+                        st.session_state[_ka] = False
+                    elif _ka not in st.session_state:
                         st.session_state[_ka] = (not _seed_all_added) and _is_raw_block
                     if _kx not in st.session_state:
                         st.session_state[_kx] = _default_action
@@ -3044,6 +3056,7 @@ def page_select_machining_work():
 
                 with st.container(height=420):
                     for _gi, _g in enumerate(_groups):
+                        _suffix = _group_widget_suffix(_g)
                         _all_added  = all(mid in _added_ids for mid in _g["member_ids"])
                         _some_added = any(mid in _added_ids for mid in _g["member_ids"])
                         _icon = _FTYPE_ICON.get(_g["feature_type"], "◾")
@@ -3066,7 +3079,7 @@ def page_select_machining_work():
                         with _cc1:
                             st.checkbox(
                                 "",
-                                key=f"_smw_card_accept_{_gi}",
+                                key=f"_smw_card_accept_{_suffix}",
                                 disabled=_all_added,
                                 label_visibility="collapsed",
                             )
@@ -3083,7 +3096,7 @@ def page_select_machining_work():
                             st.selectbox(
                                 "",
                                 options=_ACTION_OPTS,
-                                key=f"_smw_card_action_{_gi}",
+                                key=f"_smw_card_action_{_suffix}",
                                 disabled=_all_added,
                                 label_visibility="collapsed",
                             )
@@ -3092,19 +3105,20 @@ def page_select_machining_work():
                 # Collect checked state after all cards are rendered
                 _hl_from_ticks = set()
                 for _gi, _g in enumerate(_groups):
-                    if st.session_state.get(f"_smw_card_accept_{_gi}", False):
+                    _suffix = _group_widget_suffix(_g)
+                    if st.session_state.get(f"_smw_card_accept_{_suffix}", False):
                         _hl_from_ticks.update(_g["member_ids"])
 
                 _new_hl_ids = (
-                    _hl_from_ticks if (_hl_from_ticks and not _is_raw_block) else _hl_from_selectbox
+                    _hl_from_ticks if _hl_from_ticks else _hl_from_selectbox
                 )
                 st.session_state._smw_highlight_candidate_ids = _new_hl_ids
                 if _new_hl_ids != _prev_hl_ids:
                     st.rerun()
 
                 _n_ticked = sum(
-                    1 for _gi in range(len(_groups))
-                    if st.session_state.get(f"_smw_card_accept_{_gi}", False)
+                    1 for _g in _groups
+                    if st.session_state.get(f"_smw_card_accept_{_group_widget_suffix(_g)}", False)
                 )
 
                 with st.expander("Advanced: flat group table"):
@@ -3119,10 +3133,11 @@ def page_select_machining_work():
                             _ast = f"Partial ✓ ({_nad}/{_g['count']})"
                         else:
                             _ast = ""
+                        _suffix = _group_widget_suffix(_g)
                         _adv_rows.append({
-                            "accept":      st.session_state.get(f"_smw_card_accept_{_gi}", False),
+                            "accept":      st.session_state.get(f"_smw_card_accept_{_suffix}", False),
                             "status":      _ast,
-                            "action":      st.session_state.get(f"_smw_card_action_{_gi}", _default_action),
+                            "action":      st.session_state.get(f"_smw_card_action_{_suffix}", _default_action),
                             "type":        _g["display_type"],
                             "description": _g["description"],
                             "count":       _g["count"],
@@ -3140,10 +3155,14 @@ def page_select_machining_work():
                     _card_df = pd.DataFrame([
                         {
                             "_group_idx":       _gi,
-                            "accept":           st.session_state.get(f"_smw_card_accept_{_gi}", False),
-                            "machining_action": st.session_state.get(f"_smw_card_action_{_gi}", _default_action),
+                            "accept":           st.session_state.get(
+                                f"_smw_card_accept_{_group_widget_suffix(_g)}", False
+                            ),
+                            "machining_action": st.session_state.get(
+                                f"_smw_card_action_{_group_widget_suffix(_g)}", _default_action
+                            ),
                         }
-                        for _gi in range(len(_groups))
+                        for _gi, _g in enumerate(_groups)
                     ])
                     _n_added = _commit_group_selections(_card_df, _groups, _filtered)
                     if _n_added > 0:

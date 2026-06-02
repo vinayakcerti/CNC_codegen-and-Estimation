@@ -1,6 +1,6 @@
 # VMC Feature Detection Regression Report
 
-**Date:** 2026-05-14  
+**Date:** 2026-06-02  
 **Branch:** v2-feature-review-engine  
 **Options:** `(none)`  
 
@@ -42,6 +42,7 @@
 These files exist in `test_samples/` but have no entry in `feature_detection_expectations.json`:
 
 - `17_stepped_block_single_step.step`
+- `3100171001_01 SLIDE BASE-1812 ( FOR TOOL LOADER ).STEP`
 - `Flanges-Body.step`
 - `T01_lathe_stepped_shaft.step`
 - `T02_lathe_shaft_with_groove.step`
