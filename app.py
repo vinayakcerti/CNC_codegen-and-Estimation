@@ -229,6 +229,22 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
         disabled=not _show_markers,
         help="Display dimension labels next to each marker",
     )
+    _vs1, _vs2 = st.columns([1.1, 1.4])
+    _camera_view = _vs1.selectbox(
+        "View",
+        options=["Isometric", "Top", "Front", "Right"],
+        key=f"{key_prefix}camera_view",
+        help="Set the initial 3D camera orientation",
+    )
+    _part_opacity = _vs2.slider(
+        "Part opacity",
+        min_value=0.20,
+        max_value=1.00,
+        value=0.82 if key_prefix == "_smw_3d_" else 1.00,
+        step=0.05,
+        key=f"{key_prefix}part_opacity",
+        help="Lower opacity makes colored machining surfaces easier to inspect",
+    )
 
     # Highlight IDs scoped to Select Machining Work panel only.
     _hl_ids = (
@@ -245,6 +261,8 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
             show_face_milling=_show_face_milling,
             show_markers=_show_markers,
             highlighted_candidate_ids=_hl_ids or None,
+            part_opacity=_part_opacity,
+            camera_view=_camera_view,
         )
         fig_mesh.update_layout(
             showlegend=True,
@@ -806,6 +824,8 @@ def page_upload_step():
             _tmp_tess_path = None
             st.session_state.pop("_tess_error", None)
             try:
+                if os.environ.get("CNC_DISABLE_CADQUERY", "").strip().lower() in {"1", "true", "yes"}:
+                    raise ImportError("CadQuery disabled by CNC_DISABLE_CADQUERY")
                 import cadquery as cq
                 with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as _tmp_tess:
                     _tmp_tess.write(file_bytes)

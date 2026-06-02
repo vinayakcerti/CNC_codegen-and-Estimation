@@ -533,7 +533,9 @@ def _boundary_edge_coords(verts, tris):
 def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
                       show_stock_box=False, show_face_colors=True,
                       show_face_milling=False, show_markers=True,
-                      highlighted_candidate_ids=None):
+                      highlighted_candidate_ids=None,
+                      part_opacity=1.0,
+                      camera_view="Isometric"):
     """
     Build a rotatable Plotly Mesh3d figure from pre-computed tessellation data.
 
@@ -554,11 +556,14 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
         show_face_milling: if True, include face-milling surface overlays (default OFF — they
                            cover the whole top/bottom face and obscure the base body)
         show_markers     : if True, render candidates without face_mesh_data as marker overlays
+        part_opacity     : opacity for the base part body, useful when inspecting overlays
+        camera_view      : initial camera preset: Isometric, Top, Front, Right
 
     Returns:
         plotly.graph_objects.Figure
     """
     xs, ys, zs = mesh_data["x"], mesh_data["y"], mesh_data["z"]
+    part_opacity = max(0.15, min(float(part_opacity or 1.0), 1.0))
 
     xmin, xmax = min(xs), max(xs)
     ymin, ymax = min(ys), max(ys)
@@ -602,7 +607,7 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
         x=xs, y=ys, z=zs,
         i=mesh_data["i"], j=mesh_data["j"], k=mesh_data["k"],
         color="#DCDCDC",
-        opacity=1.0,
+        opacity=part_opacity,
         flatshading=False,
         lighting=dict(ambient=0.55, diffuse=0.85, specular=0.25,
                       roughness=0.45, fresnel=0.15),
@@ -733,6 +738,14 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
                 _hl_legend_shown = True
 
     # ── Scene layout — CAD-style coloured axes, readable labels ───────────────
+    _view = str(camera_view or "Isometric")
+    _camera_presets = {
+        "Isometric": dict(eye=dict(x=1.45, y=1.45, z=1.15), up=dict(x=0, y=0, z=1)),
+        "Top":       dict(eye=dict(x=0.0,  y=0.0,  z=2.25), up=dict(x=0, y=1, z=0)),
+        "Front":     dict(eye=dict(x=0.0,  y=-2.2, z=0.35), up=dict(x=0, y=0, z=1)),
+        "Right":     dict(eye=dict(x=2.2,  y=0.0,  z=0.35), up=dict(x=0, y=0, z=1)),
+    }
+
     fig.update_layout(
         title=dict(
             text="3D Preview — Part Shape (planning reference only)",
@@ -767,6 +780,7 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
                 linewidth=2,
             ),
             aspectmode="data",
+            camera=_camera_presets.get(_view, _camera_presets["Isometric"]),
         ),
         height=520,
         margin=dict(l=0, r=0, t=55, b=0),
