@@ -23,6 +23,7 @@ from modules.time_estimator import estimate_time
 from modules.gcode_generator import generate_gcode
 from modules.visual_preview import build_top_view, build_3d_view, build_step_mesh3d, FEATURE_COLORS
 from modules.step_parser import parse_step_bounding_box, parse_step_geometry, parse_step_auto
+from modules.stock_allowance import apply_stock_allowance_to_candidates
 from modules.setup_sheet import generate_setup_sheet
 from modules.speeds_feeds import (
     material_list, coating_list, get_vc_range, get_chip_load_range,
@@ -218,12 +219,14 @@ FEATURE_TYPES = [
     "Pocket",
     "Slot",
     "Face Milling",
+    "Edge Milling",
     "Outer Profile",
     "Chamfer",
 ]
 
 _FTYPE_MAP = {
     "face milling":        "Face Milling",
+    "edge milling":        "Edge Milling",
     "hole":                "Hole",
     "large hole / boring": "Large Hole / Boring",
     "slot":                "Slot",
@@ -241,7 +244,11 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
     _mesh      = st.session_state.get("step_mesh_data")
     _geo       = st.session_state.get("step_geometry")
     _stk       = st.session_state.get("stock", {})
-    _all_cands = st.session_state.get("step_candidates", [])
+    _all_cands = (
+        st.session_state.get("_smw_preview_candidates")
+        if key_prefix == "_smw_3d_"
+        else st.session_state.get("step_candidates", [])
+    ) or []
 
     _FACE_COLOR_DEFAULT_TYPES = {"Hole", "Large hole / boring", "Pocket", "Chamfer"}
     _has_face_colors = any(
@@ -341,6 +348,7 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
         _LEGEND_ITEMS: list[tuple[str, str]] = [
             ("#9E9E9E", "Part body"),
             ("#87CEEB", "Face Milling"),
+            ("#00A6A6", "Edge Milling"),
             ("#1E90FF", "Hole"),
             ("#8B008B", "Large Hole / Boring"),
             ("#FF8C00", "Slot / Slot-like opening"),
@@ -3031,7 +3039,7 @@ def page_select_machining_work():
 
     _spt          = st.session_state.get("starting_part_type", "Raw Block / Billet")
     _parse_result = st.session_state.get("step_parse_result")
-    _candidates   = st.session_state.get("step_candidates", [])
+    _base_candidates = st.session_state.get("step_candidates", [])
     _added_ids    = st.session_state.get("added_candidate_ids", set())
     _cand_warns   = st.session_state.get("step_candidate_warnings", [])
     _features     = st.session_state.get("features", [])
@@ -3042,6 +3050,15 @@ def page_select_machining_work():
             st.session_state._nav_page = "Part Setup"
             st.rerun()
         return
+
+    _is_raw_block = _spt == "Raw Block / Billet"
+    _candidates = apply_stock_allowance_to_candidates(
+        _base_candidates,
+        st.session_state.get("stock", {}),
+        _parse_result,
+        include_edge_milling=_is_raw_block,
+    )
+    st.session_state._smw_preview_candidates = _candidates
 
     _job_file = st.session_state.get("uploaded_filename") or "STEP loaded"
     _jm1, _jm2, _jm3, _jm4 = st.columns(4)
@@ -3063,7 +3080,6 @@ def page_select_machining_work():
     with _right:
         st.subheader("Feature Candidates")
 
-        _is_raw_block   = _spt == "Raw Block / Billet"
         _default_action = "Machine" if _is_raw_block else "Existing Geometry – No Machining"
 
         if not _is_raw_block:

@@ -26,6 +26,9 @@ OPERATION_RULES = {
     "Face Milling": [
         {"op": "Face Mill", "notes": "Face mill stock surface"},
     ],
+    "Edge Milling": [
+        {"op": "End Mill", "notes": "Mill side/edge stock allowance"},
+    ],
     "Outer Profile": [
         {"op": "End Mill", "notes": "Profile outer contour"},
     ],
@@ -125,6 +128,14 @@ def estimate_path_length(feature, operation_type, tool=None):
             return passes * (length + dia) * qty
         return 300.0
 
+    if ftype == "Edge Milling":
+        side_length = length or 50
+        axial_height = width or depth or 10
+        dia = tool_dia if tool_dia > 0 else 12.0
+        stepdown = max(dia * 0.75, 1.0)
+        depth_passes = max(1, math.ceil(axial_height / stepdown))
+        return side_length * depth_passes * qty
+
     # ── Outer Profile ────────────────────────────────────────────────────────
     if ftype == "Outer Profile":
         if length > 0 and width > 0:
@@ -154,6 +165,12 @@ def _context_note(ftype, feature_name, diameter, op_type):
             )
         if "top" in fname_lower:
             return "Primary setup facing operation."
+
+    if ftype == "Edge Milling":
+        return (
+            "Derived from raw-stock side allowance. Verify side access, "
+            "workholding clearance, and datum before programming."
+        )
 
     if ftype == "Large Hole / Boring" and op_type == "Boring":
         dia_note = f" Final diameter: Ø{diameter:.1f} mm." if (diameter or 0) > 0 else ""
@@ -218,15 +235,17 @@ def _sequence_key(op):
 
     if ftype == "Face Milling":                          # top / primary facing first
         return 0
-    if op_type in ("Spot Drill", "Pilot Drill", "Drill"):
+    if ftype == "Edge Milling":
         return 1
-    if op_type == "Boring":
+    if op_type in ("Spot Drill", "Pilot Drill", "Drill"):
         return 2
-    if op_type == "Rough End Mill":
+    if op_type == "Boring":
         return 3
-    if op_type == "Finish End Mill":
+    if op_type == "Rough End Mill":
         return 4
-    return 5                                             # chamfer, profile, other
+    if op_type == "Finish End Mill":
+        return 5
+    return 6                                             # chamfer, profile, other
 
 
 def plan_operations(features, tools, material):

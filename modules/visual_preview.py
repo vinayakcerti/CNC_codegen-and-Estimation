@@ -10,6 +10,7 @@ import re
 FEATURE_COLORS = {
     "Face Milling":        "#87CEEB",   # light blue
     "Face milling":        "#87CEEB",
+    "Edge Milling":        "#00A6A6",   # teal
     "Hole":                "#1E90FF",   # dodger blue
     "Large Hole / Boring": "#8B008B",   # dark magenta / purple
     "Large hole / boring": "#8B008B",
@@ -28,6 +29,7 @@ def _feature_color(ftype):
         return direct
     ft = ftype.lower()
     if "face mill" in ft:               return "#87CEEB"
+    if "edge mill" in ft or "side mill" in ft: return "#00A6A6"
     if "large hole" in ft or "boring" in ft: return "#8B008B"
     if "hole" in ft:                    return "#1E90FF"
     if "slot" in ft:                    return "#FF8C00"
@@ -226,6 +228,7 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
     _lw_slot   = 8   if _HL else 1.5
     _lw_pocket = 10  if _HL else 3
     _lw_step   = 10  if _HL else 3
+    _lw_edge   = 10  if _HL else 3
     _marker_sz = 20  if _HL else 10
 
     # Near-black shadow drawn behind the gold line for contrast
@@ -321,6 +324,30 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
                 ))
 
         # ── Slot: dashed outline at zmax — clearly secondary / fallback marker ──
+        elif "edge mill" in ft_low or "side mill" in ft_low:
+            axis = str(cand.get("edge_axis") or "").upper()
+            half_len = (length / 2) if length > 0 else 25.0
+            if axis == "Y":
+                rx = [x - half_len, x + half_len, x + half_len, x - half_len, x - half_len]
+                ry = [y, y, y, y, y]
+            else:
+                rx = [x, x, x, x, x]
+                ry = [y - half_len, y - half_len, y + half_len, y + half_len, y - half_len]
+            rz = [zmin, zmax, zmax, zmin, zmin]
+            if _HL:
+                traces.append(go.Scatter3d(
+                    x=rx, y=ry, z=rz, mode="lines",
+                    line=dict(color=_SHADOW_C, width=_lw_edge + _SHADOW_W),
+                    name="", legendgroup=_leg_group, showlegend=False, hoverinfo="none",
+                ))
+            traces.append(go.Scatter3d(
+                x=rx, y=ry, z=rz,
+                mode="lines",
+                line=dict(color=color, width=_lw_edge),
+                name=_leg_name, legendgroup=_leg_group, showlegend=_show_leg,
+                hovertext=hover, hoverinfo="text",
+            ))
+
         elif "slot" in ft_low:
             half_x, half_y = _infer_half_xy(cand, xmin, xmax, ymin, ymax)
             rx = [x - half_x, x + half_x, x + half_x, x - half_x, x - half_x]
