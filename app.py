@@ -583,6 +583,22 @@ def _commit_group_selections(edited_grouped_df, groups, candidates) -> int:
     return _n_added
 
 
+def _stock_adjusted_candidates(include_edge_milling=None):
+    """Return current CAD candidates with configured stock allowance applied."""
+    _spt = st.session_state.get("starting_part_type", "Raw Block / Billet")
+    _include_edges = (
+        _spt == "Raw Block / Billet"
+        if include_edge_milling is None
+        else bool(include_edge_milling)
+    )
+    return apply_stock_allowance_to_candidates(
+        st.session_state.get("step_candidates", []),
+        st.session_state.get("stock", {}),
+        st.session_state.get("step_parse_result", {}),
+        include_edge_milling=_include_edges,
+    )
+
+
 def init_session():
     if "tools" not in st.session_state:
         db_tools = load_tools_from_db()
@@ -1950,7 +1966,8 @@ def page_setup_review():
     material = st.session_state.get("selected_material")
     features = st.session_state.get("features", [])
     step_ok  = bool(st.session_state.get("step_parse_result"))
-    _candidates      = st.session_state.get("step_candidates", [])
+    _is_raw_block    = st.session_state.get("starting_part_type", "Raw Block / Billet") == "Raw Block / Billet"
+    _candidates      = _stock_adjusted_candidates(include_edge_milling=_is_raw_block)
     _cand_warns      = st.session_state.get("step_candidate_warnings", [])
     _added_ids       = st.session_state.get("added_candidate_ids", set())
     _from_candidates = st.session_state.get("features_from_candidates", False)
@@ -2132,7 +2149,6 @@ def page_setup_review():
             for _w in _cand_warns:
                 st.warning(_w)
 
-            _is_raw_block = st.session_state.get("starting_part_type", "Raw Block / Billet") == "Raw Block / Billet"
             _default_action = "Machine" if _is_raw_block else "Existing Geometry – No Machining"
             _rows = []
             for _c in _candidates:
@@ -3039,7 +3055,6 @@ def page_select_machining_work():
 
     _spt          = st.session_state.get("starting_part_type", "Raw Block / Billet")
     _parse_result = st.session_state.get("step_parse_result")
-    _base_candidates = st.session_state.get("step_candidates", [])
     _added_ids    = st.session_state.get("added_candidate_ids", set())
     _cand_warns   = st.session_state.get("step_candidate_warnings", [])
     _features     = st.session_state.get("features", [])
@@ -3052,12 +3067,7 @@ def page_select_machining_work():
         return
 
     _is_raw_block = _spt == "Raw Block / Billet"
-    _candidates = apply_stock_allowance_to_candidates(
-        _base_candidates,
-        st.session_state.get("stock", {}),
-        _parse_result,
-        include_edge_milling=_is_raw_block,
-    )
+    _candidates = _stock_adjusted_candidates(include_edge_milling=_is_raw_block)
     st.session_state._smw_preview_candidates = _candidates
 
     _job_file = st.session_state.get("uploaded_filename") or "STEP loaded"

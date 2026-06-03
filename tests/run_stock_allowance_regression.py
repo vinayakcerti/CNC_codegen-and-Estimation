@@ -62,6 +62,56 @@ def _run_sample(sample):
     return len(adjusted), edge_count
 
 
+def _run_helper_edges():
+    candidates = [{
+        "candidate_id": "F001",
+        "feature_name": "Face milling top surface",
+        "feature_type": "Face milling",
+        "quantity": 1,
+        "length": 100.0,
+        "width": 50.0,
+        "depth": 1.0,
+    }]
+    part = {
+        "length_mm": 100.0,
+        "width_mm": 50.0,
+        "height_mm": 20.0,
+        "x_range": (0.0, 100.0),
+        "y_range": (0.0, 50.0),
+    }
+
+    non_raw = apply_stock_allowance_to_candidates(
+        candidates,
+        {"length": 110.0, "width": 60.0, "height": 25.0},
+        part,
+        include_edge_milling=False,
+    )
+    if any(c.get("feature_type") == "Edge Milling" for c in non_raw):
+        raise AssertionError("non-raw workflow should not auto-add edge milling")
+
+    tiny_allowance = apply_stock_allowance_to_candidates(
+        candidates,
+        {"length": 100.005, "width": 50.005, "height": 20.005},
+        part,
+        include_edge_milling=True,
+    )
+    if any(c.get("feature_type") == "Edge Milling" for c in tiny_allowance):
+        raise AssertionError("tiny stock noise should not create edge milling")
+    tiny_depths = {round(float(c.get("depth") or 0), 3) for c in tiny_allowance}
+    if tiny_depths != {1.0}:
+        raise AssertionError(f"tiny stock noise should preserve detected depth, got {tiny_depths}")
+
+    x_only = apply_stock_allowance_to_candidates(
+        candidates,
+        {"length": 110.0, "width": 50.0, "height": 25.0},
+        part,
+        include_edge_milling=True,
+    )
+    edge_count = sum(1 for c in x_only if c.get("feature_type") == "Edge Milling")
+    if edge_count != 2:
+        raise AssertionError(f"X-only allowance should create 2 edge candidates, got {edge_count}")
+
+
 def main():
     print("=" * 72)
     print("Stock Allowance Regression")
@@ -69,6 +119,8 @@ def main():
     for sample in SAMPLES:
         total, edge_count = _run_sample(sample)
         print(f"PASS {sample}: {total} adjusted candidates, {edge_count} edge milling")
+    _run_helper_edges()
+    print("PASS helper edge cases: non-raw, tiny allowance, one-axis allowance")
     print("=" * 72)
     print("Result: STOCK ALLOWANCE REGRESSION PASSED")
     return 0
