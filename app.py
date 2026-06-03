@@ -587,7 +587,7 @@ def _stock_adjusted_candidates(include_edge_milling=None):
     """Return current CAD candidates with configured stock allowance applied."""
     _spt = st.session_state.get("starting_part_type", "Raw Block / Billet")
     _include_edges = (
-        _spt == "Raw Block / Billet"
+        True
         if include_edge_milling is None
         else bool(include_edge_milling)
     )
@@ -1967,7 +1967,7 @@ def page_setup_review():
     features = st.session_state.get("features", [])
     step_ok  = bool(st.session_state.get("step_parse_result"))
     _is_raw_block    = st.session_state.get("starting_part_type", "Raw Block / Billet") == "Raw Block / Billet"
-    _candidates      = _stock_adjusted_candidates(include_edge_milling=_is_raw_block)
+    _candidates      = _stock_adjusted_candidates()
     _cand_warns      = st.session_state.get("step_candidate_warnings", [])
     _added_ids       = st.session_state.get("added_candidate_ids", set())
     _from_candidates = st.session_state.get("features_from_candidates", False)
@@ -3067,7 +3067,7 @@ def page_select_machining_work():
         return
 
     _is_raw_block = _spt == "Raw Block / Billet"
-    _candidates = _stock_adjusted_candidates(include_edge_milling=_is_raw_block)
+    _candidates = _stock_adjusted_candidates()
     st.session_state._smw_preview_candidates = _candidates
 
     _job_file = st.session_state.get("uploaded_filename") or "STEP loaded"

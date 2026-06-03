@@ -89,6 +89,18 @@ def _run_helper_edges():
     if any(c.get("feature_type") == "Edge Milling" for c in non_raw):
         raise AssertionError("non-raw workflow should not auto-add edge milling")
 
+    review_visible = apply_stock_allowance_to_candidates(
+        candidates,
+        {"length": 110.0, "width": 60.0, "height": 25.0},
+        part,
+        include_edge_milling=True,
+    )
+    review_edge_count = sum(1 for c in review_visible if c.get("feature_type") == "Edge Milling")
+    if review_edge_count != 4:
+        raise AssertionError(
+            f"review-mode allowance should surface 4 edge candidates, got {review_edge_count}"
+        )
+
     tiny_allowance = apply_stock_allowance_to_candidates(
         candidates,
         {"length": 100.005, "width": 50.005, "height": 20.005},
@@ -120,7 +132,7 @@ def main():
         total, edge_count = _run_sample(sample)
         print(f"PASS {sample}: {total} adjusted candidates, {edge_count} edge milling")
     _run_helper_edges()
-    print("PASS helper edge cases: non-raw, tiny allowance, one-axis allowance")
+    print("PASS helper edge cases: non-raw, review-visible, tiny allowance, one-axis allowance")
     print("=" * 72)
     print("Result: STOCK ALLOWANCE REGRESSION PASSED")
     return 0
