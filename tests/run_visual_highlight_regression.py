@@ -106,6 +106,32 @@ def _run_slide_base_highlight_check():
         raise AssertionError("slide-base slot highlight should render a highlighted marker patch")
 
     print("PASS slide-base highlight regression: hole and slot highlights render")
+    _run_slide_base_grouping_check(candidates)
+
+
+def _run_slide_base_grouping_check(candidates):
+    import app
+
+    groups = app._build_candidate_groups(candidates, "Weldment / Fabricated Part")
+    slot_candidates = [c for c in candidates if c.get("feature_type") == "Slot"]
+    slot_groups = [g for g in groups if g.get("feature_type") == "Slot"]
+    review_locations = sum(g.get("count", 0) for g in slot_groups)
+    detected_slots = len(slot_candidates)
+
+    if detected_slots <= 0:
+        raise AssertionError("slide-base grouping check needs slot candidates")
+    if review_locations >= detected_slots:
+        raise AssertionError(
+            f"slide-base grouped review should reduce noisy slot detections "
+            f"({review_locations} review locations from {detected_slots} detections)"
+        )
+    if not any(g.get("detected_count", g.get("count", 0)) > g.get("count", 0) for g in slot_groups):
+        raise AssertionError("slide-base grouped review should expose collapsed detected-face counts")
+
+    print(
+        "PASS slide-base grouped review regression: "
+        f"{detected_slots} slot detections -> {review_locations} review locations"
+    )
 
 
 if __name__ == "__main__":
