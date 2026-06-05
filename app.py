@@ -525,6 +525,41 @@ def _group_widget_suffix(group) -> str:
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:10]
 
 
+def _preview_member_ids_for_group(group, candidates, max_members=12):
+    """Return representative member ids for preview highlighting.
+
+    Complex welded/rework parts can produce many duplicate slot-like candidates
+    from paired face combinations. Highlighting all of them at once makes the
+    model unreadable, so group preview uses one candidate per approximate
+    physical location while commit still expands the full selected group.
+    """
+    member_ids = group.get("member_ids", [])
+    if len(member_ids) <= max_members:
+        return list(member_ids)
+
+    if str(group.get("feature_type", "")).lower() != "slot":
+        return list(member_ids[:max_members])
+
+    lookup = {c.get("candidate_id"): c for c in candidates}
+    reps = []
+    seen_locations = set()
+    for cid in member_ids:
+        cand = lookup.get(cid)
+        if not cand:
+            continue
+        key = (
+            round(float(cand.get("x_pos") or 0.0), 0),
+            round(float(cand.get("y_pos") or 0.0), 0),
+        )
+        if key in seen_locations:
+            continue
+        seen_locations.add(key)
+        reps.append(cid)
+        if len(reps) >= max_members:
+            break
+    return reps or list(member_ids[:max_members])
+
+
 def _commit_group_selections(edited_grouped_df, groups, candidates) -> int:
     """Commit ticked group rows to st.session_state.features.
 
@@ -3160,7 +3195,8 @@ def page_select_machining_work():
                 else:
                     _hl_gi = _hl_group_opts.index(_hl_group_sel) - 1
                     _hl_from_selectbox = (
-                        set(_groups[_hl_gi]["member_ids"]) if 0 <= _hl_gi < len(_groups) else set()
+                        set(_preview_member_ids_for_group(_groups[_hl_gi], _filtered))
+                        if 0 <= _hl_gi < len(_groups) else set()
                     )
 
                 st.caption("Check groups to machine — ticked cards highlight gold in the 3D viewer.")
@@ -3225,7 +3261,7 @@ def page_select_machining_work():
                 for _gi, _g in enumerate(_groups):
                     _suffix = _group_widget_suffix(_g)
                     if st.session_state.get(f"_smw_card_accept_{_suffix}", False):
-                        _hl_from_ticks.update(_g["member_ids"])
+                        _hl_from_ticks.update(_preview_member_ids_for_group(_g, _filtered))
 
                 _new_hl_ids = (
                     _hl_from_ticks if _hl_from_ticks else _hl_from_selectbox
