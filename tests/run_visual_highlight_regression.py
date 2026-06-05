@@ -14,6 +14,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from modules.visual_preview import build_step_mesh3d
+from modules.step_parser import detect_feature_candidates_from_cadquery_file
 
 
 def _box_mesh():
@@ -54,7 +55,57 @@ def main():
         raise AssertionError("highlighted slot should render a filled Mesh3d patch")
 
     print("PASS visual highlight regression: slot highlight has filled patch")
+    _run_slide_base_highlight_check()
     return 0
+
+
+def _run_slide_base_highlight_check():
+    sample = _PROJECT_ROOT / "test_samples" / "3100171001_01 SLIDE BASE-1812 ( FOR TOOL LOADER ).STEP"
+    detection = detect_feature_candidates_from_cadquery_file(str(sample))
+    if not detection.get("success"):
+        raise AssertionError(f"slide-base detection failed: {detection.get('warnings')}")
+
+    candidates = detection.get("candidate_features", [])
+    hole = next((c for c in candidates if c.get("feature_type") == "Hole"), None)
+    slot = next((c for c in candidates if c.get("feature_type") == "Slot"), None)
+    if hole is None:
+        raise AssertionError("slide-base sample should expose at least one hole candidate")
+    if slot is None:
+        raise AssertionError("slide-base sample should expose at least one slot candidate")
+    if not hole.get("face_mesh_data"):
+        raise AssertionError("slide-base hole candidate should have CAD face mesh data")
+
+    import cadquery as cq
+    cq_result = cq.importers.importStep(str(sample))
+    verts, tris = cq_result.val().tessellate(0.5)
+    mesh = {
+        "x": [v.x for v in verts],
+        "y": [v.y for v in verts],
+        "z": [v.z for v in verts],
+        "i": [t[0] for t in tris],
+        "j": [t[1] for t in tris],
+        "k": [t[2] for t in tris],
+    }
+
+    hole_fig = build_step_mesh3d(
+        mesh,
+        {},
+        candidates=[hole],
+        highlighted_candidate_ids={hole["candidate_id"]},
+    )
+    if not any(tr.type == "mesh3d" and getattr(tr, "name", "") == "Highlighted" for tr in hole_fig.data):
+        raise AssertionError("slide-base hole highlight should render a highlighted CAD face mesh")
+
+    slot_fig = build_step_mesh3d(
+        mesh,
+        {},
+        candidates=[slot],
+        highlighted_candidate_ids={slot["candidate_id"]},
+    )
+    if not any(tr.type == "mesh3d" and getattr(tr, "name", "") == "Highlighted" for tr in slot_fig.data):
+        raise AssertionError("slide-base slot highlight should render a highlighted marker patch")
+
+    print("PASS slide-base highlight regression: hole and slot highlights render")
 
 
 if __name__ == "__main__":
