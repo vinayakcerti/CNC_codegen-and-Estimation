@@ -353,6 +353,15 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
             rx = [x - half_x, x + half_x, x + half_x, x - half_x, x - half_x]
             ry = [y - half_y, y - half_y, y + half_y, y + half_y, y - half_y]
             if _HL:
+                fig_x = [x - half_x, x + half_x, x + half_x, x - half_x]
+                fig_y = [y - half_y, y - half_y, y + half_y, y + half_y]
+                traces.append(go.Mesh3d(
+                    x=fig_x, y=fig_y, z=[zmax] * 4,
+                    i=[0, 0], j=[1, 2], k=[2, 3],
+                    color=color, opacity=0.55, flatshading=True,
+                    name=_leg_name, legendgroup=_leg_group, showlegend=_show_leg,
+                    hovertext=hover, hoverinfo="text",
+                ))
                 traces.append(go.Scatter3d(
                     x=rx, y=ry, z=[zmax] * 5, mode="lines",
                     line=dict(color=_SHADOW_C, width=_lw_slot + _SHADOW_W),
@@ -362,7 +371,7 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
                 x=rx, y=ry, z=[zmax] * 5,
                 mode="lines",
                 line=dict(color=color, width=_lw_slot, dash="dash"),
-                name=_leg_name, legendgroup=_leg_group, showlegend=_show_leg,
+                name=_leg_name, legendgroup=_leg_group, showlegend=(_show_leg and not _HL),
                 hovertext=hover, hoverinfo="text",
             ))
 

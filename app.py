@@ -3368,7 +3368,7 @@ def page_select_machining_work():
                         key="_smw_cand_editor",
                     )
 
-                # Auto-highlight from ticked rows; fall back to selectbox (Raw Block: selectbox only)
+                # Auto-highlight from ticked rows; fall back to selectbox.
                 _hl_from_ticks = set()
                 if "candidate_id" in _edited.columns and "accept" in _edited.columns:
                     for _, _r in _edited.iterrows():
@@ -3377,7 +3377,7 @@ def page_select_machining_work():
                             if _cid:
                                 _hl_from_ticks.add(_cid)
                 _new_hl_ids = (
-                    _hl_from_ticks if (_hl_from_ticks and not _is_raw_block) else _hl_from_selectbox
+                    _hl_from_ticks if _hl_from_ticks else _hl_from_selectbox
                 )
                 st.session_state._smw_highlight_candidate_ids = _new_hl_ids
                 if _new_hl_ids != _prev_hl_ids:
