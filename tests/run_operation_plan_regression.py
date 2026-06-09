@@ -11,7 +11,12 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from modules.data_store import get_default_materials, get_default_tools
-from modules.operation_planner import plan_operations
+from modules.gcode_generator import generate_gcode
+from modules.operation_planner import (
+    is_secondary_setup_operation,
+    plan_operations,
+    secondary_setup_labels,
+)
 from modules.setup_sheet import generate_setup_sheet
 
 
@@ -119,6 +124,11 @@ def main():
         raise AssertionError("bottom face milling should carry Bottom setup label")
     if any(not op.get("setup_label") for op in operations):
         raise AssertionError("all planned operations should carry a setup label")
+    secondary_labels = secondary_setup_labels(operations)
+    if secondary_labels != ["Left", "Bottom"]:
+        raise AssertionError(f"expected Left and Bottom secondary setups, got {secondary_labels}")
+    if not any(is_secondary_setup_operation(op) for op in operations if op.get("setup_label") == "Left"):
+        raise AssertionError("left edge milling should be treated as additional setup work")
 
     if any(op.get("_depth", 0) > 30 for op in operations if op.get("feature_type") == "Edge Milling"):
         raise AssertionError("edge milling operation depth/height should remain physically realistic")
@@ -144,6 +154,16 @@ def main():
             raise AssertionError(f"setup sheet missing geometry column {expected}")
     if "<th>Setup</th>" not in html or "<td>Bottom</td>" not in html:
         raise AssertionError("setup sheet missing setup labels")
+
+    gcode = generate_gcode(operations, {"machine_name": "VMC", "controller": "Fanuc"}, {
+        "length": 130.0,
+        "width": 100.0,
+        "height": 40.0,
+    })
+    if "ADDITIONAL SETUP - LEFT ORIENTATION" not in gcode:
+        raise AssertionError("draft G-code missing left-side setup separator")
+    if "SETUP 2" not in gcode:
+        raise AssertionError("draft G-code missing bottom flip separator")
     for expected in ("130.0", "100.0", "90.0", "12.0"):
         if expected not in html:
             raise AssertionError(f"setup sheet missing audit dimension {expected}")

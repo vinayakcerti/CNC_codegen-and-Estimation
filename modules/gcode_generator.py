@@ -45,6 +45,7 @@ def generate_gcode(operations, machine, stock):
     lines.append(";")
 
     current_tool = None
+    _announced_setup_labels = set()
     _setup2_announced = False
 
     for op in operations:
@@ -63,6 +64,17 @@ def generate_gcode(operations, machine, stock):
         length = op.get("_length", 0.0)
         width = op.get("_width", 0.0)
         qty = op.get("_quantity", 1)
+
+        setup_label = op.get("setup_label") or "Unknown"
+        if setup_label not in ("Top", "Unknown", "Bottom") and setup_label not in _announced_setup_labels:
+            lines.append(";")
+            lines.append("; ============================================================")
+            lines.append(f"; ADDITIONAL SETUP - {setup_label.upper()} ORIENTATION")
+            lines.append("; Stop here. Re-fixture/re-orient the part as required.")
+            lines.append("; Re-indicate datums and verify workholding and fixture clearance.")
+            lines.append("; ============================================================")
+            lines.append(";")
+            _announced_setup_labels.add(setup_label)
 
         # ── Setup 2 separator ──────────────────────────────────────────
         if (op_type == "Face Mill"

@@ -231,6 +231,33 @@ def _setup_sort_rank(label):
     }.get(label or "Unknown", 5)
 
 
+def setup_labels_for_operations(operations):
+    labels = {
+        (op.get("setup_label") or "Unknown")
+        for op in operations
+        if op.get("setup_label") is not None
+    }
+    return sorted(labels, key=_setup_sort_rank)
+
+
+def is_secondary_setup_operation(op):
+    label = op.get("setup_label") or "Unknown"
+    if label not in ("Top", "Unknown"):
+        return True
+    return (
+        op.get("feature_type") == "Face Milling"
+        and "bottom" in op.get("feature_name", "").lower()
+    )
+
+
+def secondary_setup_labels(operations):
+    return [
+        label
+        for label in setup_labels_for_operations(operations)
+        if label not in ("Top", "Unknown")
+    ]
+
+
 def _tool_capability_warning(op_type, feature, tool):
     """Return a planning warning when selected tool capability looks doubtful."""
     diameter = float(feature.get("diameter", 0) or 0)

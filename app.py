@@ -18,7 +18,11 @@ from modules.data_store import (
     add_job_note, load_job_notes, delete_job_note, clear_all_job_notes,
     get_database_status,
 )
-from modules.operation_planner import plan_operations
+from modules.operation_planner import (
+    is_secondary_setup_operation,
+    plan_operations,
+    secondary_setup_labels,
+)
 from modules.time_estimator import estimate_time
 from modules.gcode_generator import generate_gcode
 from modules.visual_preview import build_top_view, build_3d_view, build_step_mesh3d, FEATURE_COLORS
@@ -2466,26 +2470,24 @@ def page_operation_plan():
     _total_path_mm = sum(op.get("est_path_length_mm", 0) for op in operations)
     _unique_tools  = set(op.get("tool_number") for op in operations)
     _tool_changes  = max(len(_unique_tools) - 1, 0)
-    _has_setup2    = any(
-        op.get("feature_type") == "Face Milling"
-        and "bottom" in op.get("feature_name", "").lower()
-        for op in operations
-    )
+    _secondary_setups = secondary_setup_labels(operations)
+    _has_setup2 = bool(_secondary_setups)
     _has_boring    = any(op.get("operation_type") == "Boring" for op in operations)
 
     sc1, sc2, sc3, sc4 = st.columns(4)
     sc1.metric("Operations",       len(operations))
     sc2.metric("Tool Changes",     _tool_changes)
     sc3.metric("Est. Path Length", f"{_total_path_mm:.0f} mm")
-    sc4.metric("Setup 2 Required", "Yes" if _has_setup2 else "No")
+    sc4.metric("Additional Setups", len(_secondary_setups))
 
     st.divider()
 
     # ── Warnings ──────────────────────────────────────────────────────────────
     if _has_setup2:
         st.warning(
-            "**Setup 2 / Flip Required:** One or more operations require flipping the part. "
-            "Verify workholding and fixture clearance before machining the bottom face."
+            "**Additional Setup Orientation Required:** "
+            f"{', '.join(_secondary_setups)} operation(s) require re-fixturing or side access. "
+            "Verify workholding, datum transfer, and fixture clearance before machining."
         )
     if _has_boring:
         st.warning(
@@ -2499,10 +2501,7 @@ def page_operation_plan():
 
     # ── Setup 1 / Setup 2 split ───────────────────────────────────────────────
     def _is_setup2_op(op):
-        return (
-            op.get("feature_type") == "Face Milling"
-            and "bottom" in op.get("feature_name", "").lower()
-        )
+        return is_secondary_setup_operation(op)
 
     _setup1_ops = [op for op in operations if not _is_setup2_op(op)]
     _setup2_ops = [op for op in operations if     _is_setup2_op(op)]
@@ -2512,16 +2511,16 @@ def page_operation_plan():
         if operations else []
     )
 
-    st.subheader("Setup 1 Operations")
+    st.subheader("Primary Setup Operations")
     if _setup1_ops and display_cols:
         _df1 = pd.DataFrame(_setup1_ops)[display_cols]
         _df1.columns = [c.replace("_", " ").title() for c in _df1.columns]
         st.dataframe(_df1, use_container_width=True, hide_index=True)
     else:
-        st.info("No Setup 1 operations.")
+        st.info("No primary setup operations.")
 
     if _has_setup2:
-        st.subheader("Setup 2 / Flip Operations")
+        st.subheader("Additional Setup Operations")
         if _setup2_ops and display_cols:
             _df2 = pd.DataFrame(_setup2_ops)[display_cols]
             _df2.columns = [c.replace("_", " ").title() for c in _df2.columns]
@@ -2921,22 +2920,20 @@ def page_cnc_export():
     mat  = st.session_state.selected_material
 
     # ── Status cards ──────────────────────────────────────────────────────────
-    _has_setup2 = any(
-        op.get("feature_type") == "Face Milling"
-        and "bottom" in op.get("feature_name", "").lower()
-        for op in st.session_state.operations
-    )
+    _secondary_setups = secondary_setup_labels(st.session_state.operations)
+    _has_setup2 = bool(_secondary_setups)
 
     _sc1, _sc2, _sc3, _sc4 = st.columns(4)
     _sc1.metric("Operations",       len(st.session_state.operations))
     _sc2.metric("Machine",          mach.get("machine_name", "—"))
     _sc3.metric("Material",         mat.get("name", "—"))
-    _sc4.metric("Setup 2 Required", "Yes" if _has_setup2 else "No")
+    _sc4.metric("Additional Setups", len(_secondary_setups))
 
     if _has_setup2:
         st.warning(
-            "**Setup 2 / Flip Required:** This job includes a bottom face milling operation. "
-            "Flip the part and re-set zero before machining the bottom face."
+            "**Additional Setup Orientation Required:** "
+            f"{', '.join(_secondary_setups)} work requires re-fixturing or side access. "
+            "Re-indicate the part and verify workholding before continuing."
         )
 
     st.divider()
