@@ -12,6 +12,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from modules.data_store import get_default_materials, get_default_tools
 from modules.operation_planner import plan_operations
+from modules.setup_sheet import generate_setup_sheet
 
 
 def _audit_17b_features():
@@ -91,6 +92,22 @@ def main():
 
     if any(op.get("_depth", 0) > 30 for op in operations if op.get("feature_type") == "Edge Milling"):
         raise AssertionError("edge milling operation depth/height should remain physically realistic")
+
+    html = generate_setup_sheet(
+        operations,
+        {"machine_name": "VMC", "controller": "Fanuc"},
+        material,
+        {"length": 130.0, "width": 100.0, "height": 40.0},
+        _audit_17b_features(),
+        {"total_machine_time_min": 1, "cutting_time_min": 1, "setup_time_min": 0},
+        job_name="17b audit",
+    )
+    for expected in ("<th>X</th>", "<th>Y</th>", "<th>L</th>", "<th>W</th>", "<th>D</th>"):
+        if expected not in html:
+            raise AssertionError(f"setup sheet missing geometry column {expected}")
+    for expected in ("130.0", "100.0", "90.0", "12.0"):
+        if expected not in html:
+            raise AssertionError(f"setup sheet missing audit dimension {expected}")
 
     print("PASS operation plan regression: 17b step strategy and setup sequencing")
     return 0
