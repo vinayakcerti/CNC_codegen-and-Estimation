@@ -400,6 +400,46 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
         st.info("Upload a STEP file to see the interactive 3D preview here.")
 
 
+def _feature_signature(feature):
+    """Stable key used to prevent duplicate accepted CAD features."""
+    return (
+        str(feature.get("feature_type") or "").strip().lower(),
+        str(feature.get("feature_name") or "").strip().lower(),
+        round(float(feature.get("x_pos") or 0.0), 3),
+        round(float(feature.get("y_pos") or 0.0), 3),
+        round(float(feature.get("diameter") or 0.0), 3),
+        round(float(feature.get("length") or 0.0), 3),
+        round(float(feature.get("width") or 0.0), 3),
+        round(float(feature.get("depth") or 0.0), 3),
+    )
+
+
+def _accepted_feature_signatures():
+    return {
+        _feature_signature(feature)
+        for feature in st.session_state.get("features", [])
+    }
+
+
+def _feature_from_candidate(candidate, feature_type, action):
+    return {
+        "feature_name":           candidate.get("feature_name") or feature_type,
+        "feature_type":           feature_type,
+        "quantity":               int(candidate.get("quantity")  or 1),
+        "x_pos":                  float(candidate.get("x_pos")   or 0.0),
+        "y_pos":                  float(candidate.get("y_pos")   or 0.0),
+        "diameter":               float(candidate.get("diameter") or 0.0),
+        "length":                 float(candidate.get("length")  or 0.0),
+        "width":                  float(candidate.get("width")   or 0.0),
+        "depth":                  float(candidate.get("depth")   or 0.0),
+        "tolerance_note":         candidate.get("tolerance_note") or "",
+        "priority":               int(candidate.get("priority")  or 3),
+        "machining_action":       action,
+        "selected_for_machining": True,
+        "source_candidate_id":     candidate.get("candidate_id", ""),
+    }
+
+
 def _commit_candidate_selections(edited_df, candidates) -> int:
     """Commit ticked candidate rows to st.session_state.features.
 
@@ -410,6 +450,7 @@ def _commit_candidate_selections(edited_df, candidates) -> int:
     if "added_candidate_ids" not in st.session_state:
         st.session_state.added_candidate_ids = set()
     _lookup = {c["candidate_id"]: c for c in candidates}
+    _existing_signatures = _accepted_feature_signatures()
     _n_added = 0
     for _, _row in edited_df.iterrows():
         _cid    = _row["candidate_id"]
@@ -427,21 +468,13 @@ def _commit_candidate_selections(edited_df, candidates) -> int:
             (_c.get("feature_type") or "").strip().lower(),
             _c.get("feature_type", ""),
         )
-        st.session_state.features.append({
-            "feature_name":           _c.get("feature_name") or _ftype,
-            "feature_type":           _ftype,
-            "quantity":               int(_c.get("quantity")  or 1),
-            "x_pos":                  float(_c.get("x_pos")   or 0.0),
-            "y_pos":                  float(_c.get("y_pos")   or 0.0),
-            "diameter":               float(_c.get("diameter") or 0.0),
-            "length":                 float(_c.get("length")  or 0.0),
-            "width":                  float(_c.get("width")   or 0.0),
-            "depth":                  float(_c.get("depth")   or 0.0),
-            "tolerance_note":         _c.get("tolerance_note") or "",
-            "priority":               int(_c.get("priority")  or 3),
-            "machining_action":       _action,
-            "selected_for_machining": True,
-        })
+        _feature = _feature_from_candidate(_c, _ftype, _action)
+        _sig = _feature_signature(_feature)
+        if _sig in _existing_signatures:
+            st.session_state.added_candidate_ids.add(_cid)
+            continue
+        st.session_state.features.append(_feature)
+        _existing_signatures.add(_sig)
         st.session_state.added_candidate_ids.add(_cid)
         _n_added += 1
     return _n_added
@@ -636,6 +669,7 @@ def _commit_group_selections(edited_grouped_df, groups, candidates) -> int:
     if "added_candidate_ids" not in st.session_state:
         st.session_state.added_candidate_ids = set()
     _cand_lookup = {c["candidate_id"]: c for c in candidates}
+    _existing_signatures = _accepted_feature_signatures()
     _n_added = 0
 
     for _, _row in edited_grouped_df.iterrows():
@@ -662,21 +696,13 @@ def _commit_group_selections(edited_grouped_df, groups, candidates) -> int:
                 (_c.get("feature_type") or "").strip().lower(),
                 _c.get("feature_type", ""),
             )
-            st.session_state.features.append({
-                "feature_name":           _c.get("feature_name") or _ftype,
-                "feature_type":           _ftype,
-                "quantity":               int(_c.get("quantity")  or 1),
-                "x_pos":                  float(_c.get("x_pos")   or 0.0),
-                "y_pos":                  float(_c.get("y_pos")   or 0.0),
-                "diameter":               float(_c.get("diameter") or 0.0),
-                "length":                 float(_c.get("length")  or 0.0),
-                "width":                  float(_c.get("width")   or 0.0),
-                "depth":                  float(_c.get("depth")   or 0.0),
-                "tolerance_note":         _c.get("tolerance_note") or "",
-                "priority":               int(_c.get("priority")  or 3),
-                "machining_action":       _action,
-                "selected_for_machining": True,
-            })
+            _feature = _feature_from_candidate(_c, _ftype, _action)
+            _sig = _feature_signature(_feature)
+            if _sig in _existing_signatures:
+                st.session_state.added_candidate_ids.add(_cid)
+                continue
+            st.session_state.features.append(_feature)
+            _existing_signatures.add(_sig)
             st.session_state.added_candidate_ids.add(_cid)
             _n_added += 1
 
