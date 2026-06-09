@@ -82,6 +82,20 @@ _UNIT_LABELS = {
 }
 
 
+def _setup_label_from_normal(nx=0.0, ny=0.0, nz=0.0):
+    """Return a planning setup label from the dominant face normal."""
+    vals = {
+        "Right": float(nx or 0.0),
+        "Left": -float(nx or 0.0),
+        "Back": float(ny or 0.0),
+        "Front": -float(ny or 0.0),
+        "Top": float(nz or 0.0),
+        "Bottom": -float(nz or 0.0),
+    }
+    label, value = max(vals.items(), key=lambda item: item[1])
+    return label if value >= 0.5 else "Unknown"
+
+
 def _detect_unit_factor(text: str):
     upper = text.upper()
     cbu_pattern = re.compile(r"CONVERSION_BASED_UNIT\s*\(\s*'([^']+)'", re.IGNORECASE)
@@ -963,6 +977,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "tolerance_note":   "",
             "priority":         1,
             "confidence":       "high",
+            "setup_label":      _setup_label_from_normal(0.0, 0.0, nz),
             "detection_source": "cadquery_face_records",
             "detection_note":   _face_note,
             "face_indices":     [best["face_index"]],
@@ -1031,6 +1046,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "tolerance_note":   "",
             "priority":         2,
             "confidence":       confidence,
+            "setup_label":      "Top",
             "detection_source": "cadquery_face_records",
             "detection_note":   (
                 f"Cylinder face #{r['face_index']}; "
@@ -1156,6 +1172,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "tolerance_note":   "",
             "priority":         3,
             "confidence":       "medium",
+            "setup_label":      "Top",
             "detection_source": "cadquery_face_records",
             "detection_note":   (
                 f"Paired non-circular cylinder end faces "
@@ -1430,6 +1447,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 "tolerance_note":   "",
                 "priority":         3,
                 "confidence":       _confidence,
+                "setup_label":      "Top",
                 "detection_source": _dsource,
                 "detection_note":   _pnote,
                 "face_indices":     _face_idxs,
@@ -1624,6 +1642,11 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                 _stcid    = f"ST{_st_n[0]:03d}"
                 _ax_lbl   = _nkey.replace("normal_", "").upper()
                 _sdepth_r = round(_sdepth, 3)
+                _st_setup_label = _setup_label_from_normal(
+                    _sf.get("normal_x") or 0.0,
+                    _sf.get("normal_y") or 0.0,
+                    _sf.get("normal_z") or 0.0,
+                )
 
                 _stnote = (
                     f"Step floor: face #{_sf['face_index']} "
@@ -1660,6 +1683,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
                     "tolerance_note":   "",
                     "priority":         3,
                     "confidence":       "medium",
+                    "setup_label":      _st_setup_label,
                     "detection_source": "intermediate_floor_and_shoulder_wall",
                     "detection_note":   _stnote,
                     "face_indices":     [_sf["face_index"], _sw["face_index"], _outer_f["face_index"]],
@@ -1747,6 +1771,7 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "tolerance_note":   "",
             "priority":         4,
             "confidence":       "medium" if _ch_n >= 3 else "low",
+            "setup_label":      "Top",
             "detection_source": "angled_top_plane_faces",
             "detection_note":   _ch_note,
             "face_indices":     [_cf["face_index"] for _cf in _ch_faces],

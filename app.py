@@ -437,6 +437,7 @@ def _feature_from_candidate(candidate, feature_type, action):
         "machining_action":       action,
         "selected_for_machining": True,
         "source_candidate_id":     candidate.get("candidate_id", ""),
+        "setup_label":            candidate.get("setup_label", "Unknown"),
     }
 
 
@@ -2194,7 +2195,7 @@ def page_setup_review():
         display_cols = [
             "feature_name", "feature_type", "quantity",
             "x_pos", "y_pos", "diameter", "length", "width", "depth",
-            "tolerance_note", "priority",
+            "setup_label", "tolerance_note", "priority",
             "machining_action", "selected_for_machining",
         ]
         df = pd.DataFrame(features)
@@ -2212,6 +2213,7 @@ def page_setup_review():
                 "length":                 "L (mm)",
                 "width":                  "W (mm)",
                 "depth":                  "Depth (mm)",
+                "setup_label":            "Setup",
                 "tolerance_note":         "Tolerance",
                 "priority":               "Priority",
                 "machining_action":       "Action",
@@ -2287,6 +2289,7 @@ def page_setup_review():
                     "feature_type":     _c.get("feature_type", ""),
                     "feature_name":     _c.get("feature_name", ""),
                     "confidence":       _c.get("confidence", ""),
+                    "setup_label":      _c.get("setup_label", "Unknown"),
                     "x_pos":            _c.get("x_pos"),
                     "y_pos":            _c.get("y_pos"),
                     "diameter":         _c.get("diameter"),
@@ -2310,6 +2313,7 @@ def page_setup_review():
                     "feature_type": st.column_config.TextColumn("Type",             disabled=True),
                     "feature_name": st.column_config.TextColumn("Name",             disabled=True),
                     "confidence":   st.column_config.TextColumn("Confidence",       disabled=True, width="small"),
+                    "setup_label":  st.column_config.TextColumn("Setup",            disabled=True, width="small"),
                     "x_pos":        st.column_config.NumberColumn("X (mm)",         disabled=True, format="%.2f"),
                     "y_pos":        st.column_config.NumberColumn("Y (mm)",         disabled=True, format="%.2f"),
                     "diameter":     st.column_config.NumberColumn("Dia (mm)",       disabled=True, format="%.2f"),
@@ -3321,6 +3325,13 @@ def page_select_machining_work():
                         else:
                             _badge = ""
                         _count_label = _g.get("count_label") or f"{_g['count']} found"
+                        _member_ids = set(_g["member_ids"])
+                        _setup_values = sorted({
+                            str(_m.get("setup_label") or "Unknown")
+                            for _m in _filtered
+                            if _m.get("candidate_id") in _member_ids
+                        })
+                        _setup_summary = ", ".join(_setup_values) if _setup_values else "Unknown"
                         _cc1, _cc2, _cc3 = st.columns([0.45, 2.7, 1.85])
                         with _cc1:
                             st.checkbox(
@@ -3338,6 +3349,7 @@ def page_select_machining_work():
                                 + "</span>",
                                 unsafe_allow_html=True,
                             )
+                            st.caption(f"Setup: {_setup_summary}")
                         with _cc3:
                             st.selectbox(
                                 "",
@@ -3380,11 +3392,18 @@ def page_select_machining_work():
                         else:
                             _ast = ""
                         _suffix = _group_widget_suffix(_g)
+                        _member_ids = set(_g["member_ids"])
+                        _setup_values = sorted({
+                            str(_m.get("setup_label") or "Unknown")
+                            for _m in _filtered
+                            if _m.get("candidate_id") in _member_ids
+                        })
                         _adv_rows.append({
                             "accept":      st.session_state.get(f"_smw_card_accept_{_suffix}", False),
                             "status":      _ast,
                             "action":      st.session_state.get(f"_smw_card_action_{_suffix}", _default_action),
                             "type":        _g["display_type"],
+                            "setup":       ", ".join(_setup_values) if _setup_values else "Unknown",
                             "description": _g["description"],
                             "count":       _g["count"],
                             "detected faces": _g.get("detected_count", _g["count"]),
@@ -3434,6 +3453,7 @@ def page_select_machining_work():
                         "feature_type":     _c.get("feature_type", ""),
                         "feature_name":     _c.get("feature_name", ""),
                         "confidence":       _c.get("confidence", ""),
+                        "setup_label":      _c.get("setup_label", "Unknown"),
                         "x_pos":            _c.get("x_pos"),
                         "y_pos":            _c.get("y_pos"),
                         "diameter":         _c.get("diameter"),
@@ -3469,7 +3489,7 @@ def page_select_machining_work():
                         pd.DataFrame(_rows),
                         column_order=[
                             "accept", "status", "machining_action", "feature_type",
-                            "feature_name", "confidence", "x_pos", "y_pos",
+                            "feature_name", "confidence", "setup_label", "x_pos", "y_pos",
                             "diameter", "length", "width", "depth", "detection_note",
                         ],
                         column_config={
@@ -3484,6 +3504,7 @@ def page_select_machining_work():
                             "feature_type":   st.column_config.TextColumn("Type",         disabled=True),
                             "feature_name":   st.column_config.TextColumn("Name",         disabled=True),
                             "confidence":     st.column_config.TextColumn("Conf.",        disabled=True, width="small"),
+                            "setup_label":    st.column_config.TextColumn("Setup",        disabled=True, width="small"),
                             "x_pos":          st.column_config.NumberColumn("X (mm)",     disabled=True, format="%.2f"),
                             "y_pos":          st.column_config.NumberColumn("Y (mm)",     disabled=True, format="%.2f"),
                             "diameter":       st.column_config.NumberColumn("Dia (mm)",   disabled=True, format="%.2f"),

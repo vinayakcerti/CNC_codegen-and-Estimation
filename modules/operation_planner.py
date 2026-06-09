@@ -219,6 +219,18 @@ def _context_note(ftype, feature_name, diameter, op_type):
     return ""
 
 
+def _setup_sort_rank(label):
+    return {
+        "Top": 0,
+        "Front": 1,
+        "Right": 2,
+        "Back": 3,
+        "Left": 4,
+        "Unknown": 5,
+        "Bottom": 6,
+    }.get(label or "Unknown", 5)
+
+
 def _sequence_key(op):
     """Return a sort key for practical machining order.
 
@@ -226,27 +238,28 @@ def _sequence_key(op):
     completes Setup 1 before any flip is required.  Not a substitute for full
     CAM setup planning.
     """
-    ftype  = op.get("feature_type", "")
-    fname  = op.get("feature_name", "").lower()
+    ftype = op.get("feature_type", "")
+    fname = op.get("feature_name", "").lower()
     op_type = op.get("operation_type", "")
+    setup_label = op.get("setup_label", "Unknown")
 
     # Bottom face milling needs a flip — always goes last (Setup 2)
-    if ftype == "Face Milling" and "bottom" in fname:
-        return 6
+    if setup_label == "Bottom" or (ftype == "Face Milling" and "bottom" in fname):
+        return (6, _setup_sort_rank(setup_label))
 
     if ftype == "Face Milling":                          # top / primary facing first
-        return 0
+        return (0, _setup_sort_rank(setup_label))
     if ftype == "Edge Milling":
-        return 1
+        return (1, _setup_sort_rank(setup_label))
     if op_type in ("Spot Drill", "Pilot Drill", "Drill"):
-        return 2
+        return (2, _setup_sort_rank(setup_label))
     if op_type == "Boring":
-        return 3
+        return (3, _setup_sort_rank(setup_label))
     if op_type == "Rough End Mill":
-        return 4
+        return (4, _setup_sort_rank(setup_label))
     if op_type == "Finish End Mill":
-        return 5
-    return 6                                             # chamfer, profile, other
+        return (5, _setup_sort_rank(setup_label))
+    return (6, _setup_sort_rank(setup_label))
 
 
 def _operation_signature(feature, op_type, operation_variant=""):
@@ -309,6 +322,7 @@ def plan_operations(features, tools, material):
                 "op_num": op_num,
                 "feature_name": op_feature_name,
                 "feature_type": ftype,
+                "setup_label": feature.get("setup_label", "Unknown"),
                 "operation_type": op_type,
                 "tool_name": tool["tool_name"],
                 "tool_number": tool["tool_number"],

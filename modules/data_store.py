@@ -180,6 +180,8 @@ def init_db():
                 c.execute("ALTER TABLE features ADD COLUMN machining_action TEXT DEFAULT 'Machine'")
             if "selected_for_machining" not in _feat_cols:
                 c.execute("ALTER TABLE features ADD COLUMN selected_for_machining INTEGER DEFAULT 1")
+            if "setup_label" not in _feat_cols:
+                c.execute("ALTER TABLE features ADD COLUMN setup_label TEXT DEFAULT 'Unknown'")
             c.execute("""
                 CREATE TABLE IF NOT EXISTS job_notes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -234,12 +236,13 @@ def save_features_to_db(features):
                 c.execute("""
                     INSERT INTO features (feature_name, feature_type, quantity, x_pos, y_pos,
                         diameter, length, width, depth, tolerance_note, priority,
-                        machining_action, selected_for_machining)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        machining_action, selected_for_machining, setup_label)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (f["feature_name"], f["feature_type"], f["quantity"], f["x_pos"], f["y_pos"],
                       f["diameter"], f["length"], f["width"], f["depth"], f["tolerance_note"], f["priority"],
                       f.get("machining_action", "Machine"),
-                      1 if f.get("selected_for_machining", True) else 0))
+                      1 if f.get("selected_for_machining", True) else 0,
+                      f.get("setup_label", "Unknown")))
         _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("feature save", exc)
@@ -259,6 +262,8 @@ def load_features_from_db():
         df["selected_for_machining"] = df["selected_for_machining"].astype(bool)
     if "machining_action" not in df.columns:
         df["machining_action"] = "Machine"
+    if "setup_label" not in df.columns:
+        df["setup_label"] = "Unknown"
     return df.to_dict("records")
 
 

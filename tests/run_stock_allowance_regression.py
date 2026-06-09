@@ -100,6 +100,13 @@ def _run_helper_edges():
         raise AssertionError(
             f"review-mode allowance should surface 4 edge candidates, got {review_edge_count}"
         )
+    edge_setups = {
+        c.get("setup_label")
+        for c in review_visible
+        if c.get("feature_type") == "Edge Milling"
+    }
+    if edge_setups != {"Left", "Right", "Front", "Back"}:
+        raise AssertionError(f"edge milling should carry side setup labels, got {sorted(edge_setups)}")
 
     tiny_allowance = apply_stock_allowance_to_candidates(
         candidates,
@@ -166,6 +173,13 @@ def _run_17b_audit_stock_orientation():
     }
     if edge_depths != {5.0}:
         raise AssertionError(f"{sample}: expected all edge depths 5 mm, got {sorted(edge_depths)}")
+    edge_setups = {
+        c.get("setup_label")
+        for c in adjusted
+        if c.get("feature_type") == "Edge Milling"
+    }
+    if edge_setups != {"Left", "Right", "Front", "Back"}:
+        raise AssertionError(f"{sample}: expected side setup labels, got {sorted(edge_setups)}")
 
 
 def main():

@@ -28,6 +28,7 @@ def _audit_17b_features():
             "width": 100.0,
             "depth": 5.0,
             "priority": 1,
+            "setup_label": "Top",
         },
         {
             "feature_name": "Face milling - bottom surface",
@@ -40,6 +41,7 @@ def _audit_17b_features():
             "width": 100.0,
             "depth": 5.0,
             "priority": 1,
+            "setup_label": "Bottom",
         },
         {
             "feature_name": "Edge milling X- stock allowance",
@@ -52,6 +54,7 @@ def _audit_17b_features():
             "width": 30.0,
             "depth": 5.0,
             "priority": 1,
+            "setup_label": "Left",
         },
         {
             "feature_name": "Step shoulder 90.0x90.0 depth 12.0 mm",
@@ -64,6 +67,7 @@ def _audit_17b_features():
             "width": 90.0,
             "depth": 12.0,
             "priority": 3,
+            "setup_label": "Top",
         },
     ]
 
@@ -95,6 +99,10 @@ def main():
     )
     if bottom_idx != len(operations) - 1:
         raise AssertionError("bottom face milling should remain last as setup-2 work")
+    if operations[bottom_idx].get("setup_label") != "Bottom":
+        raise AssertionError("bottom face milling should carry Bottom setup label")
+    if any(not op.get("setup_label") for op in operations):
+        raise AssertionError("all planned operations should carry a setup label")
 
     if any(op.get("_depth", 0) > 30 for op in operations if op.get("feature_type") == "Edge Milling"):
         raise AssertionError("edge milling operation depth/height should remain physically realistic")
@@ -111,6 +119,8 @@ def main():
     for expected in ("<th>X</th>", "<th>Y</th>", "<th>L</th>", "<th>W</th>", "<th>D</th>"):
         if expected not in html:
             raise AssertionError(f"setup sheet missing geometry column {expected}")
+    if "<th>Setup</th>" not in html or "<td>Bottom</td>" not in html:
+        raise AssertionError("setup sheet missing setup labels")
     for expected in ("130.0", "100.0", "90.0", "12.0"):
         if expected not in html:
             raise AssertionError(f"setup sheet missing audit dimension {expected}")

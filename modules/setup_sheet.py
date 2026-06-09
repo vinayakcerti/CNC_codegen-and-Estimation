@@ -66,6 +66,7 @@ def generate_setup_sheet(operations, machine, material, stock, features, time_re
           <td>{op['op_num']:02d}</td>
           <td>{_esc(op['feature_name'])}</td>
           <td>{_esc(op['feature_type'])}</td>
+          <td>{_esc(op.get('setup_label', 'Unknown'))}</td>
           <td>{_esc(op['operation_type'])}</td>
           <td>{_fmt_mm(op.get('_x_pos'))}</td>
           <td>{_fmt_mm(op.get('_y_pos'))}</td>
@@ -385,7 +386,7 @@ def generate_setup_sheet(operations, machine, material, stock, features, time_re
   <table>
     <thead>
       <tr>
-        <th>#</th><th>Feature</th><th>Type</th><th>Operation</th>
+        <th>#</th><th>Feature</th><th>Type</th><th>Setup</th><th>Operation</th>
         <th>X</th><th>Y</th><th>L</th><th>W</th><th>D</th>
         <th>Tool</th><th>RPM</th><th>Feed (mm/min)</th><th>Path (mm)</th><th>Notes</th>
       </tr>
