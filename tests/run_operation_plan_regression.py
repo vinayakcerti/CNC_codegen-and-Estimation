@@ -72,6 +72,22 @@ def _audit_17b_features():
     ]
 
 
+def _unsupported_bore_feature():
+    return [{
+        "feature_name": "Large bore requiring review",
+        "feature_type": "Large Hole / Boring",
+        "quantity": 1,
+        "x_pos": 30.0,
+        "y_pos": 30.0,
+        "diameter": 15.0,
+        "length": 0.0,
+        "width": 0.0,
+        "depth": 20.0,
+        "priority": 2,
+        "setup_label": "Top",
+    }]
+
+
 def main():
     tools = get_default_tools()
     material = get_default_materials()[0]
@@ -106,6 +122,13 @@ def main():
 
     if any(op.get("_depth", 0) > 30 for op in operations if op.get("feature_type") == "Edge Milling"):
         raise AssertionError("edge milling operation depth/height should remain physically realistic")
+
+    bore_ops = plan_operations(_unsupported_bore_feature(), tools, material)
+    boring_op = next(op for op in bore_ops if op.get("operation_type") == "Boring")
+    if "min bore" not in boring_op.get("tool_warning", ""):
+        raise AssertionError(f"expected boring min-bore warning, got {boring_op.get('tool_warning')!r}")
+    if boring_op.get("tool_warning", "") not in boring_op.get("notes", ""):
+        raise AssertionError("boring tool warning should be included in operation notes")
 
     html = generate_setup_sheet(
         operations,

@@ -231,6 +231,40 @@ def _setup_sort_rank(label):
     }.get(label or "Unknown", 5)
 
 
+def _tool_capability_warning(op_type, feature, tool):
+    """Return a planning warning when selected tool capability looks doubtful."""
+    diameter = float(feature.get("diameter", 0) or 0)
+    depth = float(feature.get("depth", 0) or 0)
+    tool_dia = float(tool.get("diameter_mm", 0) or 0)
+    max_depth = float(tool.get("max_depth_mm", 0) or 0)
+
+    warnings = []
+    if max_depth > 0 and depth > max_depth:
+        warnings.append(
+            f"WARNING: feature depth {depth:.1f} mm exceeds "
+            f"{tool.get('tool_name', 'selected tool')} reach {max_depth:.1f} mm."
+        )
+
+    if op_type == "Boring" and diameter > 0 and tool_dia > 0:
+        # The default tool library only has nominal diameter and reach. Use a
+        # conservative planning envelope so undersized/oversized bores are not
+        # silently treated as ready for CAM.
+        min_bore = tool_dia
+        max_bore = tool_dia * 3.0
+        if diameter < min_bore:
+            warnings.append(
+                f"WARNING: selected boring tool min bore is about {min_bore:.1f} mm; "
+                f"feature is Ø{diameter:.1f} mm."
+            )
+        elif diameter > max_bore:
+            warnings.append(
+                f"WARNING: selected boring tool planning range is about "
+                f"Ø{min_bore:.1f}-Ø{max_bore:.1f} mm; feature is Ø{diameter:.1f} mm."
+            )
+
+    return " ".join(warnings)
+
+
 def _sequence_key(op):
     """Return a sort key for practical machining order.
 
@@ -298,6 +332,7 @@ def plan_operations(features, tools, material):
             tool = select_tool_for_operation(op_type, feature, tools)
             spindle, feed = get_spindle_and_feed(tool, material)
             path_len = estimate_path_length(feature, op_type, tool)
+            tool_warning = _tool_capability_warning(op_type, feature, tool)
 
             _fname_lower = feature.get("feature_name", "").lower()
             _is_through_pocket = (
@@ -317,6 +352,8 @@ def plan_operations(features, tools, material):
                     op_type,
                 )
                 note = rule["notes"] + (" | " + extra if extra else "")
+            if tool_warning:
+                note = note + " | " + tool_warning
 
             operations.append({
                 "op_num": op_num,
@@ -329,6 +366,7 @@ def plan_operations(features, tools, material):
                 "spindle_rpm": spindle,
                 "feed_rate_mm_min": feed,
                 "est_path_length_mm": round(path_len, 1),
+                "tool_warning": tool_warning,
                 "notes": note,
                 # Carry feature geometry for G-code generation
                 "_x_pos": float(feature.get("x_pos", 0) or 0),
