@@ -72,6 +72,12 @@ def main():
     tools = get_default_tools()
     material = get_default_materials()[0]
     operations = plan_operations(_audit_17b_features(), tools, material)
+    duplicate_operations = plan_operations(_audit_17b_features() + _audit_17b_features(), tools, material)
+    if len(duplicate_operations) != len(operations):
+        raise AssertionError(
+            f"duplicate features should not duplicate operations "
+            f"({len(duplicate_operations)} vs {len(operations)})"
+        )
 
     step_ops = [op for op in operations if op.get("feature_type") == "Step"]
     step_names = [op.get("feature_name", "") for op in step_ops]

@@ -249,9 +249,26 @@ def _sequence_key(op):
     return 6                                             # chamfer, profile, other
 
 
+def _operation_signature(feature, op_type, operation_variant=""):
+    """Stable key used to skip exact duplicate operation inputs."""
+    return (
+        str(feature.get("feature_type", "")).strip().lower(),
+        str(feature.get("feature_name", "")).strip().lower(),
+        str(op_type).strip().lower(),
+        str(operation_variant).strip().lower(),
+        round(float(feature.get("x_pos", 0) or 0), 3),
+        round(float(feature.get("y_pos", 0) or 0), 3),
+        round(float(feature.get("diameter", 0) or 0), 3),
+        round(float(feature.get("length", 0) or 0), 3),
+        round(float(feature.get("width", 0) or 0), 3),
+        round(float(feature.get("depth", 0) or 0), 3),
+    )
+
+
 def plan_operations(features, tools, material):
     """Generate operation plan from features."""
     operations = []
+    seen_operations = set()
     op_num = 1
 
     for feature in sorted(features, key=lambda x: x.get("priority", 99)):
@@ -261,6 +278,10 @@ def plan_operations(features, tools, material):
         for rule in rules:
             op_type = rule["op"]
             op_feature_name = feature["feature_name"] + rule.get("feature_name_suffix", "")
+            op_sig = _operation_signature(feature, op_type, rule.get("feature_name_suffix", ""))
+            if op_sig in seen_operations:
+                continue
+            seen_operations.add(op_sig)
             tool = select_tool_for_operation(op_type, feature, tools)
             spindle, feed = get_spindle_and_feed(tool, material)
             path_len = estimate_path_length(feature, op_type, tool)
