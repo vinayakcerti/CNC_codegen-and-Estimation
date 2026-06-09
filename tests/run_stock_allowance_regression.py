@@ -13,7 +13,7 @@ _PROJECT_ROOT = _SCRIPT_DIR.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from modules.step_parser import detect_feature_candidates_from_cadquery_file, parse_step_bounding_box
+from modules.step_parser import detect_feature_candidates_from_cadquery_file, parse_step_auto, parse_step_bounding_box
 from modules.stock_allowance import apply_stock_allowance_to_candidates
 
 
@@ -124,6 +124,50 @@ def _run_helper_edges():
         raise AssertionError(f"X-only allowance should create 2 edge candidates, got {edge_count}")
 
 
+def _run_17b_audit_stock_orientation():
+    sample = "17b_top_milled_step_shoulder-Body.step"
+    path = _PROJECT_ROOT / "test_samples" / sample
+    bbox = parse_step_auto(path.read_bytes())
+    detection = detect_feature_candidates_from_cadquery_file(str(path))
+    adjusted = apply_stock_allowance_to_candidates(
+        detection.get("candidate_features", []),
+        {"length": 130.0, "width": 100.0, "height": 40.0},
+        bbox,
+        include_edge_milling=True,
+    )
+
+    face_rows = [c for c in adjusted if c.get("feature_type") == "Face Milling"]
+    if len(face_rows) != 2:
+        raise AssertionError(f"{sample}: expected 2 face milling candidates, got {len(face_rows)}")
+    for face in face_rows:
+        dims = (
+            round(float(face.get("length") or 0), 3),
+            round(float(face.get("width") or 0), 3),
+            round(float(face.get("depth") or 0), 3),
+        )
+        if dims != (130.0, 100.0, 5.0):
+            raise AssertionError(f"{sample}: expected face milling 130x100 depth 5, got {dims}")
+
+    step = next((c for c in adjusted if c.get("feature_type") == "Step"), None)
+    if step is None:
+        raise AssertionError(f"{sample}: missing step candidate")
+    step_dims = (
+        round(float(step.get("length") or 0), 3),
+        round(float(step.get("width") or 0), 3),
+        round(float(step.get("depth") or 0), 3),
+    )
+    if step_dims != (90.0, 90.0, 12.0):
+        raise AssertionError(f"{sample}: expected step 90x90 depth 12, got {step_dims}")
+
+    edge_depths = {
+        round(float(c.get("depth") or 0), 3)
+        for c in adjusted
+        if c.get("feature_type") == "Edge Milling"
+    }
+    if edge_depths != {5.0}:
+        raise AssertionError(f"{sample}: expected all edge depths 5 mm, got {sorted(edge_depths)}")
+
+
 def main():
     print("=" * 72)
     print("Stock Allowance Regression")
@@ -133,6 +177,8 @@ def main():
         print(f"PASS {sample}: {total} adjusted candidates, {edge_count} edge milling")
     _run_helper_edges()
     print("PASS helper edge cases: non-raw, review-visible, tiny allowance, one-axis allowance")
+    _run_17b_audit_stock_orientation()
+    print("PASS 17b audit stock orientation: face, edge, and step dimensions corrected")
     print("=" * 72)
     print("Result: STOCK ALLOWANCE REGRESSION PASSED")
     return 0

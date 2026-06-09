@@ -21,7 +21,8 @@ OPERATION_RULES = {
     ],
     "Step": [
         {"op": "Rough End Mill", "notes": "Rough step floor and shoulder"},
-        {"op": "Finish End Mill", "notes": "Finish step floor and shoulder wall"},
+        {"op": "Finish End Mill", "notes": "Finish step floor", "feature_name_suffix": " - floor finish"},
+        {"op": "Finish End Mill", "notes": "Finish shoulder wall", "feature_name_suffix": " - wall finish"},
     ],
     "Face Milling": [
         {"op": "Face Mill", "notes": "Face mill stock surface"},
@@ -111,8 +112,8 @@ def estimate_path_length(feature, operation_type, tool=None):
             return depth_passes * radial_passes * step_len * qty
 
         if operation_type == "Finish End Mill":
-            # One pass along step floor + one pass along shoulder wall.
-            return 2 * step_len * qty
+            # Step floor and shoulder wall finish are planned as separate ops.
+            return step_len * qty
 
         return step_len * qty
 
@@ -259,6 +260,7 @@ def plan_operations(features, tools, material):
 
         for rule in rules:
             op_type = rule["op"]
+            op_feature_name = feature["feature_name"] + rule.get("feature_name_suffix", "")
             tool = select_tool_for_operation(op_type, feature, tools)
             spindle, feed = get_spindle_and_feed(tool, material)
             path_len = estimate_path_length(feature, op_type, tool)
@@ -284,7 +286,7 @@ def plan_operations(features, tools, material):
 
             operations.append({
                 "op_num": op_num,
-                "feature_name": feature["feature_name"],
+                "feature_name": op_feature_name,
                 "feature_type": ftype,
                 "operation_type": op_type,
                 "tool_name": tool["tool_name"],
