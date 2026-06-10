@@ -181,6 +181,30 @@ def _run_17b_audit_stock_orientation():
     if edge_setups != {"Left", "Right", "Front", "Back"}:
         raise AssertionError(f"{sample}: expected side setup labels, got {sorted(edge_setups)}")
 
+    y_edges = {
+        c.get("edge_side"): c
+        for c in adjusted
+        if c.get("feature_type") == "Edge Milling" and c.get("edge_axis") == "Y"
+    }
+    expected_visual_bounds = {
+        "Y-": {
+            "x_min": -45.0, "x_max": 75.0,
+            "y_min": 0.0, "y_max": 30.0,
+            "z_min": 0.0, "z_max": 0.0,
+        },
+        "Y+": {
+            "x_min": -45.0, "x_max": 75.0,
+            "y_min": 0.0, "y_max": 30.0,
+            "z_min": 90.0, "z_max": 90.0,
+        },
+    }
+    for side, expected in expected_visual_bounds.items():
+        actual = y_edges.get(side, {}).get("visual_bounds")
+        if actual != expected:
+            raise AssertionError(
+                f"{sample}: {side} visual bounds should follow CAD axes, got {actual}"
+            )
+
 
 def main():
     print("=" * 72)

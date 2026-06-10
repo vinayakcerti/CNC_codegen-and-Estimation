@@ -75,6 +75,7 @@ def apply_stock_allowance_to_candidates(
     """Return CAD candidates adjusted for configured raw stock allowance."""
     stock = stock or {}
     part_dims = part_dims or {}
+    source_part_dims = dict(part_dims)
     adjusted = copy.deepcopy(candidates or [])
 
     part_l = _num(part_dims.get("length_mm") or part_dims.get("length"))
@@ -84,6 +85,12 @@ def apply_stock_allowance_to_candidates(
     stock_w = _num(stock.get("width"))
     stock_h = _num(stock.get("height"))
     original_part_w = part_w
+    source_x_min = _range_min(source_part_dims.get("x_range"), -part_l / 2)
+    source_x_max = _range_max(source_part_dims.get("x_range"), part_l / 2)
+    source_y_min = _range_min(source_part_dims.get("y_range"), -part_w / 2)
+    source_y_max = _range_max(source_part_dims.get("y_range"), part_w / 2)
+    source_z_min = _range_min(source_part_dims.get("z_range"), 0.0)
+    source_z_max = _range_max(source_part_dims.get("z_range"), part_h)
     part_l, part_w, part_h, part_dims, axes_swapped = _normalise_part_axes_for_stock(
         part_l, part_w, part_h, stock_l, stock_w, stock_h, part_dims, tolerance
     )
@@ -157,6 +164,14 @@ def apply_stock_allowance_to_candidates(
                 "detection_source": "stock_allowance",
                 "edge_axis": "X",
                 "edge_side": side,
+                "visual_bounds": {
+                    "x_min": xpos,
+                    "x_max": xpos,
+                    "y_min": source_y_min,
+                    "y_max": source_y_max,
+                    "z_min": source_z_min,
+                    "z_max": source_z_max,
+                },
                 "detection_note": (
                     f"Derived from configured stock length: "
                     f"({stock_l:.1f} - {part_l:.1f}) / 2 = {x_allow:.3f} mm per side."
@@ -165,6 +180,24 @@ def apply_stock_allowance_to_candidates(
 
     if y_allow > tolerance and part_l > 0 and part_h > 0:
         for side, ypos in (("Y-", y_min), ("Y+", y_max)):
+            if axes_swapped:
+                visual_bounds = {
+                    "x_min": source_x_min,
+                    "x_max": source_x_max,
+                    "y_min": source_y_min,
+                    "y_max": source_y_max,
+                    "z_min": ypos,
+                    "z_max": ypos,
+                }
+            else:
+                visual_bounds = {
+                    "x_min": source_x_min,
+                    "x_max": source_x_max,
+                    "y_min": ypos,
+                    "y_max": ypos,
+                    "z_min": source_z_min,
+                    "z_max": source_z_max,
+                }
             edge_candidates.append({
                 "candidate_id": f"STK_EDGE_{side}",
                 "feature_name": f"Edge milling {side} stock allowance",
@@ -183,6 +216,7 @@ def apply_stock_allowance_to_candidates(
                 "detection_source": "stock_allowance",
                 "edge_axis": "Y",
                 "edge_side": side,
+                "visual_bounds": visual_bounds,
                 "detection_note": (
                     f"Derived from configured stock width: "
                     f"({stock_w:.1f} - {part_w:.1f}) / 2 = {y_allow:.3f} mm per side."

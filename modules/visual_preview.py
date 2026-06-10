@@ -186,6 +186,51 @@ def _infer_half_xy(cand, xmin, xmax, ymin, ymax):
 # Candidate feature marker traces
 # ---------------------------------------------------------------------------
 
+def _edge_marker_coords(candidate, zmin, zmax):
+    """Return an axis-aligned perimeter for an edge-milling face marker."""
+    bounds = candidate.get("visual_bounds") or {}
+    required = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+    if all(bounds.get(key) is not None for key in required):
+        x0, x1 = float(bounds["x_min"]), float(bounds["x_max"])
+        y0, y1 = float(bounds["y_min"]), float(bounds["y_max"])
+        z0, z1 = float(bounds["z_min"]), float(bounds["z_max"])
+        if abs(x1 - x0) < 1e-9:
+            return (
+                [x0, x0, x0, x0, x0],
+                [y0, y1, y1, y0, y0],
+                [z0, z0, z1, z1, z0],
+            )
+        if abs(y1 - y0) < 1e-9:
+            return (
+                [x0, x1, x1, x0, x0],
+                [y0, y0, y0, y0, y0],
+                [z0, z0, z1, z1, z0],
+            )
+        if abs(z1 - z0) < 1e-9:
+            return (
+                [x0, x1, x1, x0, x0],
+                [y0, y0, y1, y1, y0],
+                [z0, z0, z0, z0, z0],
+            )
+
+    x = float(candidate.get("x_pos") or 0)
+    y = float(candidate.get("y_pos") or 0)
+    length = float(candidate.get("length") or 0)
+    half_len = (length / 2) if length > 0 else 25.0
+    axis = str(candidate.get("edge_axis") or "").upper()
+    if axis == "Y":
+        return (
+            [x - half_len, x + half_len, x + half_len, x - half_len, x - half_len],
+            [y, y, y, y, y],
+            [zmin, zmin, zmax, zmax, zmin],
+        )
+    return (
+        [x, x, x, x, x],
+        [y - half_len, y + half_len, y + half_len, y - half_len, y - half_len],
+        [zmin, zmin, zmax, zmax, zmin],
+    )
+
+
 def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
                               highlight_color=None, suppress_hl_legend=False,
                               xmin=None, xmax=None, ymin=None, ymax=None):
@@ -325,15 +370,7 @@ def _candidate_marker_traces(candidates, zmax, zmin, show_labels=False,
 
         # ── Slot: dashed outline at zmax — clearly secondary / fallback marker ──
         elif "edge mill" in ft_low or "side mill" in ft_low:
-            axis = str(cand.get("edge_axis") or "").upper()
-            half_len = (length / 2) if length > 0 else 25.0
-            if axis == "Y":
-                rx = [x - half_len, x + half_len, x + half_len, x - half_len, x - half_len]
-                ry = [y, y, y, y, y]
-            else:
-                rx = [x, x, x, x, x]
-                ry = [y - half_len, y - half_len, y + half_len, y + half_len, y - half_len]
-            rz = [zmin, zmax, zmax, zmin, zmin]
+            rx, ry, rz = _edge_marker_coords(cand, zmin, zmax)
             if _HL:
                 traces.append(go.Scatter3d(
                     x=rx, y=ry, z=rz, mode="lines",

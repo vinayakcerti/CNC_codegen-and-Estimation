@@ -14,7 +14,11 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from modules.visual_preview import build_step_mesh3d
-from modules.step_parser import detect_feature_candidates_from_cadquery_file
+from modules.step_parser import (
+    detect_feature_candidates_from_cadquery_file,
+    parse_step_auto,
+)
+from modules.stock_allowance import apply_stock_allowance_to_candidates
 
 
 def _box_mesh():
@@ -55,8 +59,80 @@ def main():
         raise AssertionError("highlighted slot should render a filled Mesh3d patch")
 
     print("PASS visual highlight regression: slot highlight has filled patch")
+    _run_17b_edge_highlight_check()
     _run_slide_base_highlight_check()
     return 0
+
+
+def _run_17b_edge_highlight_check():
+    sample = _PROJECT_ROOT / "test_samples" / "17b_top_milled_step_shoulder-Body.step"
+    detection = detect_feature_candidates_from_cadquery_file(str(sample))
+    bbox = parse_step_auto(sample.read_bytes())
+    candidates = apply_stock_allowance_to_candidates(
+        detection.get("candidate_features", []),
+        {"length": 120.0, "width": 100.0, "height": 40.0},
+        bbox,
+        include_edge_milling=True,
+    )
+    edge_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate.get("feature_type") == "Edge Milling"
+    ]
+    if len(edge_candidates) != 2:
+        raise AssertionError(f"17b should expose 2 Y-edge candidates, got {len(edge_candidates)}")
+
+    import cadquery as cq
+    cq_result = cq.importers.importStep(str(sample))
+    verts, tris = cq_result.val().tessellate(0.5)
+    mesh = {
+        "x": [v.x for v in verts],
+        "y": [v.y for v in verts],
+        "z": [v.z for v in verts],
+        "i": [t[0] for t in tris],
+        "j": [t[1] for t in tris],
+        "k": [t[2] for t in tris],
+    }
+    fig = build_step_mesh3d(
+        mesh,
+        {},
+        candidates=edge_candidates,
+        highlighted_candidate_ids={
+            candidate["candidate_id"] for candidate in edge_candidates
+        },
+    )
+    traces = [
+        trace
+        for trace in fig.data
+        if trace.type == "scatter3d" and getattr(trace, "name", "") == "Highlighted"
+    ]
+    if len(traces) != 2:
+        raise AssertionError(f"expected 2 highlighted edge perimeters, got {len(traces)}")
+
+    ranges = {
+        "x": (min(mesh["x"]), max(mesh["x"])),
+        "y": (min(mesh["y"]), max(mesh["y"])),
+        "z": (min(mesh["z"]), max(mesh["z"])),
+    }
+    for trace in traces:
+        points = list(zip(trace.x, trace.y, trace.z))
+        for axis, values in zip(("x", "y", "z"), (trace.x, trace.y, trace.z)):
+            lower, upper = ranges[axis]
+            if any(value < lower - 1e-6 or value > upper + 1e-6 for value in values):
+                raise AssertionError(
+                    f"17b edge highlight escaped mesh {axis}-range {ranges[axis]}: {list(values)}"
+                )
+        for start, end in zip(points, points[1:]):
+            changed_axes = sum(
+                abs(float(a) - float(b)) > 1e-6
+                for a, b in zip(start, end)
+            )
+            if changed_axes > 1:
+                raise AssertionError(
+                    f"17b edge perimeter contains detached diagonal segment: {start} -> {end}"
+                )
+
+    print("PASS 17b edge highlight regression: CAD-bound axis-aligned perimeters")
 
 
 def _run_slide_base_highlight_check():
