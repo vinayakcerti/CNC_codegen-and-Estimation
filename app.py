@@ -425,13 +425,28 @@ def _accepted_feature_signatures():
     }
 
 
+def _candidate_work_value(candidate, axis):
+    work_position = candidate.get("work_position") or {}
+    value = work_position.get(axis)
+    if value is None:
+        value = candidate.get(f"work_{axis}_pos")
+    if value is None:
+        value = candidate.get(f"{axis}_pos")
+    return float(value or 0.0)
+
+
+def _candidate_work_setup(candidate):
+    return candidate.get("work_setup_label") or candidate.get("setup_label", "Unknown")
+
+
 def _feature_from_candidate(candidate, feature_type, action):
     return {
         "feature_name":           candidate.get("feature_name") or feature_type,
         "feature_type":           feature_type,
         "quantity":               int(candidate.get("quantity")  or 1),
-        "x_pos":                  float(candidate.get("x_pos")   or 0.0),
-        "y_pos":                  float(candidate.get("y_pos")   or 0.0),
+        "x_pos":                  _candidate_work_value(candidate, "x"),
+        "y_pos":                  _candidate_work_value(candidate, "y"),
+        "z_pos":                  _candidate_work_value(candidate, "z"),
         "diameter":               float(candidate.get("diameter") or 0.0),
         "length":                 float(candidate.get("length")  or 0.0),
         "width":                  float(candidate.get("width")   or 0.0),
@@ -441,7 +456,9 @@ def _feature_from_candidate(candidate, feature_type, action):
         "machining_action":       action,
         "selected_for_machining": True,
         "source_candidate_id":     candidate.get("candidate_id", ""),
-        "setup_label":            candidate.get("setup_label", "Unknown"),
+        "setup_label":            _candidate_work_setup(candidate),
+        "cad_position":           candidate.get("cad_position"),
+        "coordinate_transform":   candidate.get("coordinate_transform"),
     }
 
 
@@ -1225,8 +1242,8 @@ def page_upload_step():
                     "Type":            _c.get("feature_type",  "—"),
                     "Name":            _c.get("feature_name",  "—"),
                     "Measurement":     _meas(_c),
-                    "X Pos (mm)":      _fv(_c.get("x_pos")),
-                    "Y Pos (mm)":      _fv(_c.get("y_pos")),
+                    "CAD X (mm)":      _fv(_c.get("x_pos")),
+                    "CAD Y (mm)":      _fv(_c.get("y_pos")),
                     "Diameter (mm)":   _fv(_c.get("diameter")),
                     "Length (mm)":     _fv(_c.get("length")),
                     "Width (mm)":      _fv(_c.get("width")),
@@ -1238,8 +1255,8 @@ def page_upload_step():
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "X Pos (mm)":    st.column_config.NumberColumn("X Pos (mm)",    format="%.2f"),
-                    "Y Pos (mm)":    st.column_config.NumberColumn("Y Pos (mm)",    format="%.2f"),
+                    "CAD X (mm)":    st.column_config.NumberColumn("CAD X (mm)",    format="%.2f"),
+                    "CAD Y (mm)":    st.column_config.NumberColumn("CAD Y (mm)",    format="%.2f"),
                     "Diameter (mm)": st.column_config.NumberColumn("Diameter (mm)", format="%.2f"),
                     "Length (mm)":   st.column_config.NumberColumn("Length (mm)",   format="%.2f"),
                     "Width (mm)":    st.column_config.NumberColumn("Width (mm)",    format="%.2f"),
@@ -2293,9 +2310,9 @@ def page_setup_review():
                     "feature_type":     _c.get("feature_type", ""),
                     "feature_name":     _c.get("feature_name", ""),
                     "confidence":       _c.get("confidence", ""),
-                    "setup_label":      _c.get("setup_label", "Unknown"),
-                    "x_pos":            _c.get("x_pos"),
-                    "y_pos":            _c.get("y_pos"),
+                    "setup_label":      _candidate_work_setup(_c),
+                    "x_pos":            _candidate_work_value(_c, "x"),
+                    "y_pos":            _candidate_work_value(_c, "y"),
                     "diameter":         _c.get("diameter"),
                     "length":           _c.get("length"),
                     "width":            _c.get("width"),
@@ -3450,9 +3467,9 @@ def page_select_machining_work():
                         "feature_type":     _c.get("feature_type", ""),
                         "feature_name":     _c.get("feature_name", ""),
                         "confidence":       _c.get("confidence", ""),
-                        "setup_label":      _c.get("setup_label", "Unknown"),
-                        "x_pos":            _c.get("x_pos"),
-                        "y_pos":            _c.get("y_pos"),
+                        "setup_label":      _candidate_work_setup(_c),
+                        "x_pos":            _candidate_work_value(_c, "x"),
+                        "y_pos":            _candidate_work_value(_c, "y"),
                         "diameter":         _c.get("diameter"),
                         "length":           _c.get("length"),
                         "width":            _c.get("width"),

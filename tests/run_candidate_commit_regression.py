@@ -33,6 +33,9 @@ def _face_milling_candidate():
         "quantity": 1,
         "x_pos": 10.0,
         "y_pos": 14.0,
+        "work_position": {"x": 60.0, "y": 18.0, "z": 30.0},
+        "work_setup_label": "Top",
+        "cad_position": {"x": 10.0, "y": 14.0, "z": 90.0},
         "diameter": 0.0,
         "length": 120.0,
         "width": 30.0,
@@ -53,6 +56,13 @@ def main():
     first_added = app._commit_candidate_selections(edited, candidates)
     if first_added != 1 or len(st.session_state.features) != 1:
         raise AssertionError("first candidate commit should add one feature")
+    accepted = st.session_state.features[0]
+    if (accepted["x_pos"], accepted["y_pos"], accepted["z_pos"]) != (60.0, 18.0, 30.0):
+        raise AssertionError(f"accepted feature should use work coordinates, got {accepted}")
+    if accepted.get("setup_label") != "Top":
+        raise AssertionError("accepted feature should use work setup orientation")
+    if accepted.get("cad_position") != {"x": 10.0, "y": 14.0, "z": 90.0}:
+        raise AssertionError("accepted feature should preserve CAD provenance")
 
     # Simulate reprocessing/reloading the STEP file, which historically reset
     # added_candidate_ids and allowed the same face milling rows to append again.

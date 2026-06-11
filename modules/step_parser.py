@@ -1779,6 +1779,37 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "ignored":  False,
         })
 
+    records_by_index = {
+        record.get("face_index"): record
+        for record in face_records
+        if record.get("face_index") is not None
+    }
+    for candidate in candidates:
+        source_records = [
+            records_by_index[index]
+            for index in candidate.get("face_indices", [])
+            if index in records_by_index
+        ]
+        if not source_records:
+            continue
+        candidate["cad_position"] = {
+            "x": round(float(
+                candidate.get("x_pos")
+                if candidate.get("x_pos") is not None
+                else source_records[0].get("center_x") or 0.0
+            ), 6),
+            "y": round(float(
+                candidate.get("y_pos")
+                if candidate.get("y_pos") is not None
+                else source_records[0].get("center_y") or 0.0
+            ), 6),
+            "z": round(
+                sum(float(record.get("center_z") or 0.0) for record in source_records)
+                / len(source_records),
+                6,
+            ),
+        }
+
     return candidates
 
 

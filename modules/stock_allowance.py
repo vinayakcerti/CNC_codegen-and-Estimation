@@ -1,5 +1,6 @@
 import copy
 
+from modules.geometry_transform import attach_work_coordinates, infer_work_transform
 
 def _num(value, default=0.0):
     try:
@@ -77,6 +78,7 @@ def apply_stock_allowance_to_candidates(
     part_dims = part_dims or {}
     source_part_dims = dict(part_dims)
     adjusted = copy.deepcopy(candidates or [])
+    work_transform = infer_work_transform(source_part_dims, stock, tolerance)
 
     part_l = _num(part_dims.get("length_mm") or part_dims.get("length"))
     part_w = _num(part_dims.get("width_mm") or part_dims.get("width"))
@@ -132,7 +134,10 @@ def apply_stock_allowance_to_candidates(
                     cand["detection_note"] = f"{note} {orient_note}".strip()
 
     if not include_edge_milling:
-        return adjusted
+        return [
+            attach_work_coordinates(candidate, work_transform)
+            for candidate in adjusted
+        ]
 
     x_allow = max((stock_l - part_l) / 2, 0.0) if stock_l and part_l else 0.0
     y_allow = max((stock_w - part_w) / 2, 0.0) if stock_w and part_w else 0.0
@@ -225,4 +230,7 @@ def apply_stock_allowance_to_candidates(
 
     existing_ids = {c.get("candidate_id") for c in adjusted}
     adjusted.extend(c for c in edge_candidates if c["candidate_id"] not in existing_ids)
-    return adjusted
+    return [
+        attach_work_coordinates(candidate, work_transform)
+        for candidate in adjusted
+    ]

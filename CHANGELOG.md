@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-11
+
+- Added a canonical CAD-to-work coordinate transform with axis permutation,
+  origin translation, reversed-axis support, and setup-normal mapping.
+- Preserved raw CAD feature positions while attaching work coordinates and
+  transform provenance.
+- Accepted machining features now use work coordinates and work setup labels.
+- Added 17B orientation and candidate-coordinate regressions.
+
 ## 2026-06-10 - V2 Feature Review Validation
 
 - Fixed stock-orientation inference for STEP files where the modeled vertical axis is not the planner's Z axis, covering `17b_top_milled_step_shoulder-Body.step`.
