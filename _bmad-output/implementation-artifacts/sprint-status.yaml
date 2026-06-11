@@ -1,0 +1,77 @@
+# generated: 2026-06-11
+# last_updated: 2026-06-11
+# project: CNC Process Planner
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+generated: 2026-06-11
+last_updated: 2026-06-11
+project: CNC Process Planner
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  epic-9: backlog
+  9-1-define-coordinate-frames-and-datum-contract: backlog
+  9-2-implement-cad-to-planning-transform: backlog
+  9-3-apply-transform-across-the-product: backlog
+  epic-9-retrospective: optional
+
+  epic-10: backlog
+  10-1-define-golden-expectation-schema: backlog
+  10-2-add-geometry-and-workflow-invariants: backlog
+  10-3-build-core-golden-sample-pack: backlog
+  10-4-add-metamorphic-orientation-tests: backlog
+  epic-10-retrospective: optional
+
+  epic-11: backlog
+  11-1-stable-face-provenance: backlog
+  11-2-exact-highlight-rendering: backlog
+  11-3-honest-approximate-markers: backlog
+  epic-11-retrospective: optional
+
+  epic-12: backlog
+  12-1-hole-and-bore-hardening: backlog
+  12-2-slot-and-pocket-hardening: backlog
+  12-3-step-and-shoulder-hardening: backlog
+  12-4-face-chamfer-and-profile-hardening: backlog
+  epic-12-retrospective: optional
+
+  epic-13: backlog
+  13-1-billet-allowance-model: backlog
+  13-2-casting-and-forging-mode: backlog
+  13-3-weldment-fabrication-mode: backlog
+  13-4-existing-part-rework-mode: backlog
+  epic-13-retrospective: optional
+
+  epic-14: backlog
+  14-1-stable-physical-feature-ids: backlog
+  14-2-idempotent-acceptance-and-grouping: backlog
+  14-3-idempotent-operation-generation: backlog
+  epic-14-retrospective: optional
+
+  epic-15: backlog
+  15-1-machine-capability-model: backlog
+  15-2-accessibility-and-setup-assignment: backlog
+  15-3-tool-and-holder-feasibility: backlog
+  epic-15-retrospective: optional
+
+  epic-16: backlog
+  16-1-operation-traceability: backlog
+  16-2-estimate-integrity: backlog
+  16-3-export-contract-tests: backlog
+  epic-16-retrospective: optional
+
+  epic-17: backlog
+  17-1-step-failure-and-degraded-mode-handling: backlog
+  17-2-database-and-onedrive-safety: backlog
+  17-3-session-and-restart-integrity: backlog
+  epic-17-retrospective: optional
+
+  epic-18: backlog
+  18-1-adversarial-operator-test-pack: backlog
+  18-2-automated-release-report: backlog
+  18-3-vmc-sign-off: backlog
+  epic-18-retrospective: optional

@@ -4,6 +4,14 @@
 **Branch:** `v2-feature-review-engine`  
 **Maintained by:** BMAD planning workflow
 
+> **2026-06-11 reliability correction:** VMC is feature-complete but is no
+> longer considered operator-ready. Operator V2 testing exposed missing
+> coordinate-frame, setup-orientation, exact-visualization, and cross-layer
+> consistency coverage. Execution is now governed by
+> `vmc_reliability_hardening_epics.md`,
+> `vmc_corner_case_matrix.md`, and `sprint-status.yaml`. Turning, turn-mill,
+> deployment, and further G-code expansion remain frozen until Epic 18 sign-off.
+
 ---
 
 ## 1. Project Summary
