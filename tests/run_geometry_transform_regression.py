@@ -74,6 +74,19 @@ def _run_17b_orientation():
     ]
     if len(exact_candidates) < 3:
         raise AssertionError("17b exact candidates should retain CAD positions")
+    face_setups = {
+        candidate.get("work_setup_label") or candidate.get("setup_label")
+        for candidate in adjusted
+        if candidate.get("feature_type") == "Face Milling"
+    }
+    if face_setups != {"Top", "Bottom"}:
+        raise AssertionError(f"17b should select work Top/Bottom faces, got {face_setups}")
+    for face in [
+        candidate for candidate in adjusted
+        if candidate.get("feature_type") == "Face Milling"
+    ]:
+        if not face.get("face_mesh_data"):
+            raise AssertionError("17b work-oriented face milling should retain exact face mesh")
     for candidate in exact_candidates:
         work = candidate.get("work_position")
         if not work:

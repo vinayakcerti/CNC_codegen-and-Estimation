@@ -985,6 +985,65 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
             "ignored":  False,
         })
 
+    # Retain the largest qualifying outer face in every CAD direction. The
+    # stock/orientation layer later selects the pair that maps to work Top and
+    # Bottom. This prevents Y-up/X-up STEP files from reusing CAD Z faces as
+    # misleading planning-facing operations.
+    setup_face_alternatives = []
+    axis_specs = (
+        ("x", "normal_x", part_width * part_height, ("bbox_length_y", "bbox_length_z")),
+        ("y", "normal_y", part_length * part_height, ("bbox_length_x", "bbox_length_z")),
+        ("z", "normal_z", part_length * part_width, ("bbox_length_x", "bbox_length_y")),
+    )
+    for axis, normal_key, cross_area, span_keys in axis_specs:
+        for sign, raw_setup in ((1, {"x": "Right", "y": "Back", "z": "Top"}[axis]),
+                                (-1, {"x": "Left", "y": "Front", "z": "Bottom"}[axis])):
+            qualifying = []
+            for record in face_records:
+                if record.get("geom_type") != "PLANE":
+                    continue
+                normal = float(record.get(normal_key) or 0.0)
+                area = float(record.get("area_mm2") or 0.0)
+                if sign * normal <= _NZ_THRESH or area < _MIN_AREA_MM2:
+                    continue
+                if cross_area > 0 and area < cross_area * _FOOTPRINT_RATIO:
+                    continue
+                qualifying.append(record)
+            if not qualifying:
+                continue
+            best = max(qualifying, key=lambda record: record.get("area_mm2") or 0.0)
+            setup_face_alternatives.append({
+                "candidate_id": f"ORIENT_FACE_{raw_setup.upper()}",
+                "feature_name": f"Face milling - CAD {raw_setup.lower()} surface",
+                "feature_type": "Face milling",
+                "quantity": 1,
+                "x_pos": best.get("center_x"),
+                "y_pos": best.get("center_y"),
+                "diameter": None,
+                "length": round(float(best.get(span_keys[0]) or 0.0), 3),
+                "width": round(float(best.get(span_keys[1]) or 0.0), 3),
+                "depth": 1.0,
+                "tolerance_note": "",
+                "priority": 1,
+                "confidence": "high",
+                "setup_label": raw_setup,
+                "detection_source": "cadquery_setup_face_alternative",
+                "detection_note": (
+                    f"Orientation candidate from CAD {raw_setup} face "
+                    f"#{best['face_index']}; selected only if it maps to work Top/Bottom."
+                ),
+                "face_indices": [best["face_index"]],
+                "cad_position": {
+                    "x": round(float(best.get("center_x") or 0.0), 6),
+                    "y": round(float(best.get("center_y") or 0.0), 6),
+                    "z": round(float(best.get("center_z") or 0.0), 6),
+                },
+                "accepted": False,
+                "ignored": False,
+            })
+    if candidates and setup_face_alternatives:
+        candidates[0]["orientation_face_candidates"] = setup_face_alternatives
+
     # ── B. Hole / bore candidates ────────────────────────────────────────────
     # Only CYLINDER faces that are circular in the machining plane (XY) qualify.
     # circular_xy = bbox spans in X and Y are within 15% of each other.
@@ -1891,7 +1950,10 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
         try:
             _faces_list = cq_result.faces().vals()
             _n_faces    = len(_faces_list)
-            for _cand in candidates:
+            _mesh_targets = list(candidates)
+            for _candidate in candidates:
+                _mesh_targets.extend(_candidate.get("orientation_face_candidates", []))
+            for _cand in _mesh_targets:
                 _ftype = _cand.get("feature_type", "")
                 _fidxs = _cand.get("face_indices", [])
                 if _ftype not in _FACE_COLOR_TYPES or not _fidxs:

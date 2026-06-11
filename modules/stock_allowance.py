@@ -79,6 +79,25 @@ def apply_stock_allowance_to_candidates(
     source_part_dims = dict(part_dims)
     adjusted = copy.deepcopy(candidates or [])
     work_transform = infer_work_transform(source_part_dims, stock, tolerance)
+    orientation_faces = []
+    for candidate in adjusted:
+        orientation_faces.extend(candidate.pop("orientation_face_candidates", []) or [])
+    if work_transform.work_axes != ("x", "y", "z") and orientation_faces:
+        selected_faces = []
+        for candidate in orientation_faces:
+            transformed = attach_work_coordinates(candidate, work_transform)
+            work_setup = transformed.get("work_setup_label")
+            if work_setup not in {"Top", "Bottom"}:
+                continue
+            transformed["candidate_id"] = "F001" if work_setup == "Top" else "F002"
+            transformed["feature_name"] = f"Face milling - {work_setup.lower()} surface"
+            selected_faces.append(transformed)
+        if {candidate.get("work_setup_label") for candidate in selected_faces} == {"Top", "Bottom"}:
+            adjusted = [
+                candidate
+                for candidate in adjusted
+                if not _is_face_milling(candidate)
+            ] + selected_faces
 
     part_l = _num(part_dims.get("length_mm") or part_dims.get("length"))
     part_w = _num(part_dims.get("width_mm") or part_dims.get("width"))

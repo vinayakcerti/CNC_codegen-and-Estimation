@@ -8,6 +8,12 @@
   transform provenance.
 - Accepted machining features now use work coordinates and work setup labels.
 - Added 17B orientation and candidate-coordinate regressions.
+- Retained setup-face alternatives for every CAD axis and selected the true
+  work Top/Bottom faces after orientation inference.
+- Added a golden regression pack covering eight representative milling parts,
+  including the 17B rotated-axis part and the complex slide-base weldment.
+- Added geometry, provenance, determinism, grouping, and exact-highlight
+  invariants to prevent previously corrected behavior from regressing.
 
 ## 2026-06-10 - V2 Feature Review Validation
 
