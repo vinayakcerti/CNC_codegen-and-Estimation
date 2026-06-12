@@ -14,6 +14,21 @@
   including the 17B rotated-axis part and the complex slide-base weldment.
 - Added geometry, provenance, determinism, grouping, and exact-highlight
   invariants to prevent previously corrected behavior from regressing.
+- Made hole, slot, pocket, step, and facing detection invariant across
+  axis-aligned STEP permutations and reversed machining directions.
+- Added stock-aware selection among ambiguous detection frames while preserving
+  original CAD coordinates, exact face provenance, and work coordinates.
+- Generalized stock allowance and edge-milling geometry to all coordinate
+  permutations using forward and inverse CAD/work transforms.
+- Added metamorphic regression coverage for five representative parts across
+  positive/negative X and Y rotations, including dimensions, setups, positions,
+  stock edges, and lateral-mirror equivalence.
+- Added content-derived physical feature IDs and exact detection IDs so
+  re-detection, candidate reordering, and CAD face splitting cannot duplicate
+  accepted milling work.
+- Made flat and grouped feature review status physical-identity aware and added
+  acceptance regressions for reruns, renamed file copies, changed sources,
+  face-split candidates, and repeated group commits.
 
 ## 2026-06-10 - V2 Feature Review Validation
 

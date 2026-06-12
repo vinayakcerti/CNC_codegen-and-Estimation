@@ -1,6 +1,11 @@
 import copy
 
-from modules.geometry_transform import attach_work_coordinates, infer_work_transform
+from modules.geometry_transform import (
+    attach_work_coordinates,
+    build_transform,
+    infer_work_transform,
+)
+from modules.step_parser import assign_stable_candidate_ids
 
 def _num(value, default=0.0):
     try:
@@ -9,61 +14,100 @@ def _num(value, default=0.0):
         return default
 
 
-def _range_center(bounds, fallback=0.0):
-    if isinstance(bounds, (list, tuple)) and len(bounds) >= 2:
-        return (_num(bounds[0]) + _num(bounds[1])) / 2
-    return fallback
-
-
-def _range_min(bounds, fallback):
-    if isinstance(bounds, (list, tuple)) and len(bounds) >= 2:
-        return _num(bounds[0], fallback)
-    return fallback
-
-
-def _range_max(bounds, fallback):
-    if isinstance(bounds, (list, tuple)) and len(bounds) >= 2:
-        return _num(bounds[1], fallback)
-    return fallback
-
-
 def _is_face_milling(candidate):
     return "face mill" in str(candidate.get("feature_type") or "").lower()
 
 
-def _normalise_part_axes_for_stock(part_l, part_w, part_h, stock_l, stock_w, stock_h, part_dims, tolerance):
-    """Return part axes adjusted when STEP width/height are clearly swapped.
+def _setup_from_vector(vector):
+    axis = max(range(3), key=lambda index: abs(vector[index]))
+    sign = 1 if vector[axis] >= 0 else -1
+    return {
+        (0, 1): "Right",
+        (0, -1): "Left",
+        (1, 1): "Back",
+        (1, -1): "Front",
+        (2, 1): "Top",
+        (2, -1): "Bottom",
+    }[(axis, sign)]
 
-    Some customer STEP files are modeled with the VMC vertical axis in Y rather
-    than Z. The bounding-box parser then reports a physically impossible setup,
-    for example finished height 90 mm inside 40 mm stock while finished width is
-    only 30 mm inside 100 mm stock. If swapping width/height makes the part fit
-    the configured stock, treat that as the planning orientation.
-    """
-    if not (part_l and part_w and part_h and stock_l and stock_w and stock_h):
-        return part_l, part_w, part_h, part_dims, False
 
-    original_fits = (
-        part_l <= stock_l + tolerance
-        and part_w <= stock_w + tolerance
-        and part_h <= stock_h + tolerance
+def _raw_bounds_from_work_plane(transform, points):
+    raw = [transform.inverse_point(*point) for point in points]
+    return {
+        f"{axis}_{bound}": round(
+            (min if bound == "min" else max)(point[index] for point in raw),
+            6,
+        )
+        for index, axis in enumerate(("x", "y", "z"))
+        for bound in ("min", "max")
+    }
+
+
+def _orient_transform_to_feature_side(transform, candidates, part_dims):
+    """Flip work Z when the dominant exact machining side currently faces down."""
+    weights = {
+        "hole": 2,
+        "large hole / boring": 2,
+        "slot": 3,
+        "pocket": 3,
+        "step": 3,
+        "chamfer": 1,
+    }
+    top_score = 0
+    bottom_score = 0
+    for candidate in candidates or []:
+        feature_type = str(candidate.get("feature_type") or "").lower()
+        weight = weights.get(feature_type, 0)
+        if not weight:
+            continue
+        transformed = attach_work_coordinates(candidate, transform)
+        setup = transformed.get("work_setup_label")
+        quantity = max(int(candidate.get("quantity") or 1), 1)
+        if setup == "Top":
+            top_score += weight * quantity
+        elif setup == "Bottom":
+            bottom_score += weight * quantity
+
+    if bottom_score <= top_score or bottom_score == 0:
+        return transform
+    signs = list(transform.signs)
+    signs[2] *= -1
+    return build_transform(
+        part_dims,
+        work_axes=transform.work_axes,
+        signs=tuple(signs),
+        reason=f"{transform.reason}; work Z reversed to place dominant machining side on Top",
     )
-    swapped_fits = (
-        part_l <= stock_l + tolerance
-        and part_h <= stock_w + tolerance
-        and part_w <= stock_h + tolerance
-    )
-    if original_fits or not swapped_fits:
-        return part_l, part_w, part_h, part_dims, False
 
-    normalised_dims = dict(part_dims or {})
-    normalised_dims["width_mm"] = part_h
-    normalised_dims["width"] = part_h
-    normalised_dims["height_mm"] = part_w
-    normalised_dims["height"] = part_w
-    if part_dims.get("z_range") is not None:
-        normalised_dims["y_range"] = part_dims.get("z_range")
-    return part_l, part_h, part_w, normalised_dims, True
+
+def _work_top_score(transform, candidates):
+    weights = {
+        "hole": 2,
+        "large hole / boring": 2,
+        "slot": 3,
+        "pocket": 3,
+        "step": 3,
+        "chamfer": 1,
+    }
+    score = 0
+    for candidate in candidates or []:
+        weight = weights.get(str(candidate.get("feature_type") or "").lower(), 0)
+        if not weight:
+            continue
+        transformed = attach_work_coordinates(candidate, transform)
+        if transformed.get("work_setup_label") == "Top":
+            score += weight * max(int(candidate.get("quantity") or 1), 1)
+    return score
+
+
+def _hydrate_face_meshes(candidate, mesh_catalog):
+    if candidate.get("face_mesh_data"):
+        return
+    candidate["face_mesh_data"] = [
+        mesh_catalog[index]
+        for index in candidate.get("face_indices", [])
+        if index in mesh_catalog
+    ]
 
 
 def apply_stock_allowance_to_candidates(
@@ -79,17 +123,51 @@ def apply_stock_allowance_to_candidates(
     source_part_dims = dict(part_dims)
     adjusted = copy.deepcopy(candidates or [])
     work_transform = infer_work_transform(source_part_dims, stock, tolerance)
+    candidate_sets = []
+    mesh_catalog = {}
+    for candidate in adjusted:
+        candidate_sets.extend(candidate.pop("detection_candidate_sets", []) or [])
+        mesh_catalog.update(candidate.pop("face_mesh_catalog", {}) or {})
+    matching_sets = [
+        candidate_set
+        for candidate_set in candidate_sets
+        if tuple(candidate_set.get("work_axes_from_cad") or ()) == work_transform.work_axes
+    ]
+    if matching_sets:
+        selected_set = max(
+            matching_sets,
+            key=lambda candidate_set: (
+                _work_top_score(
+                    work_transform,
+                    candidate_set.get("candidates", []),
+                ),
+                _num(candidate_set.get("score")),
+                _num(candidate_set.get("top_score")),
+            ),
+        )
+        adjusted = copy.deepcopy(selected_set.get("candidates", []))
+    for candidate in adjusted:
+        _hydrate_face_meshes(candidate, mesh_catalog)
+        for orientation_face in candidate.get("orientation_face_candidates", []) or []:
+            _hydrate_face_meshes(orientation_face, mesh_catalog)
+    work_transform = _orient_transform_to_feature_side(
+        work_transform,
+        adjusted,
+        source_part_dims,
+    )
     orientation_faces = []
     for candidate in adjusted:
         orientation_faces.extend(candidate.pop("orientation_face_candidates", []) or [])
-    if work_transform.work_axes != ("x", "y", "z") and orientation_faces:
+    if (
+        work_transform.work_axes != ("x", "y", "z")
+        or work_transform.signs != (1, 1, 1)
+    ) and orientation_faces:
         selected_faces = []
         for candidate in orientation_faces:
             transformed = attach_work_coordinates(candidate, work_transform)
             work_setup = transformed.get("work_setup_label")
             if work_setup not in {"Top", "Bottom"}:
                 continue
-            transformed["candidate_id"] = "F001" if work_setup == "Top" else "F002"
             transformed["feature_name"] = f"Face milling - {work_setup.lower()} surface"
             selected_faces.append(transformed)
         if {candidate.get("work_setup_label") for candidate in selected_faces} == {"Top", "Bottom"}:
@@ -99,58 +177,49 @@ def apply_stock_allowance_to_candidates(
                 if not _is_face_milling(candidate)
             ] + selected_faces
 
-    part_l = _num(part_dims.get("length_mm") or part_dims.get("length"))
-    part_w = _num(part_dims.get("width_mm") or part_dims.get("width"))
-    part_h = _num(part_dims.get("height_mm") or part_dims.get("height"))
+    part_l, part_w, part_h = (
+        _num(value) for value in work_transform.work_spans
+    )
     stock_l = _num(stock.get("length"))
     stock_w = _num(stock.get("width"))
     stock_h = _num(stock.get("height"))
-    original_part_w = part_w
-    source_x_min = _range_min(source_part_dims.get("x_range"), -part_l / 2)
-    source_x_max = _range_max(source_part_dims.get("x_range"), part_l / 2)
-    source_y_min = _range_min(source_part_dims.get("y_range"), -part_w / 2)
-    source_y_max = _range_max(source_part_dims.get("y_range"), part_w / 2)
-    source_z_min = _range_min(source_part_dims.get("z_range"), 0.0)
-    source_z_max = _range_max(source_part_dims.get("z_range"), part_h)
-    part_l, part_w, part_h, part_dims, axes_swapped = _normalise_part_axes_for_stock(
-        part_l, part_w, part_h, stock_l, stock_w, stock_h, part_dims, tolerance
-    )
-
     z_allow = max((stock_h - part_h) / 2, 0.0) if stock_h and part_h else 0.0
-    if z_allow > tolerance or axes_swapped:
-        for cand in adjusted:
-            ftype_lower = str(cand.get("feature_type") or "").lower()
-            if _is_face_milling(cand) and z_allow > tolerance:
+    y_allow = max((stock_w - part_w) / 2, 0.0) if stock_w and part_w else 0.0
+    for cand in adjusted:
+        ftype_lower = str(cand.get("feature_type") or "").lower()
+        if _is_face_milling(cand):
+            cand["length"] = round(stock_l or part_l, 3)
+            cand["width"] = round(stock_w or part_w, 3)
+            if z_allow > tolerance:
                 cand["feature_type"] = "Face Milling"
                 cand["depth"] = round(z_allow, 3)
-                if stock_l > 0:
-                    cand["length"] = round(stock_l, 3)
-                elif part_l > 0:
-                    cand["length"] = round(part_l, 3)
-                if stock_w > 0:
-                    cand["width"] = round(stock_w, 3)
-                elif part_w > 0:
-                    cand["width"] = round(part_w, 3)
                 note = cand.get("detection_note") or ""
                 stock_note = (
                     f"Depth adjusted from configured stock height: "
                     f"({stock_h:.1f} - {part_h:.1f}) / 2 = {z_allow:.3f} mm."
                 )
                 cand["detection_note"] = f"{note} {stock_note}".strip()
-            elif axes_swapped and ftype_lower == "step":
-                width = _num(cand.get("width"))
-                if original_part_w > 0 and part_w > 0 and abs(width - original_part_w) <= tolerance:
-                    cand["width"] = round(part_w, 3)
-                    length = _num(cand.get("length"))
-                    depth = _num(cand.get("depth"))
-                    if length > 0 and depth > 0:
-                        cand["feature_name"] = (
-                            f"Step shoulder {length:.1f}x{part_w:.1f} "
-                            f"depth {depth:.1f} mm"
-                        )
-                    note = cand.get("detection_note") or ""
-                    orient_note = "Width adjusted to planning orientation from configured stock."
-                    cand["detection_note"] = f"{note} {orient_note}".strip()
+        elif ftype_lower == "step":
+            width = _num(cand.get("width"))
+            if (
+                y_allow > tolerance
+                and part_w > part_h + tolerance
+                and abs(width - part_h) <= tolerance
+            ):
+                cand["width"] = round(part_w, 3)
+                length = _num(cand.get("length"))
+                depth = _num(cand.get("depth"))
+                if length > 0 and depth > 0:
+                    cand["feature_name"] = (
+                        f"Step shoulder {length:.1f}x{part_w:.1f} "
+                        f"depth {depth:.1f} mm"
+                    )
+                note = cand.get("detection_note") or ""
+                orient_note = (
+                    "Width adjusted from the oriented work envelope for "
+                    "stock-facing step planning."
+                )
+                cand["detection_note"] = f"{note} {orient_note}".strip()
 
     if not include_edge_milling:
         return [
@@ -159,24 +228,27 @@ def apply_stock_allowance_to_candidates(
         ]
 
     x_allow = max((stock_l - part_l) / 2, 0.0) if stock_l and part_l else 0.0
-    y_allow = max((stock_w - part_w) / 2, 0.0) if stock_w and part_w else 0.0
-    cx = _range_center(part_dims.get("x_range"), 0.0)
-    cy = _range_center(part_dims.get("y_range"), 0.0)
-    x_min = _range_min(part_dims.get("x_range"), cx - part_l / 2)
-    x_max = _range_max(part_dims.get("x_range"), cx + part_l / 2)
-    y_min = _range_min(part_dims.get("y_range"), cy - part_w / 2)
-    y_max = _range_max(part_dims.get("y_range"), cy + part_w / 2)
 
     edge_candidates = []
     if x_allow > tolerance and part_w > 0 and part_h > 0:
-        for side, xpos in (("X-", x_min), ("X+", x_max)):
+        for side, work_x, work_normal in (
+            ("X-", 0.0, (-1.0, 0.0, 0.0)),
+            ("X+", part_l, (1.0, 0.0, 0.0)),
+        ):
+            raw_position = work_transform.inverse_point(
+                work_x,
+                part_w / 2,
+                part_h / 2,
+            )
+            raw_normal = work_transform.inverse_vector(*work_normal)
             edge_candidates.append({
                 "candidate_id": f"STK_EDGE_{side}",
                 "feature_name": f"Edge milling {side} stock allowance",
                 "feature_type": "Edge Milling",
                 "quantity": 1,
-                "x_pos": xpos,
-                "y_pos": cy,
+                "x_pos": raw_position[0],
+                "y_pos": raw_position[1],
+                "z_pos": raw_position[2],
                 "diameter": None,
                 "length": round(part_w, 3),
                 "width": round(part_h, 3),
@@ -184,18 +256,19 @@ def apply_stock_allowance_to_candidates(
                 "tolerance_note": "",
                 "priority": 1,
                 "confidence": "derived",
-                "setup_label": "Left" if side == "X-" else "Right",
+                "setup_label": _setup_from_vector(raw_normal),
                 "detection_source": "stock_allowance",
                 "edge_axis": "X",
                 "edge_side": side,
-                "visual_bounds": {
-                    "x_min": xpos,
-                    "x_max": xpos,
-                    "y_min": source_y_min,
-                    "y_max": source_y_max,
-                    "z_min": source_z_min,
-                    "z_max": source_z_max,
-                },
+                "visual_bounds": _raw_bounds_from_work_plane(
+                    work_transform,
+                    [
+                        (work_x, 0.0, 0.0),
+                        (work_x, part_w, 0.0),
+                        (work_x, 0.0, part_h),
+                        (work_x, part_w, part_h),
+                    ],
+                ),
                 "detection_note": (
                     f"Derived from configured stock length: "
                     f"({stock_l:.1f} - {part_l:.1f}) / 2 = {x_allow:.3f} mm per side."
@@ -203,32 +276,24 @@ def apply_stock_allowance_to_candidates(
             })
 
     if y_allow > tolerance and part_l > 0 and part_h > 0:
-        for side, ypos in (("Y-", y_min), ("Y+", y_max)):
-            if axes_swapped:
-                visual_bounds = {
-                    "x_min": source_x_min,
-                    "x_max": source_x_max,
-                    "y_min": source_y_min,
-                    "y_max": source_y_max,
-                    "z_min": ypos,
-                    "z_max": ypos,
-                }
-            else:
-                visual_bounds = {
-                    "x_min": source_x_min,
-                    "x_max": source_x_max,
-                    "y_min": ypos,
-                    "y_max": ypos,
-                    "z_min": source_z_min,
-                    "z_max": source_z_max,
-                }
+        for side, work_y, work_normal in (
+            ("Y-", 0.0, (0.0, -1.0, 0.0)),
+            ("Y+", part_w, (0.0, 1.0, 0.0)),
+        ):
+            raw_position = work_transform.inverse_point(
+                part_l / 2,
+                work_y,
+                part_h / 2,
+            )
+            raw_normal = work_transform.inverse_vector(*work_normal)
             edge_candidates.append({
                 "candidate_id": f"STK_EDGE_{side}",
                 "feature_name": f"Edge milling {side} stock allowance",
                 "feature_type": "Edge Milling",
                 "quantity": 1,
-                "x_pos": cx,
-                "y_pos": ypos,
+                "x_pos": raw_position[0],
+                "y_pos": raw_position[1],
+                "z_pos": raw_position[2],
                 "diameter": None,
                 "length": round(part_l, 3),
                 "width": round(part_h, 3),
@@ -236,11 +301,19 @@ def apply_stock_allowance_to_candidates(
                 "tolerance_note": "",
                 "priority": 1,
                 "confidence": "derived",
-                "setup_label": "Front" if side == "Y-" else "Back",
+                "setup_label": _setup_from_vector(raw_normal),
                 "detection_source": "stock_allowance",
                 "edge_axis": "Y",
                 "edge_side": side,
-                "visual_bounds": visual_bounds,
+                "visual_bounds": _raw_bounds_from_work_plane(
+                    work_transform,
+                    [
+                        (0.0, work_y, 0.0),
+                        (part_l, work_y, 0.0),
+                        (0.0, work_y, part_h),
+                        (part_l, work_y, part_h),
+                    ],
+                ),
                 "detection_note": (
                     f"Derived from configured stock width: "
                     f"({stock_w:.1f} - {part_w:.1f}) / 2 = {y_allow:.3f} mm per side."
@@ -248,6 +321,15 @@ def apply_stock_allowance_to_candidates(
             })
 
     existing_ids = {c.get("candidate_id") for c in adjusted}
+    source_file_hash = next(
+        (
+            candidate.get("source_file_hash")
+            for candidate in adjusted
+            if candidate.get("source_file_hash")
+        ),
+        "stock-derived",
+    )
+    assign_stable_candidate_ids(edge_candidates, source_file_hash)
     adjusted.extend(c for c in edge_candidates if c["candidate_id"] not in existing_ids)
     return [
         attach_work_coordinates(candidate, work_transform)

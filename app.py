@@ -406,6 +406,9 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
 
 def _feature_signature(feature):
     """Stable key used to prevent duplicate accepted CAD features."""
+    physical_feature_id = feature.get("physical_feature_id")
+    if physical_feature_id:
+        return ("physical_feature_id", str(physical_feature_id))
     return (
         str(feature.get("feature_type") or "").strip().lower(),
         str(feature.get("feature_name") or "").strip().lower(),
@@ -423,6 +426,27 @@ def _accepted_feature_signatures():
         _feature_signature(feature)
         for feature in st.session_state.get("features", [])
     }
+
+
+def _candidate_identity_ids(candidate):
+    return {
+        str(value)
+        for value in (
+            candidate.get("candidate_id"),
+            candidate.get("physical_feature_id"),
+        )
+        if value
+    }
+
+
+def _candidate_is_added(candidate, added_ids):
+    return bool(_candidate_identity_ids(candidate) & set(added_ids or set()))
+
+
+def _mark_candidate_added(candidate):
+    st.session_state.added_candidate_ids.update(
+        _candidate_identity_ids(candidate)
+    )
 
 
 def _candidate_work_value(candidate, axis):
@@ -456,6 +480,8 @@ def _feature_from_candidate(candidate, feature_type, action):
         "machining_action":       action,
         "selected_for_machining": True,
         "source_candidate_id":     candidate.get("candidate_id", ""),
+        "physical_feature_id":     candidate.get("physical_feature_id", ""),
+        "source_file_hash":        candidate.get("source_file_hash", ""),
         "setup_label":            _candidate_work_setup(candidate),
         "cad_position":           candidate.get("cad_position"),
         "coordinate_transform":   candidate.get("coordinate_transform"),
@@ -477,7 +503,7 @@ def _commit_candidate_selections(edited_df, candidates) -> int:
     for _, _row in edited_df.iterrows():
         _cid    = _row["candidate_id"]
         _action = str(_row.get("machining_action", "Machine"))
-        if not _row["accept"] or _cid in st.session_state.added_candidate_ids:
+        if not _row["accept"]:
             continue
         if _action == "Reference Only":
             continue
@@ -486,6 +512,8 @@ def _commit_candidate_selections(edited_df, candidates) -> int:
         _c = _lookup.get(_cid)
         if _c is None:
             continue
+        if _candidate_is_added(_c, st.session_state.added_candidate_ids):
+            continue
         _ftype = _FTYPE_MAP.get(
             (_c.get("feature_type") or "").strip().lower(),
             _c.get("feature_type", ""),
@@ -493,11 +521,11 @@ def _commit_candidate_selections(edited_df, candidates) -> int:
         _feature = _feature_from_candidate(_c, _ftype, _action)
         _sig = _feature_signature(_feature)
         if _sig in _existing_signatures:
-            st.session_state.added_candidate_ids.add(_cid)
+            _mark_candidate_added(_c)
             continue
         st.session_state.features.append(_feature)
         _existing_signatures.add(_sig)
-        st.session_state.added_candidate_ids.add(_cid)
+        _mark_candidate_added(_c)
         _n_added += 1
     return _n_added
 
@@ -709,10 +737,10 @@ def _commit_group_selections(edited_grouped_df, groups, candidates) -> int:
         group = groups[_gidx]
 
         for _cid in group["member_ids"]:
-            if _cid in st.session_state.added_candidate_ids:
-                continue
             _c = _cand_lookup.get(_cid)
             if _c is None:
+                continue
+            if _candidate_is_added(_c, st.session_state.added_candidate_ids):
                 continue
             _ftype = _FTYPE_MAP.get(
                 (_c.get("feature_type") or "").strip().lower(),
@@ -721,11 +749,11 @@ def _commit_group_selections(edited_grouped_df, groups, candidates) -> int:
             _feature = _feature_from_candidate(_c, _ftype, _action)
             _sig = _feature_signature(_feature)
             if _sig in _existing_signatures:
-                st.session_state.added_candidate_ids.add(_cid)
+                _mark_candidate_added(_c)
                 continue
             st.session_state.features.append(_feature)
             _existing_signatures.add(_sig)
-            st.session_state.added_candidate_ids.add(_cid)
+            _mark_candidate_added(_c)
             _n_added += 1
 
     return _n_added
@@ -2302,9 +2330,10 @@ def page_setup_review():
             _rows = []
             for _c in _candidates:
                 _cid = _c["candidate_id"]
+                _is_added = _candidate_is_added(_c, _added_ids)
                 _rows.append({
-                    "accept":           (_cid not in _added_ids) and _is_raw_block,
-                    "status":           "Added ✓" if _cid in _added_ids else "",
+                    "accept":           (not _is_added) and _is_raw_block,
+                    "status":           "Added ✓" if _is_added else "",
                     "candidate_id":     _cid,
                     "machining_action": _default_action,
                     "feature_type":     _c.get("feature_type", ""),
@@ -3256,6 +3285,14 @@ def page_select_machining_work():
                 key="_smw_type_filter",
             )
             _filtered = [c for c in _candidates if c.get("feature_type", "Unknown") in _sel_types]
+            _candidate_by_id = {
+                candidate.get("candidate_id"): candidate
+                for candidate in _filtered
+            }
+
+            def _member_is_added(member_id):
+                candidate = _candidate_by_id.get(member_id)
+                return bool(candidate) and _candidate_is_added(candidate, _added_ids)
 
             # ── Grouping toggle ─────────────────────────────────────────────
             _use_grouping = st.toggle(
@@ -3280,7 +3317,10 @@ def page_select_machining_work():
                     _suffix = _group_widget_suffix(_g)
                     _ka = f"_smw_card_accept_{_suffix}"
                     _kx = f"_smw_card_action_{_suffix}"
-                    _seed_all_added = all(mid in _added_ids for mid in _g["member_ids"])
+                    _seed_all_added = all(
+                        _member_is_added(mid)
+                        for mid in _g["member_ids"]
+                    )
                     if _seed_all_added:
                         st.session_state[_ka] = False
                     elif _ka not in st.session_state:
@@ -3320,8 +3360,14 @@ def page_select_machining_work():
                 with st.container(height=420):
                     for _gi, _g in enumerate(_groups):
                         _suffix = _group_widget_suffix(_g)
-                        _all_added  = all(mid in _added_ids for mid in _g["member_ids"])
-                        _some_added = any(mid in _added_ids for mid in _g["member_ids"])
+                        _all_added = all(
+                            _member_is_added(mid)
+                            for mid in _g["member_ids"]
+                        )
+                        _some_added = any(
+                            _member_is_added(mid)
+                            for mid in _g["member_ids"]
+                        )
                         _icon = _FTYPE_ICON.get(_g["feature_type"], "◾")
                         if _all_added:
                             _badge = (
@@ -3330,7 +3376,10 @@ def page_select_machining_work():
                                 "font-weight:600;'>All added ✓</span>"
                             )
                         elif _some_added:
-                            _nd = sum(1 for _m in _g["member_ids"] if _m in _added_ids)
+                            _nd = sum(
+                                1 for _m in _g["member_ids"]
+                                if _member_is_added(_m)
+                            )
                             _badge = (
                                 f"<span style='background:#fef3c7;color:#92400e;"
                                 f"border-radius:3px;padding:1px 5px;font-size:10px;"
@@ -3396,12 +3445,21 @@ def page_select_machining_work():
                 with st.expander("Advanced: flat group table"):
                     _adv_rows = []
                     for _gi, _g in enumerate(_groups):
-                        _aa = all(mid in _added_ids for mid in _g["member_ids"])
-                        _sa = any(mid in _added_ids for mid in _g["member_ids"])
+                        _aa = all(
+                            _member_is_added(mid)
+                            for mid in _g["member_ids"]
+                        )
+                        _sa = any(
+                            _member_is_added(mid)
+                            for mid in _g["member_ids"]
+                        )
                         if _aa:
                             _ast = "All added ✓"
                         elif _sa:
-                            _nad = sum(1 for _m in _g["member_ids"] if _m in _added_ids)
+                            _nad = sum(
+                                1 for _m in _g["member_ids"]
+                                if _member_is_added(_m)
+                            )
                             _ast = f"Partial ✓ ({_nad}/{_g['count']})"
                         else:
                             _ast = ""
@@ -3459,9 +3517,10 @@ def page_select_machining_work():
                 _rows = []
                 for _c in _filtered:
                     _cid = _c["candidate_id"]
+                    _is_added = _candidate_is_added(_c, _added_ids)
                     _rows.append({
-                        "accept":           (_cid not in _added_ids) and _is_raw_block,
-                        "status":           "Added ✓" if _cid in _added_ids else "",
+                        "accept":           (not _is_added) and _is_raw_block,
+                        "status":           "Added ✓" if _is_added else "",
                         "candidate_id":     _cid,
                         "machining_action": _default_action,
                         "feature_type":     _c.get("feature_type", ""),

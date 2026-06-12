@@ -28,6 +28,8 @@ def _reset_feature_state():
 def _face_milling_candidate():
     return {
         "candidate_id": "FM_TOP",
+        "physical_feature_id": "FACE-PHYSICAL-TOP",
+        "source_file_hash": "sample-source",
         "feature_name": "Face milling - top surface",
         "feature_type": "Face milling",
         "quantity": 1,
@@ -70,6 +72,8 @@ def main():
     second_added = app._commit_candidate_selections(edited, candidates)
     if second_added != 0 or len(st.session_state.features) != 1:
         raise AssertionError("duplicate candidate commit should not append a second feature")
+    if "FACE-PHYSICAL-TOP" not in st.session_state.added_candidate_ids:
+        raise AssertionError("duplicate commit should restore physical added status")
 
     print("PASS candidate commit regression: duplicate accepted candidate is skipped")
     return 0

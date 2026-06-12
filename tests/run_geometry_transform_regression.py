@@ -37,11 +37,15 @@ def _run_basic_transforms():
     transform = build_transform(dims)
     _assert_close(transform.point(-60, -100, 0), (0, 0, 0), "minimum corner")
     _assert_close(transform.point(60, 100, 30), (120, 200, 30), "maximum corner")
+    _assert_close(transform.inverse_point(0, 0, 0), (-60, -100, 0), "inverse minimum")
+    _assert_close(transform.inverse_point(120, 200, 30), (60, 100, 30), "inverse maximum")
     if transform.setup_label(0, 0, 1) != "Top":
         raise AssertionError("positive CAD Z normal should map to Top")
 
     reversed_x = build_transform(dims, signs=(-1, 1, 1))
     _assert_close(reversed_x.point(60, -100, 0), (0, 0, 0), "reversed X origin")
+    _assert_close(reversed_x.inverse_point(0, 0, 0), (60, -100, 0), "inverse reversed X")
+    _assert_close(reversed_x.inverse_vector(1, 0, 0), (-1, 0, 0), "inverse vector")
     if reversed_x.setup_label(1, 0, 0) != "Left":
         raise AssertionError("positive CAD X normal should map to Left after X reversal")
 

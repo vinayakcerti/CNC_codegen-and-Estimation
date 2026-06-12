@@ -1,12 +1,12 @@
 # generated: 2026-06-11
-# last_updated: 2026-06-11
+# last_updated: 2026-06-12
 # project: CNC Process Planner
 # project_key: NOKEY
 # tracking_system: file-system
 # story_location: _bmad-output/implementation-artifacts
 
 generated: 2026-06-11
-last_updated: 2026-06-11
+last_updated: 2026-06-12
 project: CNC Process Planner
 project_key: NOKEY
 tracking_system: file-system
@@ -19,11 +19,11 @@ development_status:
   9-3-apply-transform-across-the-product: done
   epic-9-retrospective: optional
 
-  epic-10: in-progress
+  epic-10: done
   10-1-define-golden-expectation-schema: done
   10-2-add-geometry-and-workflow-invariants: done
   10-3-build-core-golden-sample-pack: done
-  10-4-add-metamorphic-orientation-tests: backlog
+  10-4-add-metamorphic-orientation-tests: done
   epic-10-retrospective: optional
 
   epic-11: in-progress
@@ -32,11 +32,11 @@ development_status:
   11-3-honest-approximate-markers: backlog
   epic-11-retrospective: optional
 
-  epic-12: backlog
-  12-1-hole-and-bore-hardening: backlog
-  12-2-slot-and-pocket-hardening: backlog
-  12-3-step-and-shoulder-hardening: backlog
-  12-4-face-chamfer-and-profile-hardening: backlog
+  epic-12: in-progress
+  12-1-hole-and-bore-hardening: done
+  12-2-slot-and-pocket-hardening: done
+  12-3-step-and-shoulder-hardening: done
+  12-4-face-chamfer-and-profile-hardening: in-progress
   epic-12-retrospective: optional
 
   epic-13: backlog
@@ -46,9 +46,9 @@ development_status:
   13-4-existing-part-rework-mode: backlog
   epic-13-retrospective: optional
 
-  epic-14: backlog
-  14-1-stable-physical-feature-ids: backlog
-  14-2-idempotent-acceptance-and-grouping: backlog
+  epic-14: in-progress
+  14-1-stable-physical-feature-ids: done
+  14-2-idempotent-acceptance-and-grouping: done
   14-3-idempotent-operation-generation: backlog
   epic-14-retrospective: optional
 

@@ -65,6 +65,21 @@ class CoordinateTransform:
             for axis, sign in zip(self.work_axes, self.signs)
         )
 
+    def inverse_point(self, x, y, z):
+        work = (_num(x), _num(y), _num(z))
+        origin = dict(zip(_AXES, self.cad_origin))
+        cad = dict(origin)
+        for value, axis, sign in zip(work, self.work_axes, self.signs):
+            cad[axis] = origin[axis] + sign * value
+        return tuple(cad[axis] for axis in _AXES)
+
+    def inverse_vector(self, x, y, z):
+        work = (_num(x), _num(y), _num(z))
+        cad = {axis: 0.0 for axis in _AXES}
+        for value, axis, sign in zip(work, self.work_axes, self.signs):
+            cad[axis] = sign * value
+        return tuple(cad[axis] for axis in _AXES)
+
     def setup_label(self, nx, ny, nz, threshold=0.5):
         work_normal = self.vector(nx, ny, nz)
         axis = max(range(3), key=lambda idx: abs(work_normal[idx]))

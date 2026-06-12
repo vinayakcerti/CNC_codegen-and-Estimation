@@ -174,7 +174,7 @@ def _run_17b_audit_stock_orientation():
     if edge_depths != {5.0}:
         raise AssertionError(f"{sample}: expected all edge depths 5 mm, got {sorted(edge_depths)}")
     edge_setups = {
-        c.get("setup_label")
+        c.get("work_setup_label") or c.get("setup_label")
         for c in adjusted
         if c.get("feature_type") == "Edge Milling"
     }

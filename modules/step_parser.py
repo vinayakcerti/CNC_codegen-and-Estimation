@@ -2,6 +2,9 @@ import re
 import math
 import os
 import tempfile
+import hashlib
+import json
+from itertools import permutations, product
 
 # ---------------------------------------------------------------------------
 # Optional CadQuery / OCC imports
@@ -17,6 +20,103 @@ _CADQUERY_AVAILABLE = None
 _OCC_ADAPTOR_AVAILABLE = False
 _BRepAdaptor = None
 _GeomAbsCylinder = None
+
+
+_FEATURE_ID_PREFIXES = {
+    "Face milling": "FACE",
+    "Face Milling": "FACE",
+    "Hole": "HOLE",
+    "Large hole / boring": "BORE",
+    "Slot": "SLOT",
+    "Pocket": "POCKET",
+    "Step": "STEP",
+    "Chamfer": "CHAMFER",
+    "Edge Milling": "EDGE",
+}
+
+
+def _identity_number(value):
+    try:
+        return round(float(value), 4)
+    except (TypeError, ValueError):
+        return None
+
+
+def _candidate_physical_signature(candidate):
+    position = candidate.get("cad_position") or {
+        "x": candidate.get("x_pos"),
+        "y": candidate.get("y_pos"),
+        "z": candidate.get("z_pos"),
+    }
+    return {
+        "feature_type": str(candidate.get("feature_type") or "").strip().lower(),
+        "quantity": int(candidate.get("quantity") or 1),
+        "position": {
+            axis: _identity_number(position.get(axis))
+            for axis in ("x", "y", "z")
+        },
+        "diameter": _identity_number(candidate.get("diameter")),
+        "length": _identity_number(candidate.get("length")),
+        "width": _identity_number(candidate.get("width")),
+        "depth": _identity_number(candidate.get("depth")),
+        "setup": candidate.get("setup_label"),
+    }
+
+
+def assign_stable_candidate_ids(candidates, source_file_hash):
+    """Attach stable physical and exact-detection IDs recursively.
+
+    Physical IDs intentionally exclude face indices, allowing split CAD faces
+    that describe the same geometry to share one identity. Candidate IDs add
+    sorted face provenance so each exact visual detection remains unique.
+    """
+    source_hash = str(source_file_hash or "unknown")
+    for candidate in candidates or []:
+        physical_payload = {
+            "source_file_hash": source_hash,
+            "geometry": _candidate_physical_signature(candidate),
+        }
+        physical_digest = hashlib.sha256(
+            json.dumps(
+                physical_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        prefix = _FEATURE_ID_PREFIXES.get(
+            candidate.get("feature_type"),
+            "FEATURE",
+        )
+        physical_id = f"{prefix}-{physical_digest[:16]}"
+        exact_payload = {
+            "physical_feature_id": physical_id,
+            "face_indices": sorted(
+                int(index)
+                for index in candidate.get("face_indices", [])
+            ),
+            "detection_source": candidate.get("detection_source"),
+        }
+        exact_digest = hashlib.sha256(
+            json.dumps(
+                exact_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        candidate["source_file_hash"] = source_hash
+        candidate["physical_feature_id"] = physical_id
+        candidate["candidate_id"] = f"{prefix}-{exact_digest[:16]}"
+
+        assign_stable_candidate_ids(
+            candidate.get("orientation_face_candidates", []),
+            source_hash,
+        )
+        for candidate_set in candidate.get("detection_candidate_sets", []):
+            assign_stable_candidate_ids(
+                candidate_set.get("candidates", []),
+                source_hash,
+            )
+    return candidates
 
 
 def _load_cadquery():
@@ -864,7 +964,7 @@ def parse_step_auto(file_bytes: bytes) -> dict:
 # Feature candidate classification (experiment — not wired into parse_step_auto)
 # ---------------------------------------------------------------------------
 
-def _classify_face_records(face_records: list, part_bbox: dict) -> list:
+def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list:
     """
     Classify extracted face records into preliminary machinable feature candidates.
 
@@ -1872,6 +1972,286 @@ def _classify_face_records(face_records: list, part_bbox: dict) -> list:
     return candidates
 
 
+_FRAME_FEATURE_WEIGHTS = {
+    "Hole": 5,
+    "Large hole / boring": 5,
+    "Slot": 8,
+    "Pocket": 10,
+    "Step": 7,
+    "Chamfer": 4,
+}
+
+
+def _record_in_frame(record, work_axes, signs=(1, 1, 1)):
+    """Return a face record expressed in an axis-permuted detection frame."""
+    framed = dict(record)
+    for target_axis, source_axis, sign in zip(("x", "y", "z"), work_axes, signs):
+        for prefix in ("center", "normal", "cylinder_axis"):
+            value = record.get(f"{prefix}_{source_axis}")
+            framed[f"{prefix}_{target_axis}"] = (
+                None if value is None else sign * value
+            )
+        source_min = record.get(f"bbox_{source_axis}min")
+        source_max = record.get(f"bbox_{source_axis}max")
+        if source_min is None or source_max is None:
+            framed[f"bbox_{target_axis}min"] = None
+            framed[f"bbox_{target_axis}max"] = None
+        elif sign >= 0:
+            framed[f"bbox_{target_axis}min"] = source_min
+            framed[f"bbox_{target_axis}max"] = source_max
+        else:
+            framed[f"bbox_{target_axis}min"] = -source_max
+            framed[f"bbox_{target_axis}max"] = -source_min
+        framed[f"bbox_length_{target_axis}"] = record.get(
+            f"bbox_length_{source_axis}"
+        )
+    return framed
+
+
+def _bbox_in_frame(part_bbox, work_axes, signs=(1, 1, 1)):
+    spans = {
+        "x": float(part_bbox.get("length_mm") or 0.0),
+        "y": float(part_bbox.get("width_mm") or 0.0),
+        "z": float(part_bbox.get("height_mm") or 0.0),
+    }
+    framed = {}
+    for target_axis, source_axis, sign in zip(("x", "y", "z"), work_axes, signs):
+        framed[{"x": "length_mm", "y": "width_mm", "z": "height_mm"}[target_axis]] = (
+            spans[source_axis]
+        )
+        source_range = part_bbox.get(
+            f"{source_axis}_range",
+            (0.0, spans[source_axis]),
+        )
+        framed[f"{target_axis}_range"] = (
+            source_range
+            if sign >= 0
+            else (-source_range[1], -source_range[0])
+        )
+    return framed
+
+
+def _frame_score(candidates):
+    """Prefer frames that explain more exact machinable geometry."""
+    score = 0
+    for candidate in candidates:
+        feature_type = candidate.get("feature_type")
+        weight = _FRAME_FEATURE_WEIGHTS.get(feature_type, 0)
+        confidence = str(candidate.get("confidence") or "").lower()
+        if confidence == "high":
+            weight += 2
+        elif confidence == "low":
+            weight = max(weight - 2, 0)
+        score += weight * max(int(candidate.get("quantity") or 1), 1)
+    return score
+
+
+def _frame_top_score(candidates):
+    return sum(
+        _FRAME_FEATURE_WEIGHTS.get(candidate.get("feature_type"), 0)
+        * max(int(candidate.get("quantity") or 1), 1)
+        for candidate in candidates
+        if candidate.get("setup_label") == "Top"
+    )
+
+
+def _cad_setup_from_frame_setup(setup_label, work_axes, signs):
+    frame_vectors = {
+        "Right": (1.0, 0.0, 0.0),
+        "Left": (-1.0, 0.0, 0.0),
+        "Back": (0.0, 1.0, 0.0),
+        "Front": (0.0, -1.0, 0.0),
+        "Top": (0.0, 0.0, 1.0),
+        "Bottom": (0.0, 0.0, -1.0),
+    }
+    vector = frame_vectors.get(setup_label)
+    if vector is None:
+        return setup_label
+    cad = {"x": 0.0, "y": 0.0, "z": 0.0}
+    for component, source_axis, sign in zip(vector, work_axes, signs):
+        cad[source_axis] = component * sign
+    return _setup_label_from_normal(cad["x"], cad["y"], cad["z"])
+
+
+def _restore_candidate_cad_frame(
+    candidate,
+    raw_records_by_index,
+    work_axes,
+    signs,
+):
+    """Keep frame-derived dimensions while restoring raw CAD positions/setups."""
+    restored = dict(candidate)
+    source_records = [
+        raw_records_by_index[index]
+        for index in restored.get("face_indices", [])
+        if index in raw_records_by_index
+    ]
+    if source_records:
+        frame_position = (
+            float(restored.get("x_pos") or 0.0),
+            float(restored.get("y_pos") or 0.0),
+            sum(
+                signs[2] * float(
+                    record.get(f"center_{work_axes[2]}") or 0.0
+                )
+                for record in source_records
+            ) / len(source_records),
+        )
+        cad_position = {"x": 0.0, "y": 0.0, "z": 0.0}
+        for value, source_axis, sign in zip(
+            frame_position,
+            work_axes,
+            signs,
+        ):
+            cad_position[source_axis] = sign * value
+        cad_position = {
+            axis: round(cad_position[axis], 6)
+            for axis in ("x", "y", "z")
+        }
+        restored["cad_position"] = cad_position
+        restored["x_pos"] = cad_position["x"]
+        restored["y_pos"] = cad_position["y"]
+
+    frame_setup = restored.get("setup_label")
+    restored["detection_frame_setup_label"] = frame_setup
+    restored["setup_label"] = _cad_setup_from_frame_setup(
+        frame_setup,
+        work_axes,
+        signs,
+    )
+    restored["detection_frame"] = {
+        "work_axes_from_cad": list(work_axes),
+        "axis_signs": list(signs),
+        "selection": "highest weighted exact-feature score",
+    }
+    note = restored.get("detection_note") or ""
+    if work_axes != ("x", "y", "z") or signs != (1, 1, 1):
+        restored["detection_note"] = (
+            f"{note} Detected in axis frame X/Y/Z <- "
+            f"{signs[0]:+d}{work_axes[0].upper()}/"
+            f"{signs[1]:+d}{work_axes[1].upper()}/"
+            f"{signs[2]:+d}{work_axes[2].upper()}."
+        ).strip()
+    return restored
+
+
+def _classify_face_records(face_records: list, part_bbox: dict) -> list:
+    """Classify in the strongest axis-aligned machining frame.
+
+    STEP exporters do not consistently use CAD Z as the VMC tool axis. Running
+    the same deterministic classifier in every axis permutation prevents holes,
+    slots, and pockets from changing type merely because the model was exported
+    Y-up or X-up.
+    """
+    raw_records_by_index = {
+        record.get("face_index"): record
+        for record in face_records
+        if record.get("face_index") is not None
+    }
+    frame_results = []
+    for work_axes in permutations(("x", "y", "z")):
+        for signs in product((-1, 1), repeat=3):
+            framed_records = [
+                _record_in_frame(record, work_axes, signs)
+                for record in face_records
+            ]
+            framed_bbox = _bbox_in_frame(part_bbox, work_axes, signs)
+            candidates = _classify_face_records_in_frame(
+                framed_records,
+                framed_bbox,
+            )
+            frame_results.append((
+                _frame_score(candidates),
+                work_axes == ("x", "y", "z") and signs == (1, 1, 1),
+                work_axes,
+                signs,
+                candidates,
+            ))
+
+    best_by_axes = {}
+    for result in frame_results:
+        axes = result[2]
+        current = best_by_axes.get(axes)
+        result_key = (
+            result[0],
+            _frame_top_score(result[4]),
+            result[1],
+        )
+        current_key = (
+            current[0],
+            _frame_top_score(current[4]),
+            current[1],
+        ) if current else None
+        if current is None or result_key > current_key:
+            best_by_axes[axes] = result
+
+    identity_result = next(
+        result for result in frame_results
+        if result[2] == ("x", "y", "z") and result[3] == (1, 1, 1)
+    )
+    best_result = max(
+        best_by_axes.values(),
+        key=lambda result: (
+            result[0],
+            _frame_top_score(result[4]),
+            result[1],
+        ),
+    )
+    # Keep the source frame unless another frame is materially better. This
+    # prevents symmetric slot walls from winning merely by being misread as a
+    # slightly larger number of circular bores in a sideways frame.
+    identity_score = identity_result[0]
+    best_score = best_result[0]
+    if (
+        not best_result[1]
+        and best_score > identity_score
+        and (identity_score == 0 or best_score >= identity_score * 1.20)
+    ):
+        selected_result = best_result
+    else:
+        selected_result = identity_result
+    def _restore_set(result):
+        _, _, axes, signs, candidates = result
+        restored_candidates = [
+            _restore_candidate_cad_frame(
+                candidate,
+                raw_records_by_index,
+                axes,
+                signs,
+            )
+            for candidate in candidates
+        ]
+        for restored_candidate in restored_candidates:
+            alternatives = restored_candidate.get(
+                "orientation_face_candidates",
+                [],
+            )
+            restored_candidate["orientation_face_candidates"] = [
+                _restore_candidate_cad_frame(
+                    alternative,
+                    raw_records_by_index,
+                    axes,
+                    signs,
+                )
+                for alternative in alternatives
+            ]
+        return restored_candidates
+
+    restored = _restore_set(selected_result)
+    if restored:
+        restored[0]["detection_candidate_sets"] = [
+            {
+                "work_axes_from_cad": list(result[2]),
+                "axis_signs": list(result[3]),
+                "score": result[0],
+                "top_score": _frame_top_score(result[4]),
+                "candidates": _restore_set(result),
+            }
+            for result in best_by_axes.values()
+        ]
+    return restored
+
+
 def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
     """
     Load a STEP file with CadQuery and return preliminary machinable feature
@@ -1911,6 +2291,8 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                 "warnings": [f"File not found: {file_path}"],
             }
 
+        with open(file_path, "rb") as source_file:
+            source_file_hash = hashlib.sha256(source_file.read()).hexdigest()
         cq_result = _cq.importers.importStep(file_path)
 
         bb = cq_result.val().BoundingBox()
@@ -1953,27 +2335,45 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
             _mesh_targets = list(candidates)
             for _candidate in candidates:
                 _mesh_targets.extend(_candidate.get("orientation_face_candidates", []))
+            _catalog_targets = list(_mesh_targets)
+            if candidates:
+                for _candidate_set in candidates[0].get("detection_candidate_sets", []):
+                    for _candidate in _candidate_set.get("candidates", []):
+                        _catalog_targets.append(_candidate)
+                        _catalog_targets.extend(
+                            _candidate.get("orientation_face_candidates", [])
+                        )
+            _face_mesh_catalog = {}
+            for _fi in {
+                face_index
+                for _candidate in _catalog_targets
+                if _candidate.get("feature_type") in _FACE_COLOR_TYPES
+                for face_index in _candidate.get("face_indices", [])
+                if 0 <= face_index < _n_faces
+            }:
+                try:
+                    _fverts, _ftris = _faces_list[_fi].tessellate(0.15)
+                    if _fverts:
+                        _face_mesh_catalog[_fi] = {
+                            "vertices": [[_v.x, _v.y, _v.z] for _v in _fverts],
+                            "triangles": [[_t[0], _t[1], _t[2]] for _t in _ftris],
+                            "face_index": _fi,
+                        }
+                except Exception:
+                    pass
             for _cand in _mesh_targets:
                 _ftype = _cand.get("feature_type", "")
                 _fidxs = _cand.get("face_indices", [])
                 if _ftype not in _FACE_COLOR_TYPES or not _fidxs:
                     _cand["face_mesh_data"] = []
                     continue
-                _face_meshes = []
-                for _fi in _fidxs:
-                    if _fi < 0 or _fi >= _n_faces:
-                        continue
-                    try:
-                        _fverts, _ftris = _faces_list[_fi].tessellate(0.15)
-                        if _fverts:
-                            _face_meshes.append({
-                                "vertices":   [[_v.x, _v.y, _v.z] for _v in _fverts],
-                                "triangles":  [[_t[0], _t[1], _t[2]] for _t in _ftris],
-                                "face_index": _fi,
-                            })
-                    except Exception:
-                        pass  # single face tessellation failure is non-fatal
-                _cand["face_mesh_data"] = _face_meshes
+                _cand["face_mesh_data"] = [
+                    _face_mesh_catalog[_fi]
+                    for _fi in _fidxs
+                    if _fi in _face_mesh_catalog
+                ]
+            if candidates:
+                candidates[0]["face_mesh_catalog"] = _face_mesh_catalog
         except Exception as _tess_exc:
             warnings_out.append(
                 f"Per-face tessellation skipped: {type(_tess_exc).__name__}: {_tess_exc}"
@@ -1982,10 +2382,12 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                 if "face_mesh_data" not in _cand:
                     _cand["face_mesh_data"] = []
 
+        assign_stable_candidate_ids(candidates, source_file_hash)
         return {
             "success":            True,
             "candidate_features": candidates,
             "candidate_count":    len(candidates),
+            "source_file_hash":   source_file_hash,
             "warnings":           warnings_out,
         }
 
