@@ -138,7 +138,12 @@ def get_default_tools():
 
 
 def get_default_machines():
-    return load_json("default_machines.json")
+    from modules.machine_capability import normalize_machine_capabilities
+
+    return [
+        normalize_machine_capabilities(machine)
+        for machine in load_json("default_machines.json")
+    ]
 
 
 def init_db():

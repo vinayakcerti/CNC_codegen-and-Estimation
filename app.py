@@ -23,6 +23,7 @@ from modules.operation_planner import (
     plan_operations,
     secondary_setup_labels,
 )
+from modules.machine_capability import machine_feasibility_summary
 from modules.time_estimator import estimate_time
 from modules.gcode_generator import generate_gcode
 from modules.visual_preview import build_top_view, build_3d_view, build_step_mesh3d, FEATURE_COLORS
@@ -2209,6 +2210,9 @@ def page_setup_review():
             st.success(f"Machine: **{machine.get('machine_name', '—')}**")
             st.caption(
                 f"Type: {machine.get('machine_type','—')} · "
+                f"Axes: {machine.get('axis_count', 3)} · "
+                f"Indexed 3+2: {'Yes' if machine.get('indexed_3plus2') else 'No'} · "
+                f"Simultaneous 5-axis: {'Yes' if machine.get('simultaneous_5_axis') else 'No'} · "
                 f"Controller: {machine.get('controller','—')} · "
                 f"Max spindle: {machine.get('max_spindle_rpm','—')} RPM"
             )
@@ -2509,8 +2513,10 @@ def page_operation_plan():
         _machining_features,
         st.session_state.tools,
         st.session_state.selected_material,
+        st.session_state.selected_machine,
     )
     st.session_state.operations = operations
+    _machine_feasibility = machine_feasibility_summary(operations)
 
     mat  = st.session_state.selected_material
     mach = st.session_state.selected_machine
@@ -2521,6 +2527,18 @@ def page_operation_plan():
     if _excluded_count > 0:
         st.info(
             f"**{_excluded_count}** existing/reference feature(s) excluded from operation planning."
+        )
+    if _machine_feasibility["blocked"] > 0:
+        st.error(
+            f"**Planning blocked:** {_machine_feasibility['blocked']} operation(s) "
+            "cannot be verified on the selected machine. Resolve the machine "
+            "capability or feature-orientation warnings before release."
+        )
+    elif _machine_feasibility["requires_setup"] > 0:
+        st.warning(
+            f"**Additional workholding required:** "
+            f"{_machine_feasibility['requires_setup']} operation(s) need a manual "
+            "flip or re-fixture on the selected machine."
         )
 
     # ── Summary cards ─────────────────────────────────────────────────────────
@@ -2601,7 +2619,13 @@ def page_operation_plan():
     )
 
     st.divider()
-    st.success("Next: go to **7. Estimate / Pricing** to review machining time and quote.")
+    if _machine_feasibility["blocked"] > 0:
+        st.error(
+            "Operation planning requires manual engineering review before estimating "
+            "or exporting this job."
+        )
+    else:
+        st.success("Next: go to **7. Estimate / Pricing** to review machining time and quote.")
 
 
 def page_time_estimate():
@@ -2614,6 +2638,14 @@ def page_time_estimate():
 
     if "operations" not in st.session_state or not st.session_state.operations:
         st.warning("No operations planned. Please run **6. Strategy / Operations** first.")
+        return
+
+    _machine_feasibility = machine_feasibility_summary(st.session_state.operations)
+    if _machine_feasibility["blocked"] > 0:
+        st.error(
+            "Pricing is blocked because one or more operations require manual "
+            "engineering review. Resolve the operation-plan warnings first."
+        )
         return
 
     result = estimate_time(
@@ -2965,6 +2997,15 @@ def page_cnc_export():
 
     if "operations" not in st.session_state or not st.session_state.operations:
         st.warning("No operations available. Please run **6. Strategy / Operations** first.")
+        return
+
+    _machine_feasibility = machine_feasibility_summary(st.session_state.operations)
+    if _machine_feasibility["blocked"] > 0:
+        st.error(
+            "CNC export is blocked because one or more operations are unsupported "
+            "or have unresolved setup orientation. Resolve the operation-plan "
+            "warnings and regenerate the plan."
+        )
         return
 
     gcode = generate_gcode(
@@ -3870,6 +3911,12 @@ def page_part_setup():
                 st.success(f"Machine **{_ps_mach['machine_name']}** applied.")
             else:
                 st.session_state.selected_machine = _ps_mach
+            st.caption(
+                f"Capability: **{_ps_mach.get('axis_count', 3)}-axis** · "
+                f"Indexed 3+2: **{'Yes' if _ps_mach.get('indexed_3plus2') else 'No'}** · "
+                f"Simultaneous 5-axis: "
+                f"**{'Yes' if _ps_mach.get('simultaneous_5_axis') else 'No'}**"
+            )
 
         # ── Stock — editable expander ─────────────────────────────────────
         _l  = _stk.get("length", 150.0) or 150.0

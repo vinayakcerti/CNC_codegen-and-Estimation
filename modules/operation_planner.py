@@ -1,6 +1,7 @@
 import math
 import hashlib
 import json
+from modules.machine_capability import apply_machine_feasibility
 from modules.tool_selector import select_tool_for_operation, get_spindle_and_feed
 
 
@@ -39,6 +40,22 @@ OPERATION_RULES = {
         {"op": "Chamfer", "notes": "Chamfer top edges"},
     ],
 }
+
+_FEATURE_TYPE_ALIASES = {
+    "face milling": "Face Milling",
+    "large hole / boring": "Large Hole / Boring",
+    "large hole/boring": "Large Hole / Boring",
+    "slot / slot-like opening": "Slot",
+    "slot/slot-like opening": "Slot",
+    "edge milling": "Edge Milling",
+    "outer profile": "Outer Profile",
+}
+
+
+def normalize_feature_type(feature_type):
+    """Return the canonical feature label used by planning rules."""
+    label = str(feature_type or "Unknown").strip()
+    return _FEATURE_TYPE_ALIASES.get(label.casefold(), label)
 
 
 def estimate_path_length(feature, operation_type, tool=None):
@@ -373,15 +390,29 @@ def _feature_sort_key(feature):
     )
 
 
-def plan_operations(features, tools, material):
+def plan_operations(features, tools, material, machine=None):
     """Generate operation plan from features."""
     operations = []
     seen_operations = set()
     op_num = 1
 
-    for feature in sorted(features, key=_feature_sort_key):
+    normalized_features = []
+    for feature in features:
+        normalized = dict(feature)
+        normalized["feature_type"] = normalize_feature_type(
+            normalized.get("feature_type")
+        )
+        normalized_features.append(normalized)
+
+    for feature in sorted(normalized_features, key=_feature_sort_key):
         ftype = feature["feature_type"]
-        rules = OPERATION_RULES.get(ftype, [{"op": "End Mill", "notes": "General machining"}])
+        rules = OPERATION_RULES.get(
+            ftype,
+            [{
+                "op": "Manual Review",
+                "notes": "Unsupported feature requires manual process planning",
+            }],
+        )
 
         for rule in rules:
             op_type = rule["op"]
@@ -390,10 +421,19 @@ def plan_operations(features, tools, material):
             if op_sig in seen_operations:
                 continue
             seen_operations.add(op_sig)
-            tool = select_tool_for_operation(op_type, feature, tools)
-            spindle, feed = get_spindle_and_feed(tool, material)
-            path_len = estimate_path_length(feature, op_type, tool)
-            tool_warning = _tool_capability_warning(op_type, feature, tool)
+            if op_type == "Manual Review":
+                tool = {
+                    "tool_name": "UNRESOLVED",
+                    "tool_number": 0,
+                    "diameter_mm": 0.0,
+                }
+                spindle, feed, path_len = 0, 0, 0.0
+                tool_warning = "WARNING: no validated operation/tool rule exists."
+            else:
+                tool = select_tool_for_operation(op_type, feature, tools)
+                spindle, feed = get_spindle_and_feed(tool, material)
+                path_len = estimate_path_length(feature, op_type, tool)
+                tool_warning = _tool_capability_warning(op_type, feature, tool)
 
             _fname_lower = feature.get("feature_name", "").lower()
             _is_through_pocket = (
@@ -428,6 +468,9 @@ def plan_operations(features, tools, material):
                 "feature_name": op_feature_name,
                 "feature_type": ftype,
                 "setup_label": feature.get("setup_label", "Unknown"),
+                "requires_simultaneous_5_axis": bool(
+                    feature.get("requires_simultaneous_5_axis", False)
+                ),
                 "operation_type": op_type,
                 "tool_name": tool["tool_name"],
                 "tool_number": tool["tool_number"],
@@ -451,5 +494,8 @@ def plan_operations(features, tools, material):
     operations.sort(key=_sequence_key)
     for i, op in enumerate(operations, start=1):
         op["op_num"] = i
+
+    if machine is not None:
+        operations = apply_machine_feasibility(operations, machine)
 
     return operations

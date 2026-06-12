@@ -54,6 +54,11 @@ def _candidate_to_feature(candidate, priority):
         "source_candidate_id": candidate.get("candidate_id", ""),
         "physical_feature_id": candidate.get("physical_feature_id", ""),
         "source_file_hash": candidate.get("source_file_hash", ""),
+        "setup_label": (
+            candidate.get("work_setup_label")
+            or candidate.get("setup_label")
+            or "Top"
+        ),
     }
 
 
@@ -104,9 +109,11 @@ def main():
                 _candidate_to_feature(candidate, priority=i + 1)
                 for i, candidate in enumerate(candidates)
             ]
-            operations = plan_operations(features, tools, material)
+            operations = plan_operations(features, tools, material, machine)
             if not operations:
                 raise RuntimeError("operation planner returned no operations")
+            if any(op.get("planning_blocked") for op in operations):
+                raise RuntimeError("machine feasibility blocked a detected milling operation")
             if any(not op.get("operation_id") for op in operations):
                 raise RuntimeError("operation traceability ID missing")
             if any(not op.get("physical_feature_id") for op in operations):

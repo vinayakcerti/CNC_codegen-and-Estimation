@@ -47,6 +47,11 @@
   including unequal top/bottom facing and side-cleanup depths.
 - Added blocking validation for undersized stock and offsets that place the part
   outside the stock envelope; invalid stock no longer creates derived work.
+- Added explicit machine-axis capability profiles and setup-accessibility
+  assessment for direct 3-axis, indexed 3+2, manual re-fixture, part-flip, and
+  simultaneous 5-axis requirements.
+- Unknown feature types now create blocked manual-review operations instead of
+  silently receiving a generic end-mill plan.
 
 ## 2026-06-10 - V2 Feature Review Validation
 
