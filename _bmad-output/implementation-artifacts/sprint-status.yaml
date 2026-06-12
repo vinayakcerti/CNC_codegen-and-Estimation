@@ -46,7 +46,7 @@ development_status:
   13-4-existing-part-rework-mode: backlog
   epic-13-retrospective: optional
 
-  epic-14: in-progress
+  epic-14: done
   14-1-stable-physical-feature-ids: done
   14-2-idempotent-acceptance-and-grouping: done
   14-3-idempotent-operation-generation: done
@@ -58,7 +58,7 @@ development_status:
   15-3-tool-and-holder-feasibility: backlog
   epic-15-retrospective: optional
 
-  epic-16: in-progress
+  epic-16: done
   16-1-operation-traceability: done
   16-2-estimate-integrity: done
   16-3-export-contract-tests: done
