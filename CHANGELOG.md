@@ -34,6 +34,9 @@
   repeated planning does not duplicate work or suppress distinct features.
 - Carried operation and physical-feature IDs into operation CSV and setup-sheet
   exports, with a round-trip export contract regression and smoke-test checks.
+- Made time estimates consume unique planned operations and physical-feature
+  positions, preventing duplicate rows or excluded/reference geometry from
+  inflating time, effort, operation counts, or tool-change counts.
 
 ## 2026-06-10 - V2 Feature Review Validation
 
