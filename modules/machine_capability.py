@@ -102,6 +102,7 @@ def apply_machine_feasibility(operations, machine):
     assessed = []
     for operation in operations or []:
         operation = dict(operation)
+        existing_blocked = bool(operation.get("planning_blocked"))
         access = assess_setup_access(
             capability,
             operation.get("setup_label"),
@@ -122,7 +123,7 @@ def apply_machine_feasibility(operations, machine):
         operation["machine_simultaneous_5_axis"] = capability["simultaneous_5_axis"]
         operation["accessibility_status"] = access["status"]
         operation["setup_method"] = access["method"]
-        operation["planning_blocked"] = access["blocked"]
+        operation["planning_blocked"] = existing_blocked or access["blocked"]
         operation["capability_warning"] = access["warning"]
         if access["warning"]:
             notes = str(operation.get("notes") or "")

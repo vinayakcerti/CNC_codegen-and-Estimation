@@ -1,3 +1,6 @@
+from modules.tool_feasibility import normalize_tool_profile
+
+
 def select_tool_for_operation(operation_type, feature, tools):
     """Select the best tool from the library for a given operation type."""
     tool_type_map = {
@@ -19,7 +22,7 @@ def select_tool_for_operation(operation_type, feature, tools):
     candidates = [t for t in tools if t["tool_type"] in preferred_types]
 
     if not candidates:
-        candidates = tools
+        return None
 
     # Drill: exact or closest diameter match to the feature's bore/hole diameter.
     if operation_type == "Drill" and diameter > 0:
@@ -32,21 +35,22 @@ def select_tool_for_operation(operation_type, feature, tools):
     # provides clearance, so it must NOT be matched to the final bore diameter.
     # Always pick the smallest available drill regardless of feature diameter.
     if operation_type == "Pilot Drill":
-        return min(candidates, key=lambda t: t["diameter_mm"])
+        suitable = [
+            tool
+            for tool in candidates
+            if normalize_tool_profile(tool).get("flute_length_mm", 0) >= depth
+        ]
+        return min(suitable or candidates, key=lambda t: t["diameter_mm"])
 
     if operation_type in ("Rough End Mill", "Finish End Mill", "End Mill"):
-        # max_depth_mm is a soft preference, not a hard capability gate.
-        # A tool that exceeds the feature depth in a single pass is ideal, but
-        # any end mill can reach greater depths if programmed in multiple passes.
-        # Prefer tools that cover depth in one pass; fall back to largest diameter.
-        max_dep = lambda t: t.get("max_depth_mm") or 0
-        suitable = [t for t in candidates if max_dep(t) >= depth or depth == 0]
-        pool = suitable if suitable else candidates   # fall back to full set
+        reach = lambda t: normalize_tool_profile(t).get("flute_length_mm", 0)
+        suitable = [t for t in candidates if reach(t) >= depth or depth == 0]
+        pool = suitable if suitable else candidates
         if operation_type == "Finish End Mill":
             return min(pool, key=lambda t: t["diameter_mm"])
         return max(pool, key=lambda t: t["diameter_mm"])
 
-    return candidates[0] if candidates else tools[0]
+    return candidates[0] if candidates else None
 
 
 def get_spindle_and_feed(tool, material):

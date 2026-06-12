@@ -52,10 +52,10 @@ development_status:
   14-3-idempotent-operation-generation: done
   epic-14-retrospective: optional
 
-  epic-15: in-progress
+  epic-15: done
   15-1-machine-capability-model: done
   15-2-accessibility-and-setup-assignment: done
-  15-3-tool-and-holder-feasibility: backlog
+  15-3-tool-and-holder-feasibility: done
   epic-15-retrospective: optional
 
   epic-16: done

@@ -88,5 +88,14 @@
     "default_spindle_rpm": 1500,
     "default_feed_rate_mm_min": 300,
     "max_depth_mm": 5.0
+  },
+  {
+    "tool_number": 11,
+    "tool_name": "Drill 8mm",
+    "tool_type": "Drill",
+    "diameter_mm": 8.0,
+    "default_spindle_rpm": 1500,
+    "default_feed_rate_mm_min": 165,
+    "max_depth_mm": 40.0
   }
 ]

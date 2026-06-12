@@ -2,6 +2,7 @@ import math
 import hashlib
 import json
 from modules.machine_capability import apply_machine_feasibility
+from modules.tool_feasibility import assess_tool_feasibility, normalize_tool_profile
 from modules.tool_selector import select_tool_for_operation, get_spindle_and_feed
 
 
@@ -429,11 +430,30 @@ def plan_operations(features, tools, material, machine=None):
                 }
                 spindle, feed, path_len = 0, 0, 0.0
                 tool_warning = "WARNING: no validated operation/tool rule exists."
+                tool_assessment = {
+                    "status": "blocked",
+                    "blocked": True,
+                    "warning": tool_warning,
+                }
             else:
                 tool = select_tool_for_operation(op_type, feature, tools)
-                spindle, feed = get_spindle_and_feed(tool, material)
-                path_len = estimate_path_length(feature, op_type, tool)
-                tool_warning = _tool_capability_warning(op_type, feature, tool)
+                if tool:
+                    tool = normalize_tool_profile(tool)
+                    spindle, feed = get_spindle_and_feed(tool, material)
+                    path_len = estimate_path_length(feature, op_type, tool)
+                else:
+                    spindle, feed, path_len = 0, 0, 0.0
+                tool_assessment = assess_tool_feasibility(
+                    op_type,
+                    feature,
+                    tool,
+                    machine,
+                    requested_spindle_rpm=spindle,
+                    requested_feed_rate_mm_min=feed,
+                )
+                spindle = tool_assessment["spindle_rpm"]
+                feed = tool_assessment["feed_rate_mm_min"]
+                tool_warning = tool_assessment["warning"]
 
             _fname_lower = feature.get("feature_name", "").lower()
             _is_through_pocket = (
@@ -472,12 +492,14 @@ def plan_operations(features, tools, material, machine=None):
                     feature.get("requires_simultaneous_5_axis", False)
                 ),
                 "operation_type": op_type,
-                "tool_name": tool["tool_name"],
-                "tool_number": tool["tool_number"],
+                "tool_name": tool["tool_name"] if tool else "UNRESOLVED",
+                "tool_number": tool["tool_number"] if tool else 0,
                 "spindle_rpm": spindle,
                 "feed_rate_mm_min": feed,
                 "est_path_length_mm": round(path_len, 1),
                 "tool_warning": tool_warning,
+                "tool_feasibility_status": tool_assessment["status"],
+                "planning_blocked": bool(tool_assessment["blocked"]),
                 "notes": note,
                 # Carry feature geometry for G-code generation
                 "_x_pos": float(feature.get("x_pos", 0) or 0),

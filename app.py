@@ -1555,8 +1555,12 @@ def page_tool_library():
         st.subheader("Tool Details / Editor")
 
         df = pd.DataFrame(tools)
-        cols_order = ["tool_number", "tool_name", "tool_type", "diameter_mm",
-                      "default_spindle_rpm", "default_feed_rate_mm_min", "max_depth_mm"]
+        cols_order = [
+            "tool_number", "tool_name", "tool_type", "diameter_mm",
+            "default_spindle_rpm", "default_feed_rate_mm_min", "max_depth_mm",
+            "flute_length_mm", "overall_length_mm", "holder_diameter_mm",
+            "min_bore_mm", "max_bore_mm",
+        ]
         df = df[cols_order]
 
         edited_df = st.data_editor(
@@ -1571,6 +1575,11 @@ def page_tool_library():
                 "default_spindle_rpm":      st.column_config.NumberColumn("RPM"),
                 "default_feed_rate_mm_min": st.column_config.NumberColumn("Feed (mm/min)"),
                 "max_depth_mm":             st.column_config.NumberColumn("Max Depth (mm)", format="%.1f"),
+                "flute_length_mm":           st.column_config.NumberColumn("Flute L (mm)", format="%.1f"),
+                "overall_length_mm":         st.column_config.NumberColumn("Overall L (mm)", format="%.1f"),
+                "holder_diameter_mm":        st.column_config.NumberColumn("Holder Dia (mm)", format="%.1f"),
+                "min_bore_mm":               st.column_config.NumberColumn("Min Bore (mm)", format="%.1f"),
+                "max_bore_mm":               st.column_config.NumberColumn("Max Bore (mm)", format="%.1f"),
             },
         )
 

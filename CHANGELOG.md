@@ -52,6 +52,9 @@
   simultaneous 5-axis requirements.
 - Unknown feature types now create blocked manual-review operations instead of
   silently receiving a generic end-mill plan.
+- Added tool and holder feasibility checks for missing tool types, cutting
+  reach, flute length, feature opening, bore range, holder clearance, and
+  machine spindle/feed limits.
 
 ## 2026-06-10 - V2 Feature Review Validation
 

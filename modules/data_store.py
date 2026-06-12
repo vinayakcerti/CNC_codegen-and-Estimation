@@ -134,7 +134,9 @@ def get_default_materials():
 
 
 def get_default_tools():
-    return load_json("default_tools.json")
+    from modules.tool_feasibility import normalize_tool_profile
+
+    return [normalize_tool_profile(tool) for tool in load_json("default_tools.json")]
 
 
 def get_default_machines():
@@ -163,6 +165,16 @@ def init_db():
                     max_depth_mm REAL
                 )
             """)
+            _tool_cols = {row[1] for row in c.execute("PRAGMA table_info(tools)").fetchall()}
+            for column in (
+                "flute_length_mm",
+                "overall_length_mm",
+                "holder_diameter_mm",
+                "min_bore_mm",
+                "max_bore_mm",
+            ):
+                if column not in _tool_cols:
+                    c.execute(f"ALTER TABLE tools ADD COLUMN {column} REAL DEFAULT 0")
             c.execute("""
                 CREATE TABLE IF NOT EXISTS features (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -210,10 +222,15 @@ def save_tools_to_db(tools):
             for t in tools:
                 c.execute("""
                     INSERT INTO tools (tool_number, tool_name, tool_type, diameter_mm,
-                        default_spindle_rpm, default_feed_rate_mm_min, max_depth_mm)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                        default_spindle_rpm, default_feed_rate_mm_min, max_depth_mm,
+                        flute_length_mm, overall_length_mm, holder_diameter_mm,
+                        min_bore_mm, max_bore_mm)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (t["tool_number"], t["tool_name"], t["tool_type"], t["diameter_mm"],
-                      t["default_spindle_rpm"], t["default_feed_rate_mm_min"], t["max_depth_mm"]))
+                      t["default_spindle_rpm"], t["default_feed_rate_mm_min"], t["max_depth_mm"],
+                      t.get("flute_length_mm", 0), t.get("overall_length_mm", 0),
+                      t.get("holder_diameter_mm", 0), t.get("min_bore_mm", 0),
+                      t.get("max_bore_mm", 0)))
         _mark_db_available()
     except DB_ERRORS as exc:
         _log_db_error("tool save", exc)
@@ -229,7 +246,9 @@ def load_tools_from_db():
         return []
     if df.empty:
         return []
-    return df.to_dict("records")
+    from modules.tool_feasibility import normalize_tool_profile
+
+    return [normalize_tool_profile(tool) for tool in df.to_dict("records")]
 
 
 def save_features_to_db(features):
