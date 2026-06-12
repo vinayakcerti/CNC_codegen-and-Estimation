@@ -110,14 +110,59 @@ def _hydrate_face_meshes(candidate, mesh_catalog):
     ]
 
 
+def analyze_rectangular_stock(stock, work_spans, tolerance=0.01):
+    """Validate rectangular stock and return explicit per-side allowances."""
+    stock = stock or {}
+    dimensions = (
+        ("X", _num(stock.get("length")), _num(work_spans[0]), _num(stock.get("part_offset_x"))),
+        ("Y", _num(stock.get("width")), _num(work_spans[1]), _num(stock.get("part_offset_y"))),
+        ("Z", _num(stock.get("height")), _num(work_spans[2]), _num(stock.get("part_offset_z"))),
+    )
+    allowances = {}
+    errors = []
+    for axis, stock_size, part_size, offset in dimensions:
+        total = stock_size - part_size
+        if stock_size <= 0 or part_size <= 0:
+            errors.append(f"{axis}: stock and part dimensions must be positive.")
+            continue
+        if total < -tolerance:
+            errors.append(
+                f"{axis}: stock {stock_size:.3f} mm is smaller than "
+                f"part {part_size:.3f} mm."
+            )
+            continue
+        total = max(total, 0.0)
+        minus = (total / 2.0) + offset
+        plus = (total / 2.0) - offset
+        if minus < -tolerance or plus < -tolerance:
+            errors.append(
+                f"{axis}: part offset {offset:.3f} mm places the part "
+                "outside the stock envelope."
+            )
+            continue
+        allowances[f"{axis.lower()}_minus"] = max(minus, 0.0)
+        allowances[f"{axis.lower()}_plus"] = max(plus, 0.0)
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "allowances": allowances,
+        "part_offsets": {
+            "x": _num(stock.get("part_offset_x")),
+            "y": _num(stock.get("part_offset_y")),
+            "z": _num(stock.get("part_offset_z")),
+        },
+    }
+
+
 def apply_stock_allowance_to_candidates(
     candidates,
     stock,
     part_dims,
     include_edge_milling=True,
+    apply_raw_stock_allowance=True,
     tolerance=0.01,
 ):
-    """Return CAD candidates adjusted for configured raw stock allowance."""
+    """Return oriented candidates, optionally with rectangular billet allowance."""
     stock = stock or {}
     part_dims = part_dims or {}
     source_part_dims = dict(part_dims)
@@ -183,58 +228,79 @@ def apply_stock_allowance_to_candidates(
     stock_l = _num(stock.get("length"))
     stock_w = _num(stock.get("width"))
     stock_h = _num(stock.get("height"))
-    z_allow = max((stock_h - part_h) / 2, 0.0) if stock_h and part_h else 0.0
-    y_allow = max((stock_w - part_w) / 2, 0.0) if stock_w and part_w else 0.0
-    for cand in adjusted:
-        ftype_lower = str(cand.get("feature_type") or "").lower()
-        if _is_face_milling(cand):
-            cand["length"] = round(stock_l or part_l, 3)
-            cand["width"] = round(stock_w or part_w, 3)
-            if z_allow > tolerance:
-                cand["feature_type"] = "Face Milling"
-                cand["depth"] = round(z_allow, 3)
-                note = cand.get("detection_note") or ""
-                stock_note = (
-                    f"Depth adjusted from configured stock height: "
-                    f"({stock_h:.1f} - {part_h:.1f}) / 2 = {z_allow:.3f} mm."
+    stock_analysis = analyze_rectangular_stock(
+        stock,
+        work_transform.work_spans,
+        tolerance,
+    )
+    allowances = stock_analysis["allowances"]
+    x_minus = allowances.get("x_minus", 0.0)
+    x_plus = allowances.get("x_plus", 0.0)
+    y_minus = allowances.get("y_minus", 0.0)
+    y_plus = allowances.get("y_plus", 0.0)
+    z_minus = allowances.get("z_minus", 0.0)
+    z_plus = allowances.get("z_plus", 0.0)
+    if apply_raw_stock_allowance:
+        if not stock_analysis["valid"]:
+            return [
+                attach_work_coordinates(candidate, work_transform)
+                for candidate in adjusted
+            ]
+        for cand in adjusted:
+            ftype_lower = str(cand.get("feature_type") or "").lower()
+            if _is_face_milling(cand):
+                cand["length"] = round(stock_l or part_l, 3)
+                cand["width"] = round(stock_w or part_w, 3)
+                work_setup = (
+                    cand.get("work_setup_label")
+                    or attach_work_coordinates(cand, work_transform).get("work_setup_label")
                 )
-                cand["detection_note"] = f"{note} {stock_note}".strip()
-        elif ftype_lower == "step":
-            width = _num(cand.get("width"))
-            if (
-                y_allow > tolerance
-                and part_w > part_h + tolerance
-                and abs(width - part_h) <= tolerance
-            ):
-                cand["width"] = round(part_w, 3)
-                length = _num(cand.get("length"))
-                depth = _num(cand.get("depth"))
-                if length > 0 and depth > 0:
-                    cand["feature_name"] = (
-                        f"Step shoulder {length:.1f}x{part_w:.1f} "
-                        f"depth {depth:.1f} mm"
+                face_allowance = z_plus if work_setup == "Top" else z_minus
+                if face_allowance > tolerance:
+                    cand["feature_type"] = "Face Milling"
+                    cand["depth"] = round(face_allowance, 3)
+                    note = cand.get("detection_note") or ""
+                    stock_note = (
+                        f"Depth adjusted from configured stock placement: "
+                        f"{work_setup} allowance = {face_allowance:.3f} mm."
                     )
-                note = cand.get("detection_note") or ""
-                orient_note = (
-                    "Width adjusted from the oriented work envelope for "
-                    "stock-facing step planning."
-                )
-                cand["detection_note"] = f"{note} {orient_note}".strip()
+                    cand["detection_note"] = f"{note} {stock_note}".strip()
+            elif ftype_lower == "step":
+                width = _num(cand.get("width"))
+                if (
+                    max(y_minus, y_plus) > tolerance
+                    and part_w > part_h + tolerance
+                    and abs(width - part_h) <= tolerance
+                ):
+                    cand["width"] = round(part_w, 3)
+                    length = _num(cand.get("length"))
+                    depth = _num(cand.get("depth"))
+                    if length > 0 and depth > 0:
+                        cand["feature_name"] = (
+                            f"Step shoulder {length:.1f}x{part_w:.1f} "
+                            f"depth {depth:.1f} mm"
+                        )
+                    note = cand.get("detection_note") or ""
+                    orient_note = (
+                        "Width adjusted from the oriented work envelope for "
+                        "stock-facing step planning."
+                    )
+                    cand["detection_note"] = f"{note} {orient_note}".strip()
 
-    if not include_edge_milling:
+    if not apply_raw_stock_allowance or not include_edge_milling:
         return [
             attach_work_coordinates(candidate, work_transform)
             for candidate in adjusted
         ]
 
-    x_allow = max((stock_l - part_l) / 2, 0.0) if stock_l and part_l else 0.0
-
     edge_candidates = []
-    if x_allow > tolerance and part_w > 0 and part_h > 0:
-        for side, work_x, work_normal in (
-            ("X-", 0.0, (-1.0, 0.0, 0.0)),
-            ("X+", part_l, (1.0, 0.0, 0.0)),
+    if part_w > 0 and part_h > 0:
+        for side, work_x, work_normal, side_allowance in (
+            ("X-", 0.0, (-1.0, 0.0, 0.0), x_minus),
+            ("X+", part_l, (1.0, 0.0, 0.0), x_plus),
         ):
+            if side_allowance <= tolerance:
+                continue
             raw_position = work_transform.inverse_point(
                 work_x,
                 part_w / 2,
@@ -252,7 +318,7 @@ def apply_stock_allowance_to_candidates(
                 "diameter": None,
                 "length": round(part_w, 3),
                 "width": round(part_h, 3),
-                "depth": round(x_allow, 3),
+                "depth": round(side_allowance, 3),
                 "tolerance_note": "",
                 "priority": 1,
                 "confidence": "derived",
@@ -271,15 +337,17 @@ def apply_stock_allowance_to_candidates(
                 ),
                 "detection_note": (
                     f"Derived from configured stock length: "
-                    f"({stock_l:.1f} - {part_l:.1f}) / 2 = {x_allow:.3f} mm per side."
+                    f"{side} allowance = {side_allowance:.3f} mm."
                 ),
             })
 
-    if y_allow > tolerance and part_l > 0 and part_h > 0:
-        for side, work_y, work_normal in (
-            ("Y-", 0.0, (0.0, -1.0, 0.0)),
-            ("Y+", part_w, (0.0, 1.0, 0.0)),
+    if part_l > 0 and part_h > 0:
+        for side, work_y, work_normal, side_allowance in (
+            ("Y-", 0.0, (0.0, -1.0, 0.0), y_minus),
+            ("Y+", part_w, (0.0, 1.0, 0.0), y_plus),
         ):
+            if side_allowance <= tolerance:
+                continue
             raw_position = work_transform.inverse_point(
                 part_l / 2,
                 work_y,
@@ -297,7 +365,7 @@ def apply_stock_allowance_to_candidates(
                 "diameter": None,
                 "length": round(part_l, 3),
                 "width": round(part_h, 3),
-                "depth": round(y_allow, 3),
+                "depth": round(side_allowance, 3),
                 "tolerance_note": "",
                 "priority": 1,
                 "confidence": "derived",
@@ -316,7 +384,7 @@ def apply_stock_allowance_to_candidates(
                 ),
                 "detection_note": (
                     f"Derived from configured stock width: "
-                    f"({stock_w:.1f} - {part_w:.1f}) / 2 = {y_allow:.3f} mm per side."
+                    f"{side} allowance = {side_allowance:.3f} mm."
                 ),
             })
 

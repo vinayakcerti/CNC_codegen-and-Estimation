@@ -14,7 +14,10 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from modules.step_parser import detect_feature_candidates_from_cadquery_file, parse_step_auto, parse_step_bounding_box
-from modules.stock_allowance import apply_stock_allowance_to_candidates
+from modules.stock_allowance import (
+    analyze_rectangular_stock,
+    apply_stock_allowance_to_candidates,
+)
 
 
 SAMPLES = [
@@ -129,6 +132,84 @@ def _run_helper_edges():
     edge_count = sum(1 for c in x_only if c.get("feature_type") == "Edge Milling")
     if edge_count != 2:
         raise AssertionError(f"X-only allowance should create 2 edge candidates, got {edge_count}")
+
+    asymmetric_faces = [
+        {
+            **candidates[0],
+            "candidate_id": "F_TOP",
+            "feature_name": "Face milling top surface",
+            "setup_label": "Top",
+        },
+        {
+            **candidates[0],
+            "candidate_id": "F_BOTTOM",
+            "feature_name": "Face milling bottom surface",
+            "setup_label": "Bottom",
+        },
+    ]
+    asymmetric_stock = {
+        "length": 110.0,
+        "width": 60.0,
+        "height": 26.0,
+        "part_offset_x": 2.0,
+        "part_offset_y": -1.0,
+        "part_offset_z": 1.0,
+    }
+    analysis = analyze_rectangular_stock(
+        asymmetric_stock,
+        (100.0, 50.0, 20.0),
+    )
+    expected_allowances = {
+        "x_minus": 7.0,
+        "x_plus": 3.0,
+        "y_minus": 4.0,
+        "y_plus": 6.0,
+        "z_minus": 4.0,
+        "z_plus": 2.0,
+    }
+    if analysis.get("allowances") != expected_allowances:
+        raise AssertionError(
+            f"asymmetric stock allowances incorrect: {analysis.get('allowances')}"
+        )
+    asymmetric = apply_stock_allowance_to_candidates(
+        asymmetric_faces,
+        asymmetric_stock,
+        part,
+        include_edge_milling=True,
+    )
+    edge_depths = {
+        candidate.get("edge_side"): round(float(candidate.get("depth") or 0.0), 3)
+        for candidate in asymmetric
+        if candidate.get("feature_type") == "Edge Milling"
+    }
+    if edge_depths != {"X-": 7.0, "X+": 3.0, "Y-": 4.0, "Y+": 6.0}:
+        raise AssertionError(f"asymmetric edge depths incorrect: {edge_depths}")
+    face_depths = {
+        candidate.get("work_setup_label") or candidate.get("setup_label"):
+            round(float(candidate.get("depth") or 0.0), 3)
+        for candidate in asymmetric
+        if candidate.get("feature_type") == "Face Milling"
+    }
+    if face_depths != {"Top": 2.0, "Bottom": 4.0}:
+        raise AssertionError(f"asymmetric face depths incorrect: {face_depths}")
+
+    invalid_small = analyze_rectangular_stock(
+        {"length": 99.0, "width": 50.0, "height": 20.0},
+        (100.0, 50.0, 20.0),
+    )
+    if invalid_small["valid"] or not invalid_small["errors"]:
+        raise AssertionError("stock smaller than part should be invalid")
+    invalid_offset = analyze_rectangular_stock(
+        {
+            "length": 110.0,
+            "width": 50.0,
+            "height": 20.0,
+            "part_offset_x": 6.0,
+        },
+        (100.0, 50.0, 20.0),
+    )
+    if invalid_offset["valid"] or not invalid_offset["errors"]:
+        raise AssertionError("offset outside stock envelope should be invalid")
 
 
 def _run_17b_audit_stock_orientation():

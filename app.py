@@ -27,7 +27,7 @@ from modules.time_estimator import estimate_time
 from modules.gcode_generator import generate_gcode
 from modules.visual_preview import build_top_view, build_3d_view, build_step_mesh3d, FEATURE_COLORS
 from modules.step_parser import parse_step_bounding_box, parse_step_geometry, parse_step_auto
-from modules.stock_allowance import apply_stock_allowance_to_candidates
+from modules.starting_part_policy import prepare_candidates_for_starting_part
 from modules.setup_sheet import generate_setup_sheet
 from modules.speeds_feeds import (
     material_list, coating_list, get_vc_range, get_chip_load_range,
@@ -482,6 +482,10 @@ def _feature_from_candidate(candidate, feature_type, action):
         "source_candidate_id":     candidate.get("candidate_id", ""),
         "physical_feature_id":     candidate.get("physical_feature_id", ""),
         "source_file_hash":        candidate.get("source_file_hash", ""),
+        "starting_part_type":      candidate.get("starting_part_type", ""),
+        "work_scope":              candidate.get("work_scope", ""),
+        "allowance_source":        candidate.get("allowance_source", ""),
+        "allowance_uncertainty":   candidate.get("allowance_uncertainty", ""),
         "setup_label":            _candidate_work_setup(candidate),
         "cad_position":           candidate.get("cad_position"),
         "coordinate_transform":   candidate.get("coordinate_transform"),
@@ -759,20 +763,18 @@ def _commit_group_selections(edited_grouped_df, groups, candidates) -> int:
     return _n_added
 
 
-def _stock_adjusted_candidates(include_edge_milling=None):
-    """Return current CAD candidates with configured stock allowance applied."""
+def _stock_adjusted_candidates():
+    """Return candidates prepared for the selected starting-part semantics."""
     _spt = st.session_state.get("starting_part_type", "Raw Block / Billet")
-    _include_edges = (
-        True
-        if include_edge_milling is None
-        else bool(include_edge_milling)
-    )
-    return apply_stock_allowance_to_candidates(
+    result = prepare_candidates_for_starting_part(
         st.session_state.get("step_candidates", []),
         st.session_state.get("stock", {}),
         st.session_state.get("step_parse_result", {}),
-        include_edge_milling=_include_edges,
+        _spt,
     )
+    st.session_state._starting_part_policy_warnings = result["warnings"]
+    st.session_state._starting_part_policy_errors = result["errors"]
+    return result["candidates"]
 
 
 def init_session():
@@ -794,6 +796,7 @@ def init_session():
         st.session_state.stock = {
             "length": 150.0, "width": 100.0, "height": 50.0,
             "part_volume": 600.0, "stock_volume": 750.0,
+            "part_offset_x": 0.0, "part_offset_y": 0.0, "part_offset_z": 0.0,
         }
     if "uploaded_filename" not in st.session_state:
         st.session_state.uploaded_filename = None
@@ -855,6 +858,7 @@ def reset_current_job_state():
     st.session_state.stock = {
         "length": 150.0, "width": 100.0, "height": 50.0,
         "part_volume": 600.0, "stock_volume": 750.0,
+        "part_offset_x": 0.0, "part_offset_y": 0.0, "part_offset_z": 0.0,
     }
     st.session_state.step_uploader_key = st.session_state.get("step_uploader_key", 0) + 1
     save_features_to_db([])
@@ -2144,7 +2148,11 @@ def page_setup_review():
     step_ok  = bool(st.session_state.get("step_parse_result"))
     _is_raw_block    = st.session_state.get("starting_part_type", "Raw Block / Billet") == "Raw Block / Billet"
     _candidates      = _stock_adjusted_candidates()
-    _cand_warns      = st.session_state.get("step_candidate_warnings", [])
+    _cand_warns      = (
+        list(st.session_state.get("step_candidate_warnings", []))
+        + list(st.session_state.get("_starting_part_policy_warnings", []))
+    )
+    _stock_errors    = list(st.session_state.get("_starting_part_policy_errors", []))
     _added_ids       = st.session_state.get("added_candidate_ids", set())
     _from_candidates = st.session_state.get("features_from_candidates", False)
     _filename        = st.session_state.get("uploaded_filename")
@@ -2325,6 +2333,8 @@ def page_setup_review():
             )
             for _w in _cand_warns:
                 st.warning(_w)
+            for _error in _stock_errors:
+                st.error(_error)
 
             _default_action = "Machine" if _is_raw_block else "Existing Geometry – No Machining"
             _rows = []
@@ -2332,7 +2342,7 @@ def page_setup_review():
                 _cid = _c["candidate_id"]
                 _is_added = _candidate_is_added(_c, _added_ids)
                 _rows.append({
-                    "accept":           (not _is_added) and _is_raw_block,
+                    "accept":           (not _is_added) and _is_raw_block and not _stock_errors,
                     "status":           "Added ✓" if _is_added else "",
                     "candidate_id":     _cid,
                     "machining_action": _default_action,
@@ -2453,6 +2463,7 @@ def page_setup_review():
 
     checks = [
         (has_stock or step_ok, "Stock dimensions entered or STEP file uploaded"),
+        (not _stock_errors,       "Stock dimensions and placement contain the complete part"),
         (has_machine,           "Machine selected"),
         (has_material,          "Material selected"),
         (has_tools,             "Tool library loaded"),
@@ -3229,7 +3240,6 @@ def page_select_machining_work():
     _spt          = st.session_state.get("starting_part_type", "Raw Block / Billet")
     _parse_result = st.session_state.get("step_parse_result")
     _added_ids    = st.session_state.get("added_candidate_ids", set())
-    _cand_warns   = st.session_state.get("step_candidate_warnings", [])
     _features     = st.session_state.get("features", [])
 
     if not _parse_result:
@@ -3241,6 +3251,11 @@ def page_select_machining_work():
 
     _is_raw_block = _spt == "Raw Block / Billet"
     _candidates = _stock_adjusted_candidates()
+    _cand_warns = (
+        list(st.session_state.get("step_candidate_warnings", []))
+        + list(st.session_state.get("_starting_part_policy_warnings", []))
+    )
+    _stock_errors = list(st.session_state.get("_starting_part_policy_errors", []))
     st.session_state._smw_preview_candidates = _candidates
 
     _job_file = st.session_state.get("uploaded_filename") or "STEP loaded"
@@ -3276,6 +3291,8 @@ def page_select_machining_work():
         else:
             for _w in _cand_warns:
                 st.warning(_w)
+            for _error in _stock_errors:
+                st.error(_error)
 
             _all_types = sorted({c.get("feature_type", "Unknown") for c in _candidates})
             _sel_types = st.multiselect(
@@ -3324,7 +3341,11 @@ def page_select_machining_work():
                     if _seed_all_added:
                         st.session_state[_ka] = False
                     elif _ka not in st.session_state:
-                        st.session_state[_ka] = (not _seed_all_added) and _is_raw_block
+                        st.session_state[_ka] = (
+                            (not _seed_all_added)
+                            and _is_raw_block
+                            and not _stock_errors
+                        )
                     if _kx not in st.session_state:
                         st.session_state[_kx] = _default_action
 
@@ -3486,7 +3507,7 @@ def page_select_machining_work():
                 if st.button(
                     "Confirm & proceed to Feature Review",
                     type="primary",
-                    disabled=(_n_ticked == 0),
+                    disabled=(_n_ticked == 0 or bool(_stock_errors)),
                     help="Tick at least one group to enable",
                     key="_smw_confirm_grouped",
                 ):
@@ -3519,7 +3540,7 @@ def page_select_machining_work():
                     _cid = _c["candidate_id"]
                     _is_added = _candidate_is_added(_c, _added_ids)
                     _rows.append({
-                        "accept":           (not _is_added) and _is_raw_block,
+                        "accept":           (not _is_added) and _is_raw_block and not _stock_errors,
                         "status":           "Added ✓" if _is_added else "",
                         "candidate_id":     _cid,
                         "machining_action": _default_action,
@@ -3868,12 +3889,38 @@ def page_part_setup():
             _new_h = _ps_sh.number_input(
                 "Height (mm)", value=float(_h), min_value=0.001, step=0.5, key="ps_stock_height",
             )
+            _new_ox = float(_stk.get("part_offset_x", 0.0) or 0.0)
+            _new_oy = float(_stk.get("part_offset_y", 0.0) or 0.0)
+            _new_oz = float(_stk.get("part_offset_z", 0.0) or 0.0)
+            if st.session_state.get("starting_part_type") == "Raw Block / Billet":
+                _psox, _psoy, _psoz = st.columns(3)
+                _new_ox = _psox.number_input(
+                    "Part offset X (mm)",
+                    value=_new_ox,
+                    step=0.5,
+                    key="ps_part_offset_x",
+                )
+                _new_oy = _psoy.number_input(
+                    "Part offset Y (mm)",
+                    value=_new_oy,
+                    step=0.5,
+                    key="ps_part_offset_y",
+                )
+                _new_oz = _psoz.number_input(
+                    "Part offset Z (mm)",
+                    value=_new_oz,
+                    step=0.5,
+                    key="ps_part_offset_z",
+                )
             _new_sv = (_new_l * _new_w * _new_h) / 1000.0
             if st.button("Apply Stock", key="ps_apply_stock", use_container_width=True):
                 st.session_state.stock["length"]       = _new_l
                 st.session_state.stock["width"]        = _new_w
                 st.session_state.stock["height"]       = _new_h
                 st.session_state.stock["stock_volume"] = round(_new_sv, 3)
+                st.session_state.stock["part_offset_x"] = _new_ox
+                st.session_state.stock["part_offset_y"] = _new_oy
+                st.session_state.stock["part_offset_z"] = _new_oz
                 st.success(f"Stock updated: {_new_l} × {_new_w} × {_new_h} mm")
                 st.rerun()
             st.divider()

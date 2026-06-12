@@ -37,6 +37,16 @@
 - Made time estimates consume unique planned operations and physical-feature
   positions, preventing duplicate rows or excluded/reference geometry from
   inflating time, effort, operation counts, or tool-change counts.
+- Added starting-part policies for billet, casting/forging, weldment, and
+  rework workflows. Non-billet modes now retain oriented CAD candidates without
+  applying rectangular-stock facing depths or generating edge cleanup work.
+- Added explicit operator-selection, allowance-source, uncertainty, work-scope,
+  and multi-solid weldment warnings with regression coverage on the 28-solid
+  slide-base sample.
+- Added explicit billet part-placement offsets and per-side X/Y/Z allowances,
+  including unequal top/bottom facing and side-cleanup depths.
+- Added blocking validation for undersized stock and offsets that place the part
+  outside the stock envelope; invalid stock no longer creates derived work.
 
 ## 2026-06-10 - V2 Feature Review Validation
 

@@ -39,11 +39,11 @@ development_status:
   12-4-face-chamfer-and-profile-hardening: in-progress
   epic-12-retrospective: optional
 
-  epic-13: backlog
-  13-1-billet-allowance-model: backlog
-  13-2-casting-and-forging-mode: backlog
-  13-3-weldment-fabrication-mode: backlog
-  13-4-existing-part-rework-mode: backlog
+  epic-13: done
+  13-1-billet-allowance-model: done
+  13-2-casting-and-forging-mode: done
+  13-3-weldment-fabrication-mode: done
+  13-4-existing-part-rework-mode: done
   epic-13-retrospective: optional
 
   epic-14: done
