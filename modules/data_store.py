@@ -46,6 +46,37 @@ DB_PATH = _default_db_path()
 _DB_STATUS["path"] = str(DB_PATH)
 
 
+def _is_storage_error(exc):
+    message = str(exc).casefold()
+    return any(
+        marker in message
+        for marker in (
+            "disk i/o",
+            "readonly",
+            "read-only",
+            "unable to open database",
+            "database is locked",
+        )
+    )
+
+
+def _activate_fallback_db(exc):
+    global DB_PATH
+    fallback_path = _fallback_db_path()
+    if _DB_PATH_OVERRIDDEN or DB_PATH == fallback_path or not _is_storage_error(exc):
+        return False
+    original_path = DB_PATH
+    fallback_path.parent.mkdir(parents=True, exist_ok=True)
+    DB_PATH = fallback_path
+    _DB_STATUS["path"] = str(DB_PATH)
+    _DB_STATUS["migration_error"] = (
+        f"Database {original_path} unavailable ({type(exc).__name__}: {exc}); "
+        f"using fallback {fallback_path}"
+    )
+    print(_DB_STATUS["migration_error"])
+    return True
+
+
 def _ensure_db_parent():
     global DB_PATH
     try:
@@ -95,7 +126,19 @@ def _try_migrate_legacy_db():
 @contextmanager
 def _db_connection():
     _ensure_db_parent()
-    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.rollback()
+    except DB_ERRORS as exc:
+        try:
+            conn.close()
+        except (NameError, sqlite3.Error):
+            pass
+        if not _activate_fallback_db(exc):
+            raise
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
     try:
         conn.execute("PRAGMA busy_timeout = 5000")
         yield conn
@@ -148,7 +191,7 @@ def get_default_machines():
     ]
 
 
-def init_db():
+def init_db(_allow_fallback=True):
     try:
         _try_migrate_legacy_db()
         with _db_connection() as conn:
@@ -211,6 +254,8 @@ def init_db():
             """)
         _mark_db_available()
     except DB_ERRORS as exc:
+        if _allow_fallback and _activate_fallback_db(exc):
+            return init_db(_allow_fallback=False)
         _log_db_error("initialization", exc)
 
 

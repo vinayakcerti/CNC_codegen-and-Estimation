@@ -55,6 +55,8 @@
 - Added tool and holder feasibility checks for missing tool types, cutting
   reach, flute length, feature opening, bore range, holder clearance, and
   machine spindle/feed limits.
+- Added automatic SQLite failover for read-only, locked, unavailable, and disk
+  I/O database paths so OneDrive or filesystem failures do not crash startup.
 
 ## 2026-06-10 - V2 Feature Review Validation
 

@@ -929,6 +929,11 @@ def sidebar_nav():
                 st.caption(db_status.get("last_error") or "No error detail available.")
                 if db_status.get("migration_error"):
                     st.caption(f"Legacy migration: {db_status['migration_error']}")
+        elif "using fallback" in str(db_status.get("migration_error") or ""):
+            st.info("Database recovered using safe local fallback storage.")
+            with st.expander("Database storage detail", expanded=False):
+                st.caption(f"Active path: {db_status.get('path') or 'unknown'}")
+                st.caption(db_status.get("migration_error"))
 
         return st.session_state._nav_page
 
