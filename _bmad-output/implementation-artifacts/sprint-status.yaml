@@ -58,10 +58,10 @@ development_status:
   15-3-tool-and-holder-feasibility: backlog
   epic-15-retrospective: optional
 
-  epic-16: backlog
-  16-1-operation-traceability: backlog
+  epic-16: in-progress
+  16-1-operation-traceability: done
   16-2-estimate-integrity: backlog
-  16-3-export-contract-tests: backlog
+  16-3-export-contract-tests: done
   epic-16-retrospective: optional
 
   epic-17: backlog

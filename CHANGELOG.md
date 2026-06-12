@@ -32,6 +32,8 @@
 - Added stable operation IDs and physical-feature traceability, deterministic
   feature ordering, setup-aware fallback deduplication, and regressions proving
   repeated planning does not duplicate work or suppress distinct features.
+- Carried operation and physical-feature IDs into operation CSV and setup-sheet
+  exports, with a round-trip export contract regression and smoke-test checks.
 
 ## 2026-06-10 - V2 Feature Review Validation
 

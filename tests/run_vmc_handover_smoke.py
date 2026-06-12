@@ -51,6 +51,9 @@ def _candidate_to_feature(candidate, priority):
         "priority": priority,
         "machining_action": "Machine",
         "selected_for_machining": True,
+        "source_candidate_id": candidate.get("candidate_id", ""),
+        "physical_feature_id": candidate.get("physical_feature_id", ""),
+        "source_file_hash": candidate.get("source_file_hash", ""),
     }
 
 
@@ -104,6 +107,10 @@ def main():
             operations = plan_operations(features, tools, material)
             if not operations:
                 raise RuntimeError("operation planner returned no operations")
+            if any(not op.get("operation_id") for op in operations):
+                raise RuntimeError("operation traceability ID missing")
+            if any(not op.get("physical_feature_id") for op in operations):
+                raise RuntimeError("physical feature traceability missing")
 
             estimate = estimate_time(operations, machine, material, features)
             if estimate.get("total_machine_time_min", 0) <= 0:
