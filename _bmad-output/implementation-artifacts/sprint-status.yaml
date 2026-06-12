@@ -49,7 +49,7 @@ development_status:
   epic-14: in-progress
   14-1-stable-physical-feature-ids: done
   14-2-idempotent-acceptance-and-grouping: done
-  14-3-idempotent-operation-generation: backlog
+  14-3-idempotent-operation-generation: done
   epic-14-retrospective: optional
 
   epic-15: backlog

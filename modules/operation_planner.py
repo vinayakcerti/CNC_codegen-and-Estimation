@@ -1,4 +1,6 @@
 import math
+import hashlib
+import json
 from modules.tool_selector import select_tool_for_operation, get_spindle_and_feed
 
 
@@ -325,11 +327,21 @@ def _sequence_key(op):
 
 def _operation_signature(feature, op_type, operation_variant=""):
     """Stable key used to skip exact duplicate operation inputs."""
+    physical_feature_id = feature.get("physical_feature_id")
+    if physical_feature_id:
+        return (
+            "physical",
+            str(physical_feature_id),
+            str(op_type).strip().lower(),
+            str(operation_variant).strip().lower(),
+        )
     return (
+        "geometry",
         str(feature.get("feature_type", "")).strip().lower(),
         str(feature.get("feature_name", "")).strip().lower(),
         str(op_type).strip().lower(),
         str(operation_variant).strip().lower(),
+        str(feature.get("setup_label", "Unknown")).strip().lower(),
         round(float(feature.get("x_pos", 0) or 0), 3),
         round(float(feature.get("y_pos", 0) or 0), 3),
         round(float(feature.get("diameter", 0) or 0), 3),
@@ -339,13 +351,35 @@ def _operation_signature(feature, op_type, operation_variant=""):
     )
 
 
+def _operation_id(operation_signature):
+    digest = hashlib.sha256(
+        json.dumps(
+            operation_signature,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"OP-{digest[:16]}"
+
+
+def _feature_sort_key(feature):
+    return (
+        int(feature.get("priority", 99) or 99),
+        _setup_sort_rank(feature.get("setup_label", "Unknown")),
+        str(feature.get("feature_type", "")).strip().lower(),
+        round(float(feature.get("x_pos", 0) or 0), 3),
+        round(float(feature.get("y_pos", 0) or 0), 3),
+        round(float(feature.get("depth", 0) or 0), 3),
+        str(feature.get("physical_feature_id") or feature.get("feature_name") or ""),
+    )
+
+
 def plan_operations(features, tools, material):
     """Generate operation plan from features."""
     operations = []
     seen_operations = set()
     op_num = 1
 
-    for feature in sorted(features, key=lambda x: x.get("priority", 99)):
+    for feature in sorted(features, key=_feature_sort_key):
         ftype = feature["feature_type"]
         rules = OPERATION_RULES.get(ftype, [{"op": "End Mill", "notes": "General machining"}])
 
@@ -383,7 +417,10 @@ def plan_operations(features, tools, material):
                 note = note + " | " + tool_warning
 
             operations.append({
+                "operation_id": _operation_id(op_sig),
                 "op_num": op_num,
+                "source_candidate_id": feature.get("source_candidate_id", ""),
+                "physical_feature_id": feature.get("physical_feature_id", ""),
                 "feature_name": op_feature_name,
                 "feature_type": ftype,
                 "setup_label": feature.get("setup_label", "Unknown"),

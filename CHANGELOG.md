@@ -29,6 +29,9 @@
 - Made flat and grouped feature review status physical-identity aware and added
   acceptance regressions for reruns, renamed file copies, changed sources,
   face-split candidates, and repeated group commits.
+- Added stable operation IDs and physical-feature traceability, deterministic
+  feature ordering, setup-aware fallback deduplication, and regressions proving
+  repeated planning does not duplicate work or suppress distinct features.
 
 ## 2026-06-10 - V2 Feature Review Validation
 

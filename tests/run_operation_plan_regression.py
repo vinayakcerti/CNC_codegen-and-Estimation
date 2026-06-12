@@ -3,6 +3,7 @@ Regression checks for operation-plan quality.
 """
 
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -96,13 +97,51 @@ def _unsupported_bore_feature():
 def main():
     tools = get_default_tools()
     material = get_default_materials()[0]
-    operations = plan_operations(_audit_17b_features(), tools, material)
-    duplicate_operations = plan_operations(_audit_17b_features() + _audit_17b_features(), tools, material)
+    audit_features = _audit_17b_features()
+    for index, feature in enumerate(audit_features, start=1):
+        feature["physical_feature_id"] = f"PHYSICAL-{index}"
+        feature["source_candidate_id"] = f"CANDIDATE-{index}"
+    operations = plan_operations(audit_features, tools, material)
+    duplicate_operations = plan_operations(audit_features + deepcopy(audit_features), tools, material)
     if len(duplicate_operations) != len(operations):
         raise AssertionError(
             f"duplicate features should not duplicate operations "
             f"({len(duplicate_operations)} vs {len(operations)})"
         )
+    if [op["operation_id"] for op in duplicate_operations] != [
+        op["operation_id"] for op in operations
+    ]:
+        raise AssertionError("repeated planning should preserve stable operation IDs")
+    reversed_operations = plan_operations(list(reversed(audit_features)), tools, material)
+    if [op["operation_id"] for op in reversed_operations] != [
+        op["operation_id"] for op in operations
+    ]:
+        raise AssertionError("operation plan should not depend on feature input order")
+    if len({op["operation_id"] for op in operations}) != len(operations):
+        raise AssertionError("operation IDs should be unique within a plan")
+    if any(not op.get("physical_feature_id") for op in operations):
+        raise AssertionError("operation traceability should retain physical feature IDs")
+
+    face_split = deepcopy(audit_features[3])
+    face_split["source_candidate_id"] = "CANDIDATE-SPLIT"
+    face_split["feature_name"] = "Step shoulder re-detected from split CAD faces"
+    split_operations = plan_operations(audit_features + [face_split], tools, material)
+    if len(split_operations) != len(operations):
+        raise AssertionError("same physical feature should not duplicate operations")
+
+    distinct_feature = deepcopy(audit_features[3])
+    distinct_feature["physical_feature_id"] = "PHYSICAL-DISTINCT"
+    distinct_feature["source_candidate_id"] = "CANDIDATE-DISTINCT"
+    distinct_operations = plan_operations(audit_features + [distinct_feature], tools, material)
+    if len(distinct_operations) != len(operations) + 3:
+        raise AssertionError("distinct physical features must retain their operations")
+
+    manual_top = deepcopy(_audit_17b_features()[0])
+    manual_bottom = deepcopy(manual_top)
+    manual_bottom["setup_label"] = "Bottom"
+    manual_ops = plan_operations([manual_top, manual_bottom], tools, material)
+    if len(manual_ops) != 2:
+        raise AssertionError("fallback operation identity must include setup orientation")
 
     step_ops = [op for op in operations if op.get("feature_type") == "Step"]
     step_names = [op.get("feature_name", "") for op in step_ops]
@@ -145,7 +184,7 @@ def main():
         {"machine_name": "VMC", "controller": "Fanuc"},
         material,
         {"length": 130.0, "width": 100.0, "height": 40.0},
-        _audit_17b_features(),
+        audit_features,
         {"total_machine_time_min": 1, "cutting_time_min": 1, "setup_time_min": 0},
         job_name="17b audit",
     )
