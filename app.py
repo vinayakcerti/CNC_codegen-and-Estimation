@@ -28,7 +28,11 @@ from modules.time_estimator import estimate_time
 from modules.gcode_generator import generate_gcode
 from modules.visual_preview import build_top_view, build_3d_view, build_step_mesh3d, FEATURE_COLORS
 from modules.step_parser import parse_step_bounding_box, parse_step_geometry, parse_step_auto
-from modules.session_integrity import clear_import_derived_state
+from modules.session_integrity import (
+    clear_import_derived_state,
+    validate_session_consistency,
+    DEFAULT_STOCK,
+)
 from modules.starting_part_policy import prepare_candidates_for_starting_part
 from modules.setup_sheet import generate_setup_sheet
 from modules.speeds_feeds import (
@@ -785,7 +789,15 @@ def init_session():
         st.session_state.tools = db_tools if db_tools else get_default_tools()
     if "features" not in st.session_state:
         db_features = load_features_from_db()
-        st.session_state.features = db_features if db_features else []
+        has_active_parse = "step_parse_result" in st.session_state
+        if db_features and not has_active_parse:
+            # Stale features from a previous Streamlit session — clear them rather than
+            # showing features without the geometry that produced them.
+            save_features_to_db([])
+            st.session_state.features = []
+            st.session_state._restart_cleared_features = len(db_features)
+        else:
+            st.session_state.features = db_features if db_features else []
     if "materials" not in st.session_state:
         st.session_state.materials = get_default_materials()
     if "machines" not in st.session_state:
@@ -795,11 +807,7 @@ def init_session():
     if "selected_machine" not in st.session_state:
         st.session_state.selected_machine = st.session_state.machines[0]
     if "stock" not in st.session_state:
-        st.session_state.stock = {
-            "length": 150.0, "width": 100.0, "height": 50.0,
-            "part_volume": 600.0, "stock_volume": 750.0,
-            "part_offset_x": 0.0, "part_offset_y": 0.0, "part_offset_z": 0.0,
-        }
+        st.session_state.stock = dict(DEFAULT_STOCK)
     if "uploaded_filename" not in st.session_state:
         st.session_state.uploaded_filename = None
     if "step_uploader_key" not in st.session_state:
@@ -1004,6 +1012,21 @@ def page_upload_step():
     if st.session_state.pop("_job_reset_done", False):
         st.success("Job reset — all job data cleared. Upload a new STEP file to begin.")
 
+    _cleared = st.session_state.pop("_restart_cleared_features", 0)
+    if _cleared:
+        st.info(
+            f"**Previous session detected:** {_cleared} accepted feature(s) from a prior "
+            "Streamlit session were cleared on startup because no STEP file is loaded. "
+            "Upload a STEP file to begin a new job."
+        )
+
+    for _sc_warn in validate_session_consistency(st.session_state):
+        if _sc_warn["key"] in ("stale_features", "stale_candidates"):
+            if _sc_warn["level"] == "warning":
+                st.warning(_sc_warn["message"])
+            else:
+                st.info(_sc_warn["message"])
+
     # ── Starting Part Type — visual cards ────────────────────────────
     st.subheader("What are you starting with?")
     _PART_TYPES = [
@@ -1097,6 +1120,13 @@ def page_upload_step():
             cadquery_warning = r.get("cadquery_warning")
             if cadquery_warning:
                 st.warning(f"**CadQuery fallback:** {cadquery_warning}")
+            if r.get("degraded_mode"):
+                st.warning(
+                    "**Degraded mode:** CadQuery/OpenCASCADE is not available in this "
+                    "environment. Bounding-box dimensions are approximate (±10 %), "
+                    "solid preview is disabled, and feature candidates cannot be detected. "
+                    "Stock dimensions have been auto-filled — verify them before proceeding."
+                )
         else:
             st.warning(f"**STEP parse failed:** {parse_result['message']}")
             detail     = parse_result.get("detail")

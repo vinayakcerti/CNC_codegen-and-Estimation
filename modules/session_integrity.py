@@ -38,3 +38,52 @@ def clear_import_derived_state(state, *, reset_stock=True):
     state["added_candidate_ids"] = set()
     if reset_stock:
         state["stock"] = dict(DEFAULT_STOCK)
+
+
+def validate_session_consistency(state) -> list:
+    """Return a list of consistency warnings for the current session state.
+
+    Each warning is a dict with keys: level ("warning" or "info"), message, key.
+    An empty list means the session is consistent.
+    """
+    warnings = []
+
+    features = state.get("features", [])
+    parse_ok  = state.get("step_parse_result", {}).get("success", False)
+
+    if features and not parse_ok:
+        warnings.append({
+            "level": "warning",
+            "key":   "stale_features",
+            "message": (
+                f"{len(features)} accepted feature(s) are present in this session "
+                "but no STEP file has been successfully parsed. "
+                "These features may be left over from a previous Streamlit restart. "
+                "Upload a STEP file or use Reset Current Job to start fresh."
+            ),
+        })
+
+    candidates = state.get("step_candidates", [])
+    if candidates and not parse_ok:
+        warnings.append({
+            "level": "info",
+            "key":   "stale_candidates",
+            "message": (
+                "Feature candidates are present without an active STEP parse result. "
+                "Re-upload the STEP file to restore geometry."
+            ),
+        })
+
+    degraded = state.get("step_parse_result", {}).get("degraded_mode", False)
+    if degraded:
+        warnings.append({
+            "level": "info",
+            "key":   "degraded_mode",
+            "message": (
+                "CadQuery/OpenCASCADE is unavailable. "
+                "Bounding-box geometry is approximate and feature detection is disabled. "
+                "The 3D solid preview is not available in this mode."
+            ),
+        })
+
+    return warnings

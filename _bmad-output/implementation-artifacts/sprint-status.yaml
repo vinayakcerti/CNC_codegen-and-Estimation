@@ -64,10 +64,10 @@ development_status:
   16-3-export-contract-tests: done
   epic-16-retrospective: optional
 
-  epic-17: in-progress
+  epic-17: done
   17-1-step-failure-and-degraded-mode-handling: done
   17-2-database-and-onedrive-safety: done
-  17-3-session-and-restart-integrity: backlog
+  17-3-session-and-restart-integrity: done
   epic-17-retrospective: optional
 
   epic-18: backlog
