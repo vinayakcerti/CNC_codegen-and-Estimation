@@ -1,12 +1,12 @@
 # generated: 2026-06-11
-# last_updated: 2026-06-12
+# last_updated: 2026-06-16
 # project: CNC Process Planner
 # project_key: NOKEY
 # tracking_system: file-system
 # story_location: _bmad-output/implementation-artifacts
 
 generated: 2026-06-11
-last_updated: 2026-06-12
+last_updated: 2026-06-16
 project: CNC Process Planner
 project_key: NOKEY
 tracking_system: file-system
@@ -65,7 +65,7 @@ development_status:
   epic-16-retrospective: optional
 
   epic-17: in-progress
-  17-1-step-failure-and-degraded-mode-handling: backlog
+  17-1-step-failure-and-degraded-mode-handling: done
   17-2-database-and-onedrive-safety: done
   17-3-session-and-restart-integrity: backlog
   epic-17-retrospective: optional

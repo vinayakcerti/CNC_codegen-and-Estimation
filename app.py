@@ -28,6 +28,7 @@ from modules.time_estimator import estimate_time
 from modules.gcode_generator import generate_gcode
 from modules.visual_preview import build_top_view, build_3d_view, build_step_mesh3d, FEATURE_COLORS
 from modules.step_parser import parse_step_bounding_box, parse_step_geometry, parse_step_auto
+from modules.session_integrity import clear_import_derived_state
 from modules.starting_part_policy import prepare_candidates_for_starting_part
 from modules.setup_sheet import generate_setup_sheet
 from modules.speeds_feeds import (
@@ -847,20 +848,7 @@ def init_session():
 
 def reset_current_job_state():
     """Clear all current-job state. Preserves tool/material/machine libraries."""
-    for key in (
-        "uploaded_filename", "step_parse_result", "step_geometry",
-        "step_mesh_data", "features_from_candidates", "operations", "time_result",
-    ):
-        st.session_state.pop(key, None)
-    st.session_state.features = []
-    st.session_state.step_candidates = []
-    st.session_state.step_candidate_warnings = []
-    st.session_state.added_candidate_ids = set()
-    st.session_state.stock = {
-        "length": 150.0, "width": 100.0, "height": 50.0,
-        "part_volume": 600.0, "stock_volume": 750.0,
-        "part_offset_x": 0.0, "part_offset_y": 0.0, "part_offset_z": 0.0,
-    }
+    clear_import_derived_state(st.session_state)
     st.session_state.step_uploader_key = st.session_state.get("step_uploader_key", 0) + 1
     save_features_to_db([])
     st.session_state._nav_page = "Part Setup"
@@ -943,12 +931,20 @@ def _parse_and_tessellate(file_bytes: bytes, filename: str):
 
     Returns the parse_result dict so the caller can show unit-conversion / error banners.
     """
-    st.session_state.uploaded_filename = filename
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+    if (
+        st.session_state.get("uploaded_file_hash") == file_hash
+        and st.session_state.get("step_parse_result", {}).get("success")
+    ):
+        return st.session_state.step_parse_result
 
+    clear_import_derived_state(st.session_state)
     parse_result = parse_step_auto(file_bytes)
-    geo_result   = parse_step_geometry(file_bytes)
 
     if parse_result["success"]:
+        geo_result = parse_step_geometry(file_bytes)
+        st.session_state.uploaded_filename        = filename
+        st.session_state.uploaded_file_hash       = file_hash
         st.session_state.step_parse_result      = parse_result
         st.session_state.step_geometry          = geo_result
         st.session_state.stock["length"]        = parse_result["length_mm"]
@@ -1070,7 +1066,6 @@ def page_upload_step():
     parse_result = None
 
     if uploaded:
-        st.session_state.uploaded_filename = uploaded.name
         file_bytes = uploaded.read()
 
         col_info1, col_info2 = st.columns(2)
@@ -1078,58 +1073,9 @@ def page_upload_step():
         col_info2.info(f"Size: **{len(file_bytes) / 1024:.1f} KB**")
 
         with st.spinner("Parsing STEP file geometry..."):
-            parse_result = parse_step_auto(file_bytes)
-            geo_result   = parse_step_geometry(file_bytes)
+            parse_result = _parse_and_tessellate(file_bytes, uploaded.name)
 
         if parse_result["success"]:
-            st.session_state.step_parse_result = parse_result
-            st.session_state.step_geometry = geo_result
-            st.session_state.stock["length"] = parse_result["length_mm"]
-            st.session_state.stock["width"] = parse_result["width_mm"]
-            st.session_state.stock["height"] = parse_result["height_mm"]
-            st.session_state.stock["stock_volume"] = parse_result["stock_volume_cm3"]
-            st.session_state.stock["part_volume"] = parse_result["part_volume_cm3"]
-            # Store feature candidates; reset accepted-set so re-upload starts fresh
-            st.session_state.step_candidates          = parse_result.get("candidate_features", [])
-            st.session_state.step_candidate_warnings  = parse_result.get("candidate_warnings", [])
-            st.session_state.added_candidate_ids      = set()
-
-            # Tessellate for Mesh3d viewer — always attempt CadQuery regardless of which
-            # parser was used for bounding-box extraction, so the solid preview works even
-            # when parse_step_auto fell back to lightweight for some STEP files.
-            _mesh_data = None
-            _tmp_tess_path = None
-            st.session_state.pop("_tess_error", None)
-            try:
-                if os.environ.get("CNC_DISABLE_CADQUERY", "").strip().lower() in {"1", "true", "yes"}:
-                    raise ImportError("CadQuery disabled by CNC_DISABLE_CADQUERY")
-                import cadquery as cq
-                with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as _tmp_tess:
-                    _tmp_tess.write(file_bytes)
-                    _tmp_tess_path = _tmp_tess.name
-                _cq_tess = cq.importers.importStep(_tmp_tess_path)
-                _verts, _tris = _cq_tess.val().tessellate(0.5)
-                if _verts:
-                    _mesh_data = {
-                        "x": [v.x for v in _verts],
-                        "y": [v.y for v in _verts],
-                        "z": [v.z for v in _verts],
-                        "i": [t[0] for t in _tris],
-                        "j": [t[1] for t in _tris],
-                        "k": [t[2] for t in _tris],
-                    }
-            except ImportError:
-                pass  # CadQuery not available in this environment; solid preview unavailable
-            except Exception as _tess_exc:
-                st.session_state._tess_error = f"{type(_tess_exc).__name__}: {_tess_exc}"
-            finally:
-                if _tmp_tess_path and os.path.exists(_tmp_tess_path):
-                    try:
-                        os.unlink(_tmp_tess_path)
-                    except OSError:
-                        pass
-            st.session_state.step_mesh_data = _mesh_data
-
             # Unit detection banner
             r = parse_result
             if r["converted"]:
@@ -1170,7 +1116,7 @@ def page_upload_step():
     _display_r = None
     if parse_result and parse_result.get("success"):
         _display_r = parse_result
-    elif st.session_state.get("step_parse_result", {}).get("success"):
+    elif parse_result is None and st.session_state.get("step_parse_result", {}).get("success"):
         _display_r = st.session_state.get("step_parse_result")
 
     # ── Post-parse overview: 2-column card layout ──────────────────────

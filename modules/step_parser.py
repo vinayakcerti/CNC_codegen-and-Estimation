@@ -21,6 +21,8 @@ _OCC_ADAPTOR_AVAILABLE = False
 _BRepAdaptor = None
 _GeomAbsCylinder = None
 
+MAX_STEP_FILE_BYTES = 200 * 1024 * 1024
+
 
 _FEATURE_ID_PREFIXES = {
     "Face milling": "FACE",
@@ -33,6 +35,68 @@ _FEATURE_ID_PREFIXES = {
     "Chamfer": "CHAMFER",
     "Edge Milling": "EDGE",
 }
+
+
+def validate_step_payload(file_bytes: bytes) -> dict:
+    """Validate a STEP payload before invoking native CAD libraries."""
+    if not isinstance(file_bytes, (bytes, bytearray)):
+        return {
+            "success": False,
+            "failure_reason": "INVALID_PAYLOAD",
+            "message": "The uploaded file could not be read as binary data.",
+            "detail": "The upload did not provide a valid byte payload.",
+            "suggestion": "Choose the STEP file again and retry the upload.",
+        }
+    if not file_bytes:
+        return {
+            "success": False,
+            "failure_reason": "EMPTY_FILE",
+            "message": "The uploaded STEP file is empty.",
+            "detail": "The file contains zero bytes, so there is no geometry to parse.",
+            "suggestion": "Re-export the part from the CAD system and upload the exported file.",
+        }
+    if len(file_bytes) > MAX_STEP_FILE_BYTES:
+        return {
+            "success": False,
+            "failure_reason": "FILE_TOO_LARGE",
+            "message": "The STEP file is larger than the supported 200 MB limit.",
+            "detail": f"Uploaded size: {len(file_bytes) / (1024 * 1024):.1f} MB.",
+            "suggestion": (
+                "Export only the required solid body, suppress unnecessary assemblies, "
+                "or use a simplified STEP representation."
+            ),
+        }
+
+    sample = bytes(file_bytes[:8192])
+    if b"\x00" in sample:
+        return {
+            "success": False,
+            "failure_reason": "BINARY_FILE",
+            "message": "This file appears to be binary-encoded, not an ASCII STEP file.",
+            "detail": "Null bytes were detected in the first 8 KB of the file.",
+            "suggestion": "Re-export the model as an ASCII STEP AP203, AP214, or AP242 file.",
+        }
+
+    head = sample.decode("ascii", errors="ignore").upper()
+    tail = bytes(file_bytes[-8192:]).decode("ascii", errors="ignore").upper()
+    data_sample = bytes(file_bytes[:1024 * 1024]).upper()
+    if "ISO-10303-21" not in head or "HEADER;" not in head or b"DATA;" not in data_sample:
+        return {
+            "success": False,
+            "failure_reason": "NOT_STEP_FILE",
+            "message": "This file does not contain a valid STEP exchange header.",
+            "detail": "The required ISO-10303-21, HEADER, and DATA markers were not found.",
+            "suggestion": "Upload an ASCII STEP AP203, AP214, or AP242 file.",
+        }
+    if "END-ISO-10303-21" not in tail:
+        return {
+            "success": False,
+            "failure_reason": "TRUNCATED_STEP_FILE",
+            "message": "The STEP file appears incomplete or truncated.",
+            "detail": "The required END-ISO-10303-21 terminator was not found.",
+            "suggestion": "Re-export or re-copy the file, then upload the complete STEP file.",
+        }
+    return {"success": True}
 
 
 def _identity_number(value):
@@ -304,6 +368,10 @@ def _circle_points(cx, cy, cz, r, nx, ny, nz, steps=48):
 # ---------------------------------------------------------------------------
 
 def parse_step_bounding_box(file_bytes: bytes) -> dict:
+    payload_status = validate_step_payload(file_bytes)
+    if not payload_status["success"]:
+        return payload_status
+
     # ── Binary file guard ────────────────────────────────────────────────────
     # Scan a sample of the file for null bytes; ASCII STEP never contains them.
     sample = file_bytes[:8192]
@@ -909,9 +977,19 @@ def parse_step_auto(file_bytes: bytes) -> dict:
     The returned dict is always compatible with parse_step_bounding_box output.
     Extra keys (parser_used, removed_volume_cm3, cadquery_warning) are additive.
     """
+    payload_status = validate_step_payload(file_bytes)
+    if not payload_status["success"]:
+        return payload_status
+
     if _load_cadquery() is None:
         result = parse_step_bounding_box(file_bytes)
         result["parser_used"]        = "lightweight"
+        result["degraded_mode"]      = True
+        result["deep_feature_detection_available"] = False
+        result["cadquery_warning"]   = (
+            "CadQuery/OpenCASCADE is unavailable. Bounding-box geometry was recovered "
+            "with the lightweight parser, but solid preview and feature detection are disabled."
+        )
         result["volume_source"]      = "bbox_estimate_60_percent"
         result["solids_count"]       = None
         result["shells_count"]       = None
@@ -932,11 +1010,15 @@ def parse_step_auto(file_bytes: bytes) -> dict:
             tmp_path = tmp.name
 
         result = parse_step_with_cadquery(tmp_path)
+        result["degraded_mode"] = False
+        result["deep_feature_detection_available"] = True
         return result
 
     except Exception as exc:
         result = parse_step_bounding_box(file_bytes)
         result["parser_used"]        = "lightweight_fallback"
+        result["degraded_mode"]      = True
+        result["deep_feature_detection_available"] = False
         result["cadquery_warning"]   = (
             f"CadQuery parsing failed ({type(exc).__name__}: {exc}). "
             "Fell back to lightweight regex parser."
