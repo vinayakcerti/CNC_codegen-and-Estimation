@@ -93,3 +93,32 @@ the whole app (high blast radius, one-time migration), or whether a
 **second**, display-only field (e.g. `footprint_x_min`/`footprint_y_min`)
 should be added to the candidate table without touching `x_pos`/`y_pos`
 (low risk, additive). The second option is recommended.
+
+## 4. Regression coverage gap found while investigating — fixed
+
+While chasing this report, found `17_stepped_block_single_step.step` existed
+in `test_samples/` with zero coverage in
+`tests/feature_detection_expectations.json` (flagged under "Uncovered STEP
+Files" in every regression report run). Verified detection output is
+self-consistent (single Z-direction step, depth=35mm, in a 120×90×500mm
+block — matches the file name and produces exactly one Step + two Face
+milling candidates, confidence=medium) and added it to the expectations
+baseline. Regression is now 19/19 PASS (was 18/18 + 1 uncovered).
+
+`Flanges-Body.step` and `X01_complex_freeform_surface_part.step` remain
+uncovered intentionally:
+- `Flanges-Body.step` has no documented ground-truth geometry to verify
+  detected counts against (Face milling=2, Hole=4, Slot=2, Step=1) —
+  adding it without verification risks baking in an undetected bug as a
+  blessed baseline.
+- `X01_complex_freeform_surface_part.step` is the dedicated BSPLINE/NURBS
+  test sample for the not-yet-started Epic F3 (complex/freeform detection +
+  manual-review routing, see `backlog_status.md` §5). It currently reports
+  `Slot=4`, which is very likely a misclassification of freeform surfaces as
+  slots — exactly the gap Epic F3 exists to close. Adding it to the baseline
+  now would cement that misclassification as "correct" and block the real
+  fix later.
+- Turning/turn-mill samples (`T01`-`T03`, `TM01`) are explicitly frozen
+  pending Epic 18 sign-off per `backlog_status.md` line 13.
+- The SLIDE BASE weldment is already covered separately in
+  `tests/vmc_golden_expectations.json`.

@@ -8,8 +8,8 @@
 
 | Metric | Count |
 |--------|-------|
-| Total entries | 18 |
-| PASS | 18 |
+| Total entries | 19 |
+| PASS | 19 |
 | FAIL | 0 |
 | MISSING | 0 |
 | ERROR | 0 |
@@ -26,6 +26,7 @@
 | `06_plate_4_large_bores_d35.step` | **PASS** | Face milling=2, Large hole / boring=4 | Face milling=2, Large hole / boring=4 | 4 large bores Ø35 |
 | `09_slotted_plate_single_center_slot.step` | **PASS** | Face milling=2, Slot=1 | Face milling=2, Slot=1 | Single center slot |
 | `13_rectangular_pocket_blind.step` | **PASS** | Face milling=2, Pocket=1 | Face milling=2, Pocket=1 | Through pocket/window — no floor face, emitted as Pocket confidence=low |
+| `17_stepped_block_single_step.step` | **PASS** | Face milling=2, Step=1 | Face milling=2, Step=1 | Single X/Y step in a tall block (120x90x500mm); Z-direction shoulder, depth=35mm |
 | `17b_top_milled_step_shoulder-Body.step` | **PASS** | Face milling=2, Step=1 | Face milling=2, Step=1 | Official step/shoulder regression sample — Y-direction shoulder step; depth=12 mm (replaces M06) |
 | `23_mixed_plate_holes_slot_pocket.step` | **PASS** | Face milling=2, Pocket=2, Slot=2 | Face milling=2, Pocket=2, Slot=2 | Mixed: face mill + 2 slots + 2 pockets |
 | `25_vmc_job_plate_all_basic_features.step` | **PASS** | Chamfer=1, Face milling=2, Large hole / boring=1, Slot=2 | Chamfer=1, Face milling=2, Large hole / boring=1, Slot=2 | All basic VMC features: face mill + slot + large bore + top edge chamfer (6 faces) |
@@ -41,7 +42,6 @@
 
 These files exist in `test_samples/` but have no entry in `feature_detection_expectations.json`:
 
-- `17_stepped_block_single_step.step`
 - `3100171001_01 SLIDE BASE-1812 ( FOR TOOL LOADER ).STEP`
 - `Flanges-Body.step`
 - `T01_lathe_stepped_shaft.step`

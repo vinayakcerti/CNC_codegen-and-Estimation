@@ -66,6 +66,14 @@
       }
     },
     {
+      "file": "17_stepped_block_single_step.step",
+      "notes": "Single X/Y step in a tall block (120x90x500mm); Z-direction shoulder, depth=35mm",
+      "expected_counts": {
+        "Face milling": 2,
+        "Step": 1
+      }
+    },
+    {
       "file": "17b_top_milled_step_shoulder-Body.step",
       "notes": "Official step/shoulder regression sample — Y-direction shoulder step; depth=12 mm (replaces M06)",
       "expected_counts": {
