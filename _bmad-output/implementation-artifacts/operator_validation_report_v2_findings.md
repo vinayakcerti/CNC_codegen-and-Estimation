@@ -94,6 +94,48 @@ the whole app (high blast radius, one-time migration), or whether a
 should be added to the candidate table without touching `x_pos`/`y_pos`
 (low risk, additive). The second option is recommended.
 
+### Update: additive backend field implemented, NOT yet surfaced in UI
+
+Implemented `transform_mesh_and_candidates`'s sibling,
+`geometry_transform._footprint_work_bounds()`, wired into
+`attach_work_coordinates()` as new additive `footprint_work_min` /
+`footprint_work_max` keys. Derived strictly from real tessellated
+`face_mesh_data` vertices (never fabricated from length/width heuristics —
+candidates without exact face geometry get no footprint, consistent with
+Epic 11.3's "honest approximate markers" principle). `x_pos`/`y_pos`
+semantics are untouched everywhere; this is purely additive. Covered by a
+new synthetic regression case in `run_geometry_transform_regression.py`
+using an axis-reversed transform (catches a naive "transform both corners
+directly" bug that would get min/max backwards).
+
+**Not wired into the UI table yet.** Testing against the 17b sample with
+corrected stock (130×100×40) exposed a separate, unresolved finding:
+
+| Feature | footprint_work_min/max | Expected (full part footprint) |
+|---|---|---|
+| Face Milling — Bottom | (0,0,0) – (120,90,0) | matches — full footprint ✓ |
+| Face Milling — Top | (0,0,30) – (90,90,30) | full footprint would be (0,0,30)–(120,90,30) |
+| Step | (0,0,30) – (90,90,30) | n/a (step floor is legitimately smaller) |
+
+The "Top" face milling candidate's exact face geometry is only 90×90 instead
+of spanning the full 120×90 footprint that "Bottom" correctly shows. This
+*could* be:
+1. Geometrically correct — if the step's cut genuinely interrupts the
+   physical surface that becomes "work Top" after the Y/Z axis reinterpretation
+   (`stock_allowance.py`'s `_orient_transform_to_feature_side` /
+   `orientation_face_candidates` selection, lines ~196–223), so the real
+   machinable Top face really is smaller there.
+2. A face-selection bug — the wrong orientation-candidate face got attached
+   to "Top" face milling, meaning the colored 3D highlight for that
+   operation may not show the true exact extent (Epic 11.2 implication).
+
+Couldn't distinguish these from code alone — needs either visual inspection
+in the 3D viewer (browser access was unavailable this session) or a CAD
+expert reviewing the actual 17b geometry. Tracked as **Epic 9.6 (backlog)**.
+Do not surface `footprint_work_min/max` for "Top"-setup face milling
+candidates in the UI until this is resolved, since an incorrect value would
+mislead the operator more than the original centroid-only display.
+
 ## 4. Regression coverage gap found while investigating — fixed
 
 While chasing this report, found `17_stepped_block_single_step.step` existed

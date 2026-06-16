@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from itertools import permutations
+from itertools import permutations, product
 
 
 _AXES = ("x", "y", "z")
@@ -205,6 +205,47 @@ def transform_mesh_and_candidates(mesh_data, candidates, transform):
     return new_mesh, new_candidates
 
 
+def _footprint_work_bounds(candidate, transform):
+    """Return (work_min, work_max) corner dicts for a candidate's actual face
+    geometry, or None if no exact face_mesh_data is available.
+
+    Only derived from real tessellated vertices — never fabricated from
+    length/width heuristics — so an absent result honestly means "no exact
+    footprint known" rather than guessing one (see Epic 11.3).
+    """
+    face_mesh_data = candidate.get("face_mesh_data")
+    if not face_mesh_data:
+        return None
+
+    cad_verts = [
+        vertex
+        for face_mesh in face_mesh_data
+        for vertex in face_mesh.get("vertices", [])
+    ]
+    if not cad_verts:
+        return None
+
+    cxmin = min(v[0] for v in cad_verts)
+    cxmax = max(v[0] for v in cad_verts)
+    cymin = min(v[1] for v in cad_verts)
+    cymax = max(v[1] for v in cad_verts)
+    czmin = min(v[2] for v in cad_verts)
+    czmax = max(v[2] for v in cad_verts)
+
+    # Transform all 8 CAD-frame corners — a transform with reversed axis
+    # signs can flip which CAD corner becomes the work-frame minimum.
+    work_corners = [
+        transform.point(x, y, z)
+        for x, y, z in product((cxmin, cxmax), (cymin, cymax), (czmin, czmax))
+    ]
+    work_min = tuple(min(corner[i] for corner in work_corners) for i in range(3))
+    work_max = tuple(max(corner[i] for corner in work_corners) for i in range(3))
+    return (
+        {axis: round(value, 6) for axis, value in zip(_AXES, work_min)},
+        {axis: round(value, 6) for axis, value in zip(_AXES, work_max)},
+    )
+
+
 def attach_work_coordinates(candidate, transform):
     """Attach raw CAD and transformed work coordinates without losing either."""
     result = dict(candidate)
@@ -228,6 +269,9 @@ def attach_work_coordinates(candidate, transform):
             for axis, value in zip(_AXES, work)
         }
         result["work_x_pos"], result["work_y_pos"], result["work_z_pos"] = work
+    footprint = _footprint_work_bounds(result, transform)
+    if footprint is not None:
+        result["footprint_work_min"], result["footprint_work_max"] = footprint
     setup_vectors = {
         "Right": (1, 0, 0),
         "Left": (-1, 0, 0),

@@ -132,6 +132,56 @@ def _run_candidate_attachment():
         raise AssertionError(f"candidate work position incorrect: {candidate['work_position']}")
 
 
+def _run_footprint_work_bounds():
+    """Epic 9.5: additive footprint_work_min/max derived from real face geometry.
+
+    Uses an axis-reversed transform so a naive "transform both corners
+    directly" implementation would get min/max backwards -- the function
+    must take componentwise min/max across all 8 transformed corners.
+    """
+    transform = build_transform(
+        {
+            "x_range": (-60.0, 60.0),
+            "y_range": (-100.0, 100.0),
+            "z_range": (0.0, 30.0),
+        },
+        signs=(-1, 1, 1),
+    )
+    candidate = attach_work_coordinates({
+        "candidate_id": "FM_TOP",
+        "feature_type": "Face milling",
+        "x_pos": 0.0,
+        "y_pos": 0.0,
+        "z_pos": 30.0,
+        "face_mesh_data": [{
+            "vertices": [[-60.0, -100.0, 30.0], [60.0, -100.0, 30.0],
+                         [-60.0, 100.0, 30.0], [60.0, 100.0, 30.0]],
+            "triangles": [[0, 1, 2], [1, 2, 3]],
+            "face_index": 1,
+        }],
+    }, transform)
+    if "footprint_work_min" not in candidate or "footprint_work_max" not in candidate:
+        raise AssertionError("face milling with face_mesh_data should get a footprint")
+    _assert_close(
+        tuple(candidate["footprint_work_min"][a] for a in ("x", "y", "z")),
+        (0.0, 0.0, 30.0), "footprint work min (axis-reversed transform)",
+    )
+    _assert_close(
+        tuple(candidate["footprint_work_max"][a] for a in ("x", "y", "z")),
+        (120.0, 200.0, 30.0), "footprint work max (axis-reversed transform)",
+    )
+
+    no_mesh_candidate = attach_work_coordinates({
+        "candidate_id": "MARKER_ONLY",
+        "feature_type": "Hole",
+        "x_pos": 10.0, "y_pos": 10.0, "z_pos": 10.0,
+    }, build_transform({"x_range": (0, 10), "y_range": (0, 10), "z_range": (0, 10)}))
+    if "footprint_work_min" in no_mesh_candidate:
+        raise AssertionError(
+            "candidates without exact face_mesh_data must not get a fabricated footprint"
+        )
+
+
 def _run_mesh_and_candidate_transform():
     """Epic 19: 3D-viewer mesh and face overlays must render in work frame.
 
@@ -205,6 +255,8 @@ def main():
     print("PASS 17b CAD-to-work orientation and candidate bounds")
     _run_mesh_and_candidate_transform()
     print("PASS mesh and face-overlay transform to work frame (Epic 19)")
+    _run_footprint_work_bounds()
+    print("PASS footprint_work_min/max derived from exact face geometry (Epic 9.5)")
     return 0
 
 
