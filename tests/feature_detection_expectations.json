@@ -67,7 +67,7 @@
     },
     {
       "file": "17_stepped_block_single_step.step",
-      "notes": "Single X/Y step in a tall block (120x90x500mm); Z-direction shoulder, depth=35mm",
+      "notes": "Legacy sample, PRD-documented as side-profile/extruded geometry rather than a representative top-milled step (superseded for that purpose by 17b). Kept here only as a stability sanity check: tall block (120x90x500mm), one Z-direction Step, depth=35mm, confidence=medium, no crash or false positives.",
       "expected_counts": {
         "Face milling": 2,
         "Step": 1

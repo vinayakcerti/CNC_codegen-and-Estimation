@@ -105,6 +105,14 @@ block — matches the file name and produces exactly one Step + two Face
 milling candidates, confidence=medium) and added it to the expectations
 baseline. Regression is now 19/19 PASS (was 18/18 + 1 uncovered).
 
+Note: `cnc_process_planner_prd_current_state.md` line 185 documents this
+sample as "more like a side-profile/extruded part, not a proper top-milled
+step" — it was historically deprioritized as non-representative VMC
+geometry (17b later became the representative top-milled step sample).
+The baseline entry's notes field reflects this — it's a stability sanity
+check (no crash, no false positives, consistent counts across reruns),
+not a claim that this is exemplary milling geometry.
+
 `Flanges-Body.step` and `X01_complex_freeform_surface_part.step` remain
 uncovered intentionally:
 - `Flanges-Body.step` has no documented ground-truth geometry to verify
