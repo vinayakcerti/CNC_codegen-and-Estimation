@@ -113,6 +113,30 @@ def _run_17b_orientation():
             f"got {source_setup}/{transformed_setup}"
         )
 
+    # Epic 9.6: 17b genuinely has a step cut into its top surface (confirmed by
+    # direct CAD face inspection — 8 faces total, the y=30 plateau spans only
+    # x=[-45,45] while a separate y=18 shelf covers x=[45,75], 12mm lower).
+    # "Top" face milling's exact footprint must stay smaller than "Bottom"'s —
+    # if a future change makes them equal, it has likely started attaching the
+    # wrong orientation face (the stepped shelf, not the flat plateau).
+    face_mills = [c for c in exact_candidates if c.get("feature_type") in ("Face Milling", "Face milling")]
+    top_face = next(c for c in face_mills if c.get("work_setup_label") == "Top")
+    bottom_face = next(c for c in face_mills if c.get("work_setup_label") == "Bottom")
+    top_min, top_max = top_face.get("footprint_work_min"), top_face.get("footprint_work_max")
+    bottom_min, bottom_max = bottom_face.get("footprint_work_min"), bottom_face.get("footprint_work_max")
+    if not (top_min and top_max and bottom_min and bottom_max):
+        raise AssertionError("17b face milling candidates should carry exact footprints")
+    top_area = (top_max["x"] - top_min["x"]) * (top_max["y"] - top_min["y"])
+    bottom_area = (bottom_max["x"] - bottom_min["x"]) * (bottom_max["y"] - bottom_min["y"])
+    if not (top_area < bottom_area - 1.0):
+        raise AssertionError(
+            f"17b Top face milling footprint area ({top_area}) should be smaller "
+            f"than Bottom's ({bottom_area}) — the part has a real step cut into "
+            f"the top surface; equal areas likely mean the wrong face was attached"
+        )
+    _assert_close((bottom_min["x"], bottom_min["y"]), (0.0, 0.0), "17b Bottom footprint spans full part")
+    _assert_close((bottom_max["x"], bottom_max["y"]), (120.0, 90.0), "17b Bottom footprint spans full part")
+
 
 def _run_candidate_attachment():
     transform = build_transform({

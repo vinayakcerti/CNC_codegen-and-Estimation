@@ -129,12 +129,30 @@ of spanning the full 120×90 footprint that "Bottom" correctly shows. This
    to "Top" face milling, meaning the colored 3D highlight for that
    operation may not show the true exact extent (Epic 11.2 implication).
 
-Couldn't distinguish these from code alone — needs either visual inspection
-in the 3D viewer (browser access was unavailable this session) or a CAD
-expert reviewing the actual 17b geometry. Tracked as **Epic 9.6 (backlog)**.
-Do not surface `footprint_work_min/max` for "Top"-setup face milling
-candidates in the UI until this is resolved, since an incorrect value would
-mislead the operator more than the original centroid-only display.
+**Resolved — not a bug.** Direct CAD topology inspection (8 total faces in
+17b, dumped with CadQuery `Faces()`/`BoundingBox()`/`normalAt()`) settled it
+without needing a 3D viewer:
+
+- `face[5]`: CAD-Y=30 plane, x=[-45,45] (90mm), z=[0,90] — the raised plateau
+- `face[3]`: CAD-Y=18 plane, x=[45,75] (30mm), z=[0,90] — a genuinely lower
+  shelf, 12mm down from face[5] (matches the Step candidate's depth=12mm
+  exactly)
+
+The part has a real step cut into the top surface. "Top" face milling's
+`face_mesh_data` (90×90, face[5] only) is geometrically correct — it's the
+flat, un-stepped plateau. The lower shelf is correctly classified as the
+separate Step feature, not face milling. The `length`/`width` fields showing
+full stock dimensions (130×100) are intentional, not a bug either —
+`stock_allowance.py` widens those specifically for operation-planning
+purposes (a face-mill pass must traverse the full stock width even where
+the geometry has a step), while the exact face mesh correctly shows only
+the true flat region for the 3D highlight. Display fields = toolpath
+extent; exact mesh = true geometry. This is the honest-visualization
+principle (Epic 11.2/11.3) working as designed.
+
+`footprint_work_min/max` can be safely surfaced in the UI for any
+candidate that has exact `face_mesh_data` — there is no remaining
+correctness concern blocking that.
 
 ## 4. Regression coverage gap found while investigating — fixed
 
