@@ -12,6 +12,7 @@ from modules.geometry_transform import (
     attach_work_coordinates,
     build_transform,
     infer_work_transform,
+    transform_mesh_and_candidates,
 )
 from modules.step_parser import (
     detect_feature_candidates_from_cadquery_file,
@@ -131,6 +132,70 @@ def _run_candidate_attachment():
         raise AssertionError(f"candidate work position incorrect: {candidate['work_position']}")
 
 
+def _run_mesh_and_candidate_transform():
+    """Epic 19: 3D-viewer mesh and face overlays must render in work frame.
+
+    Regression for the operator-reported bug where the mesh hover tooltip
+    showed raw CAD-centered coordinates (e.g. y=100, half of a 200mm-wide
+    part) instead of corner-origin work coordinates (y=200 at the far edge).
+    """
+    dims = {
+        "x_range": (-60.0, 60.0),
+        "y_range": (-100.0, 100.0),
+        "z_range": (0.0, 30.0),
+    }
+    transform = build_transform(dims)
+
+    mesh_data = {
+        "x": [-60.0, 60.0, 60.0],
+        "y": [-100.0, 100.0, -100.0],
+        "z": [0.0, 30.0, 0.0],
+        "i": [0], "j": [1], "k": [2],
+    }
+    candidates = [{
+        "candidate_id": "H001",
+        "feature_type": "Hole",
+        "x_pos": 45.0,
+        "y_pos": 85.0,
+        "z_pos": 30.0,
+        "face_mesh_data": [{
+            "vertices": [[45.0, 85.0, 30.0], [50.0, 85.0, 30.0]],
+            "triangles": [[0, 1, 0]],
+            "face_index": 7,
+        }],
+    }]
+
+    new_mesh, new_candidates = transform_mesh_and_candidates(mesh_data, candidates, transform)
+
+    _assert_close(
+        (min(new_mesh["x"]), max(new_mesh["x"])), (0.0, 120.0), "mesh x work-frame range",
+    )
+    _assert_close(
+        (min(new_mesh["y"]), max(new_mesh["y"])), (0.0, 200.0), "mesh y work-frame range",
+    )
+    _assert_close(
+        (min(new_mesh["z"]), max(new_mesh["z"])), (0.0, 30.0), "mesh z work-frame range",
+    )
+    if new_mesh["i"] != mesh_data["i"]:
+        raise AssertionError("triangle indices must pass through unchanged")
+
+    cand = new_candidates[0]
+    _assert_close((cand["x_pos"], cand["y_pos"], cand["z_pos"]), (105.0, 185.0, 30.0),
+                  "candidate position transformed to work frame")
+    new_verts = cand["face_mesh_data"][0]["vertices"]
+    _assert_close(new_verts[0], (105.0, 185.0, 30.0), "face mesh vertex 0 transformed")
+    _assert_close(new_verts[1], (110.0, 185.0, 30.0), "face mesh vertex 1 transformed")
+
+    # Original inputs must not be mutated — other code paths (stock_allowance.py)
+    # depend on x_pos/y_pos/face_mesh_data staying in the raw CAD frame.
+    if mesh_data["x"] != [-60.0, 60.0, 60.0]:
+        raise AssertionError("input mesh_data was mutated")
+    if candidates[0]["x_pos"] != 45.0:
+        raise AssertionError("input candidate was mutated")
+    if candidates[0]["face_mesh_data"][0]["vertices"][0] != [45.0, 85.0, 30.0]:
+        raise AssertionError("input face_mesh_data vertices were mutated")
+
+
 def main():
     _run_basic_transforms()
     print("PASS basic coordinate transforms")
@@ -138,6 +203,8 @@ def main():
     print("PASS candidate CAD/work coordinate preservation")
     _run_17b_orientation()
     print("PASS 17b CAD-to-work orientation and candidate bounds")
+    _run_mesh_and_candidate_transform()
+    print("PASS mesh and face-overlay transform to work frame (Epic 19)")
     return 0
 
 

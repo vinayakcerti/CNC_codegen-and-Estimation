@@ -33,6 +33,7 @@ from modules.session_integrity import (
     validate_session_consistency,
     DEFAULT_STOCK,
 )
+from modules.geometry_transform import infer_work_transform
 from modules.starting_part_policy import prepare_candidates_for_starting_part
 from modules.setup_sheet import generate_setup_sheet
 from modules.speeds_feeds import (
@@ -324,6 +325,7 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
     ) if key_prefix == "_smw_3d_" else set()
 
     if _mesh:
+        _transform = infer_work_transform(st.session_state.get("step_parse_result", {}), _stk)
         fig_mesh = build_step_mesh3d(
             _mesh, _stk,
             candidates=_all_cands,
@@ -335,6 +337,7 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
             highlighted_candidate_ids=_hl_ids or None,
             part_opacity=_part_opacity,
             camera_view=_camera_view,
+            transform=_transform,
         )
         fig_mesh.update_layout(
             showlegend=True,

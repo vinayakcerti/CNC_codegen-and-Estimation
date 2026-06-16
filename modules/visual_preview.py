@@ -2,6 +2,8 @@ import plotly.graph_objects as go
 import math
 import re
 
+from modules.geometry_transform import transform_mesh_and_candidates
+
 
 # ---------------------------------------------------------------------------
 # Feature color palette (public — used by chart legend and UI)
@@ -608,7 +610,8 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
                       show_face_milling=False, show_markers=True,
                       highlighted_candidate_ids=None,
                       part_opacity=1.0,
-                      camera_view="Isometric"):
+                      camera_view="Isometric",
+                      transform=None):
     """
     Build a rotatable Plotly Mesh3d figure from pre-computed tessellation data.
 
@@ -631,10 +634,18 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
         show_markers     : if True, render candidates without face_mesh_data as marker overlays
         part_opacity     : opacity for the base part body, useful when inspecting overlays
         camera_view      : initial camera preset: Isometric, Top, Front, Right
+        transform        : optional CoordinateTransform (geometry_transform.py). When given,
+                           the mesh and all candidate positions/face overlays are converted
+                           from the raw CAD tessellation frame into the corner-origin work
+                           frame used by the stock dimensions and feature table, so hover
+                           coordinates and overlays line up with the rest of the UI.
 
     Returns:
         plotly.graph_objects.Figure
     """
+    if transform is not None:
+        mesh_data, candidates = transform_mesh_and_candidates(mesh_data, candidates, transform)
+
     xs, ys, zs = mesh_data["x"], mesh_data["y"], mesh_data["z"]
     part_opacity = max(0.15, min(float(part_opacity or 1.0), 1.0))
 
@@ -687,6 +698,7 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
         lightposition=dict(x=1, y=1, z=2),
         name="Part body",
         showlegend=True,
+        hovertemplate="Part body<br>x: %{x:.1f} mm<br>y: %{y:.1f} mm<br>z: %{z:.1f} mm<extra></extra>",
     ))
 
     if show_stock_box:

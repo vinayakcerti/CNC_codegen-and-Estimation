@@ -1,6 +1,6 @@
 # VMC Feature Detection Regression Report
 
-**Date:** 2026-06-13  
+**Date:** 2026-06-16  
 **Branch:** v2-feature-review-engine  
 **Options:** `(none)`  
 

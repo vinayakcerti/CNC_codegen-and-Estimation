@@ -17,6 +17,8 @@ development_status:
   9-1-define-coordinate-frames-and-datum-contract: done
   9-2-implement-cad-to-planning-transform: done
   9-3-apply-transform-across-the-product: done
+  9-4-3d-viewer-coordinate-frame-fix: done
+  9-5-feature-position-corner-vs-centroid-semantics: backlog
   epic-9-retrospective: optional
 
   epic-10: done

@@ -168,6 +168,43 @@ def infer_work_transform(part_dims, stock=None, tolerance=0.01):
     return build_transform(part_dims, chosen, reason=reason)
 
 
+def transform_mesh_and_candidates(mesh_data, candidates, transform):
+    """Return work-frame copies of a tessellated mesh and its candidate overlays.
+
+    mesh_data and candidates are read-only here — new dicts/lists are returned
+    so callers (e.g. the 3D viewer) can render in the same corner-origin work
+    frame used by the stock dimensions and feature table, without disturbing
+    the CAD-frame data that stock_allowance.py relies on elsewhere.
+    """
+    new_mesh = dict(mesh_data or {})
+    xs, ys, zs = mesh_data.get("x", []), mesh_data.get("y", []), mesh_data.get("z", [])
+    pts = [transform.point(x, y, z) for x, y, z in zip(xs, ys, zs)]
+    new_mesh["x"] = [p[0] for p in pts]
+    new_mesh["y"] = [p[1] for p in pts]
+    new_mesh["z"] = [p[2] for p in pts]
+
+    new_candidates = []
+    for cand in (candidates or []):
+        new_cand = dict(cand)
+        x0, y0, z0 = cand.get("x_pos") or 0, cand.get("y_pos") or 0, cand.get("z_pos") or 0
+        wx, wy, wz = transform.point(x0, y0, z0)
+        new_cand["x_pos"], new_cand["y_pos"], new_cand["z_pos"] = wx, wy, wz
+
+        face_mesh_data = cand.get("face_mesh_data")
+        if face_mesh_data:
+            new_face_mesh_data = []
+            for face_mesh in face_mesh_data:
+                verts = face_mesh.get("vertices", [])
+                new_verts = [list(transform.point(v[0], v[1], v[2])) for v in verts]
+                new_face_mesh = dict(face_mesh)
+                new_face_mesh["vertices"] = new_verts
+                new_face_mesh_data.append(new_face_mesh)
+            new_cand["face_mesh_data"] = new_face_mesh_data
+        new_candidates.append(new_cand)
+
+    return new_mesh, new_candidates
+
+
 def attach_work_coordinates(candidate, transform):
     """Attach raw CAD and transformed work coordinates without losing either."""
     result = dict(candidate)
