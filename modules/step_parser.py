@@ -1933,21 +1933,29 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
                 })
 
     # ── F. Chamfer candidates ─────────────────────────────────────────────────
-    # Detect simple top outer-edge chamfers: PLANE faces with an angled-upward
-    # normal (nz between 0.40 and 0.92) that sit near the top of the part.
-    # All qualifying faces are grouped into a single CH001 candidate.
+    # Detect outer-edge chamfers on the top and/or bottom setup faces.
+    # PLANE faces with an angled normal (|nz| between 0.40 and 0.92) that sit
+    # near z_max (top chamfers, nz > 0) or near z_min (bottom chamfers, nz < 0)
+    # are grouped into separate candidates — one per setup face so they are
+    # never collapsed into a single misleading entry.
+    # Fillets are excluded by the geom_type == "PLANE" filter (fillets are
+    # TOROIDAL or BSPLINE surfaces, never PLANE).
 
-    _CH_NZ_MIN    = 0.40    # nz lower bound: ~24° from horizontal
-    _CH_NZ_MAX    = 0.92    # nz upper bound: just below Section A flat-face threshold
-    _CH_HORIZ_MIN = 0.40    # |nx| or |ny| must be significant
-    _CH_MAX_AREA  = 2000.0  # mm² — upper bound for a single chamfer face
-    _CH_MIN_AREA  = 50.0    # mm² — ignore slivers
-    _CH_Z_FRAC    = 0.20    # z_center within this fraction of part height from top
+    _CH_NZ_ABS_MIN = 0.40    # |nz| lower bound: ~24° from horizontal
+    _CH_NZ_ABS_MAX = 0.92    # |nz| upper bound: just below flat-face threshold
+    _CH_HORIZ_MIN  = 0.40    # |nx| or |ny| must be significant
+    _CH_MAX_AREA   = 2000.0  # mm² — upper bound for a single chamfer face
+    _CH_MIN_AREA   = 50.0    # mm² — ignore slivers
+    _CH_Z_FRAC     = 0.20    # z_center within this fraction of part height from edge
 
     _ch_p_z_max = part_bbox.get("z_range", (0.0, 0.0))[1]
-    _ch_z_lo    = _ch_p_z_max - max(8.0, part_height * _CH_Z_FRAC)
+    _ch_p_z_min = part_bbox.get("z_range", (0.0, 0.0))[0]
+    _ch_z_guard = max(8.0, part_height * _CH_Z_FRAC)
+    _ch_top_lo  = _ch_p_z_max - _ch_z_guard   # top chamfers: z_center above this
+    _ch_bot_hi  = _ch_p_z_min + _ch_z_guard   # bottom chamfers: z_center below this
 
-    _ch_faces = []
+    _ch_top_faces = []
+    _ch_bot_faces = []
     for _r in face_records:
         if _r.get("geom_type") != "PLANE":
             continue
@@ -1957,21 +1965,26 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
         _ch_a   = _r.get("area_mm2") or 0.0
         _ch_cz  = _r.get("center_z") or 0.0
 
-        if not (_CH_NZ_MIN <= _ch_nz <= _CH_NZ_MAX):
-            continue   # not angled upward in the chamfer range
+        if not (_CH_NZ_ABS_MIN <= abs(_ch_nz) <= _CH_NZ_ABS_MAX):
+            continue   # not in the chamfer angle range
         if max(_ch_hnx, _ch_hny) < _CH_HORIZ_MIN:
             continue   # no significant horizontal component
         if not (_CH_MIN_AREA <= _ch_a <= _CH_MAX_AREA):
-            continue   # too small (sliver) or too large (design face / wall)
-        if _ch_cz < _ch_z_lo:
-            continue   # not near the top of the part
+            continue   # sliver or large design face
 
-        _ch_faces.append(_r)
+        if _ch_nz > 0 and _ch_cz >= _ch_top_lo:
+            _ch_top_faces.append(_r)     # angled upward, near top
+        elif _ch_nz < 0 and _ch_cz <= _ch_bot_hi:
+            _ch_bot_faces.append(_r)     # angled downward, near bottom
 
-    if _ch_faces:
-        # Estimate chamfer size from the smallest span on each face
+    _ch_counter = [0]
+
+    def _emit_chamfer(ch_faces, setup_label):
+        """Build and append a Chamfer candidate from a list of qualifying faces."""
+        _ch_counter[0] += 1
+        _cid = f"CH{_ch_counter[0]:03d}"
         _ch_sizes = []
-        for _cf in _ch_faces:
+        for _cf in ch_faces:
             _cf_dims = [
                 v for v in [
                     _cf.get("bbox_length_x") or 0.0,
@@ -1981,26 +1994,25 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
             ]
             if _cf_dims:
                 _ch_sizes.append(min(_cf_dims))
-        _ch_size = round(sum(_ch_sizes) / len(_ch_sizes), 1) if _ch_sizes else 0.0
-        _ch_n    = len(_ch_faces)
-        _ch_ids  = ", ".join(f"#{_cf['face_index']}" for _cf in _ch_faces)
-        _ch_areas = [_cf.get("area_mm2") or 0.0 for _cf in _ch_faces]
-        _ch_nzs   = [_cf.get("normal_z") or 0.0 for _cf in _ch_faces]
-
-        _ch_note = (
-            f"{_ch_n} angled PLANE face(s) near top of part "
-            f"classified as top outer-edge chamfer. "
+        _ch_size  = round(sum(_ch_sizes) / len(_ch_sizes), 1) if _ch_sizes else 0.0
+        _ch_n     = len(ch_faces)
+        _ch_ids   = ", ".join(f"#{_cf['face_index']}" for _cf in ch_faces)
+        _ch_areas = [_cf.get("area_mm2") or 0.0 for _cf in ch_faces]
+        _ch_nzs   = [_cf.get("normal_z") or 0.0 for _cf in ch_faces]
+        _ch_note  = (
+            f"{_ch_n} angled PLANE face(s) near {setup_label.lower()} of part "
+            f"classified as {setup_label.lower()} outer-edge chamfer. "
             f"Face indices: {_ch_ids}. "
-            f"normal_z range: {min(_ch_nzs):.3f}–{max(_ch_nzs):.3f}. "
+            f"nz range: {min(_ch_nzs):.3f}–{max(_ch_nzs):.3f}. "
             f"Area range: {min(_ch_areas):.1f}–{max(_ch_areas):.1f} mm². "
-            f"z_center ≥ {_ch_z_lo:.1f} mm (top={_ch_p_z_max:.1f} mm). "
             f"Estimated chamfer size ≈ {_ch_size:.1f} mm (bbox small span average)."
         )
-
         candidates.append({
-            "candidate_id":     "CH001",
-            "feature_name":     f"Top edge chamfer ~{_ch_size:.1f}×{_ch_size:.1f} mm "
-                                f"({_ch_n} face{'s' if _ch_n != 1 else ''})",
+            "candidate_id":     _cid,
+            "feature_name":     (
+                f"{setup_label} edge chamfer ~{_ch_size:.1f}×{_ch_size:.1f} mm "
+                f"({_ch_n} face{'s' if _ch_n != 1 else ''})"
+            ),
             "feature_type":     "Chamfer",
             "quantity":         _ch_n,
             "x_pos":            0.0,
@@ -2012,13 +2024,18 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
             "tolerance_note":   "",
             "priority":         4,
             "confidence":       "medium" if _ch_n >= 3 else "low",
-            "setup_label":      "Top",
-            "detection_source": "angled_top_plane_faces",
+            "setup_label":      setup_label,
+            "detection_source": "angled_plane_faces",
             "detection_note":   _ch_note,
-            "face_indices":     [_cf["face_index"] for _cf in _ch_faces],
+            "face_indices":     [_cf["face_index"] for _cf in ch_faces],
             "accepted": False,
             "ignored":  False,
         })
+
+    if _ch_top_faces:
+        _emit_chamfer(_ch_top_faces, "Top")
+    if _ch_bot_faces:
+        _emit_chamfer(_ch_bot_faces, "Bottom")
 
     records_by_index = {
         record.get("face_index"): record

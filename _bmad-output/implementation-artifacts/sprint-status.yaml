@@ -1,24 +1,24 @@
 # generated: 2026-06-11
-# last_updated: 2026-06-16
+# last_updated: 2026-06-18
 # project: CNC Process Planner
 # project_key: NOKEY
 # tracking_system: file-system
 # story_location: _bmad-output/implementation-artifacts
 
 generated: 2026-06-11
-last_updated: 2026-06-16
+last_updated: 2026-06-18
 project: CNC Process Planner
 project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 
 development_status:
-  epic-9: in-progress
+  epic-9: done
   9-1-define-coordinate-frames-and-datum-contract: done
   9-2-implement-cad-to-planning-transform: done
   9-3-apply-transform-across-the-product: done
   9-4-3d-viewer-coordinate-frame-fix: done
-  9-5-feature-position-corner-vs-centroid-semantics: in-progress
+  9-5-feature-position-corner-vs-centroid-semantics: done
   9-6-top-face-milling-footprint-needs-visual-verification: done
   epic-9-retrospective: optional
 
