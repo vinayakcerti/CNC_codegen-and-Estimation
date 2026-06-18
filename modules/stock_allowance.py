@@ -256,9 +256,9 @@ def apply_stock_allowance_to_candidates(
                     or attach_work_coordinates(cand, work_transform).get("work_setup_label")
                 )
                 face_allowance = z_plus if work_setup == "Top" else z_minus
+                cand["feature_type"] = "Face Milling"
+                cand["depth"] = round(face_allowance, 3)
                 if face_allowance > tolerance:
-                    cand["feature_type"] = "Face Milling"
-                    cand["depth"] = round(face_allowance, 3)
                     note = cand.get("detection_note") or ""
                     stock_note = (
                         f"Depth adjusted from configured stock placement: "

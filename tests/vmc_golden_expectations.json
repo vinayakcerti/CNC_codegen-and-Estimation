@@ -25,7 +25,7 @@
       "stock_mm": [120.0, 200.0, 30.0],
       "work_axes_from_cad": ["x", "y", "z"],
       "detected_counts": {"Face milling": 2, "Hole": 4},
-      "adjusted_counts": {"Face milling": 2, "Hole": 4}
+      "adjusted_counts": {"Face Milling": 2, "Hole": 4}
     },
     {
       "file": "M02_vmc_slot_plate.step",
@@ -35,7 +35,7 @@
       "stock_mm": [120.0, 200.0, 30.0],
       "work_axes_from_cad": ["x", "y", "z"],
       "detected_counts": {"Face milling": 2, "Slot": 1},
-      "adjusted_counts": {"Face milling": 2, "Slot": 1}
+      "adjusted_counts": {"Face Milling": 2, "Slot": 1}
     },
     {
       "file": "M03_vmc_blind_rectangular_pocket.step",
@@ -45,7 +45,7 @@
       "stock_mm": [100.0, 160.0, 30.0],
       "work_axes_from_cad": ["x", "y", "z"],
       "detected_counts": {"Face milling": 2, "Pocket": 1},
-      "adjusted_counts": {"Face milling": 2, "Pocket": 1}
+      "adjusted_counts": {"Face Milling": 2, "Pocket": 1}
     },
     {
       "file": "M05_vmc_large_bore_plate.step",
@@ -55,7 +55,7 @@
       "stock_mm": [100.0, 160.0, 30.0],
       "work_axes_from_cad": ["x", "y", "z"],
       "detected_counts": {"Face milling": 2, "Hole": 2, "Large hole / boring": 1},
-      "adjusted_counts": {"Face milling": 2, "Hole": 2, "Large hole / boring": 1}
+      "adjusted_counts": {"Face Milling": 2, "Hole": 2, "Large hole / boring": 1}
     },
     {
       "file": "M07_vmc_chamfered_plate.step",
@@ -65,7 +65,7 @@
       "stock_mm": [80.0, 120.0, 25.0],
       "work_axes_from_cad": ["x", "y", "z"],
       "detected_counts": {"Face milling": 2, "Hole": 4, "Chamfer": 1},
-      "adjusted_counts": {"Face milling": 2, "Hole": 4, "Chamfer": 1}
+      "adjusted_counts": {"Face Milling": 2, "Hole": 4, "Chamfer": 1}
     },
     {
       "file": "25_vmc_job_plate_all_basic_features.step",
@@ -75,7 +75,7 @@
       "stock_mm": [250.0, 350.0, 50.0],
       "work_axes_from_cad": ["x", "y", "z"],
       "detected_counts": {"Face milling": 2, "Large hole / boring": 1, "Slot": 2, "Chamfer": 1},
-      "adjusted_counts": {"Face milling": 2, "Large hole / boring": 1, "Slot": 2, "Chamfer": 1}
+      "adjusted_counts": {"Face Milling": 2, "Large hole / boring": 1, "Slot": 2, "Chamfer": 1}
     },
     {
       "file": "3100171001_01 SLIDE BASE-1812 ( FOR TOOL LOADER ).STEP",
@@ -85,7 +85,7 @@
       "stock_mm": [685.0, 140.5, 200.0],
       "work_axes_from_cad": ["x", "y", "z"],
       "detected_counts": {"Face milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 1},
-      "adjusted_counts": {"Face milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 1},
+      "adjusted_counts": {"Face Milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 1},
       "grouping": {"starting_part_type": "Weldment / Fabricated Part", "slot_review_locations": 38}
     }
   ]

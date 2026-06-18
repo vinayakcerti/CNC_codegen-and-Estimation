@@ -459,6 +459,15 @@ def _mark_candidate_added(candidate):
 
 
 def _candidate_work_value(candidate, axis):
+    # When "corner" is selected and exact face geometry is available, use the
+    # footprint minimum corner instead of the face centroid. Falls back to
+    # centroid for candidates without tessellated face_mesh_data (e.g. holes,
+    # approximate markers) since a fabricated corner would be dishonest.
+    if axis in ("x", "y") and st.session_state.get("position_reference") == "corner":
+        footprint_min = candidate.get("footprint_work_min") or {}
+        corner_value = footprint_min.get(axis)
+        if corner_value is not None:
+            return float(corner_value)
     work_position = candidate.get("work_position") or {}
     value = work_position.get(axis)
     if value is None:
@@ -851,6 +860,8 @@ def init_session():
         st.session_state.est_quote_currency = "USD ($)"
     if "est_exchange_rate" not in st.session_state:
         st.session_state.est_exchange_rate = 1.0
+    if "position_reference" not in st.session_state:
+        st.session_state.position_reference = "center"
     if "step_mesh_data" not in st.session_state:
         st.session_state.step_mesh_data = None
     if "starting_part_type" not in st.session_state:
@@ -1252,6 +1263,9 @@ def page_upload_step():
                 dims = [f"{v:.2f}" for v in (l, w, d) if v > 0]
                 return (" × ".join(dims) + " mm") if dims else "—"
 
+            _pos_ref = st.session_state.get("position_reference", "center")
+            _xy_label = "Work X — corner (mm)" if _pos_ref == "corner" else "Work X — center (mm)"
+            _yx_label = "Work Y — corner (mm)" if _pos_ref == "corner" else "Work Y — center (mm)"
             _rows = []
             for _c in _cands_tbl:
                 _rows.append({
@@ -1259,8 +1273,8 @@ def page_upload_step():
                     "Type":            _c.get("feature_type",  "—"),
                     "Name":            _c.get("feature_name",  "—"),
                     "Measurement":     _meas(_c),
-                    "CAD X (mm)":      _fv(_c.get("x_pos")),
-                    "CAD Y (mm)":      _fv(_c.get("y_pos")),
+                    _xy_label:         _fv(_candidate_work_value(_c, "x")),
+                    _yx_label:         _fv(_candidate_work_value(_c, "y")),
                     "Diameter (mm)":   _fv(_c.get("diameter")),
                     "Length (mm)":     _fv(_c.get("length")),
                     "Width (mm)":      _fv(_c.get("width")),
@@ -1272,8 +1286,8 @@ def page_upload_step():
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "CAD X (mm)":    st.column_config.NumberColumn("CAD X (mm)",    format="%.2f"),
-                    "CAD Y (mm)":    st.column_config.NumberColumn("CAD Y (mm)",    format="%.2f"),
+                    _xy_label:       st.column_config.NumberColumn(_xy_label,       format="%.2f"),
+                    _yx_label:       st.column_config.NumberColumn(_yx_label,       format="%.2f"),
                     "Diameter (mm)": st.column_config.NumberColumn("Diameter (mm)", format="%.2f"),
                     "Length (mm)":   st.column_config.NumberColumn("Length (mm)",   format="%.2f"),
                     "Width (mm)":    st.column_config.NumberColumn("Width (mm)",    format="%.2f"),
@@ -1493,6 +1507,44 @@ def page_machine_setup():
         f"{st.session_state.selected_machine['machine_type']} / "
         f"{st.session_state.selected_machine['controller']}"
     )
+
+    st.divider()
+
+    # ── Section: Planning Preferences ────────────────────────────────────────
+    st.subheader("Planning Preferences")
+    st.caption(
+        "These settings affect how feature positions are reported in the feature table, "
+        "operation plan, and G-code output."
+    )
+    _pos_options = {
+        "center": "Center point  —  X/Y at the face centroid (tool centre path reference)",
+        "corner": "Min corner  —  X/Y at the feature's nearest edge (datum/setup reference)",
+    }
+    _pos_current = st.session_state.get("position_reference", "center")
+    _pos_sel = st.radio(
+        "Feature X/Y position reference",
+        options=list(_pos_options.keys()),
+        format_func=lambda k: _pos_options[k],
+        index=list(_pos_options.keys()).index(_pos_current),
+        key="_pos_ref_radio",
+        help=(
+            "**Center point:** X/Y shows where the tool centre sits over the feature. "
+            "Used when programming directly from the CAD centroid. "
+            "\n\n**Min corner:** X/Y shows the closest edge of the feature from the "
+            "work datum. Matches how most setup sheets and inspection plans describe "
+            "feature location from a corner datum."
+        ),
+    )
+    if _pos_sel != _pos_current:
+        st.session_state.position_reference = _pos_sel
+        st.rerun()
+
+    if st.session_state.position_reference == "corner":
+        st.info(
+            "Min corner mode: X/Y uses the footprint minimum corner when exact face "
+            "geometry is available. Holes and approximate features fall back to centroid "
+            "automatically (no exact corner can be derived without tessellated geometry)."
+        )
 
     st.divider()
 
