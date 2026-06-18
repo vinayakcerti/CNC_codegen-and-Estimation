@@ -84,8 +84,8 @@
       "bbox_mm": [685.0, 140.5, 200.0],
       "stock_mm": [685.0, 140.5, 200.0],
       "work_axes_from_cad": ["x", "y", "z"],
-      "detected_counts": {"Face milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 1},
-      "adjusted_counts": {"Face Milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 1},
+      "detected_counts": {"Face milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 2},
+      "adjusted_counts": {"Face Milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 2},
       "grouping": {"starting_part_type": "Weldment / Fabricated Part", "slot_review_locations": 38}
     }
   ]

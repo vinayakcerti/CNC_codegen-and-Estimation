@@ -158,6 +158,33 @@
         "Large hole / boring": 4,
         "Slot": 1
       }
+    },
+    {
+      "file": "SF11_bottom_chamfer_plate.step",
+      "sha256": "8117ea60c97bd9dc9b82f0201b6107f5149560a3b75b9ee792999994fb27408d",
+      "notes": "Epic 12.4 SF-11: 80x120x25 block with 2mm chamfer on all bottom edges only. Validates bottom-edge chamfer detection (Section F nz<0 branch). Chamfer setup=Bottom, depth=2.0.",
+      "expected_counts": {
+        "Face milling": 2,
+        "Chamfer": 1
+      }
+    },
+    {
+      "file": "SF14_top_fillet_no_chamfer.step",
+      "sha256": "2eb4dad6bb3260e311f30df39da709534d57cdb0f2447e3761b4c65afecca436",
+      "notes": "Epic 12.4 SF-14: 80x120x25 block with 3mm fillet on all top edges. Fillets are TOROIDAL faces — Section F must NOT emit a Chamfer candidate. The Slot=2 count is a known TOROIDAL-surface false positive (same class of issue as X01 freeform, tracked in Epic F3). Key assertion: Chamfer=0.",
+      "expected_counts": {
+        "Face milling": 2,
+        "Slot": 2
+      }
+    },
+    {
+      "file": "SF13_variable_chamfer_top_bottom.step",
+      "sha256": "33e5824022e13516b52b879da0d89fa960988fe2af944291193fa7933a98b5d0",
+      "notes": "Epic 12.4 SF-13: 100x80x30 block with 3mm chamfer top edges and 1mm chamfer bottom edges. Validates that top and bottom chamfers are emitted as SEPARATE candidates (Chamfer=2) with correct setup labels and depths, never collapsed into one.",
+      "expected_counts": {
+        "Face milling": 2,
+        "Chamfer": 2
+      }
     }
   ]
 }

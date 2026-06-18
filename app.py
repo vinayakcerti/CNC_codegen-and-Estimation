@@ -393,6 +393,28 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
             " &nbsp;·&nbsp; Planning preview only — verify toolpaths in CAM.</div>",
             unsafe_allow_html=True,
         )
+        _exact_n = sum(1 for _c in _all_cands if _c.get("face_mesh_data"))
+        _approx_n = len(_all_cands) - _exact_n
+        if _all_cands:
+            _geo_note_parts = []
+            if _exact_n:
+                _geo_note_parts.append(
+                    f"<span style='color:#228B22;font-weight:600;'>"
+                    f"&#9632; {_exact_n} exact face{'s' if _exact_n != 1 else ''}</span>"
+                    f" — coloured surface overlays show the precise machined face"
+                )
+            if _approx_n:
+                _geo_note_parts.append(
+                    f"<span style='color:#888;font-weight:600;'>"
+                    f"&#9675; {_approx_n} position-only marker{'s' if _approx_n != 1 else ''}</span>"
+                    f" — outline shapes show estimated feature centre (hover reads \"Approx marker\")"
+                )
+            st.markdown(
+                "<div style='font-size:11px;color:#555;margin-top:3px;line-height:1.7;'>"
+                + " &nbsp;|&nbsp; ".join(_geo_note_parts)
+                + "</div>",
+                unsafe_allow_html=True,
+            )
 
     elif (_geo and _geo.get("success")
           and (_geo.get("line_segments") or _geo.get("circle_traces"))):
@@ -1272,6 +1294,7 @@ def page_upload_step():
                     "ID":              _c.get("candidate_id", "—"),
                     "Type":            _c.get("feature_type",  "—"),
                     "Name":            _c.get("feature_name",  "—"),
+                    "Geometry":        "Exact face" if _c.get("face_mesh_data") else "Position only",
                     "Measurement":     _meas(_c),
                     _xy_label:         _fv(_candidate_work_value(_c, "x")),
                     _yx_label:         _fv(_candidate_work_value(_c, "y")),
