@@ -822,6 +822,31 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
             if not _hl_legend_shown:
                 _hl_legend_shown = True
 
+    # ── Click-target markers — invisible Scatter3d, one per candidate, carry ──
+    # candidate_id as customdata so Streamlit's on_select can identify clicks.
+    _ct_x, _ct_y, _ct_z, _ct_ids, _ct_hover = [], [], [], [], []
+    for _cand in (candidates or []):
+        _cid = _cand.get("candidate_id")
+        if not _cid:
+            continue
+        _ct_x.append(float(_cand.get("x_pos") or 0))
+        _ct_y.append(float(_cand.get("y_pos") or 0))
+        _cz = float(_cand.get("z_pos") or 0)
+        _ct_z.append(_cz if abs(_cz - zmin) > 1.0 else zmax)
+        _ct_ids.append(_cid)
+        _ct_hover.append(_cand.get("feature_name") or _cand.get("feature_type") or "")
+    if _ct_x:
+        fig.add_trace(go.Scatter3d(
+            x=_ct_x, y=_ct_y, z=_ct_z,
+            mode="markers",
+            marker=dict(size=14, opacity=0.01, color="white", symbol="circle"),
+            customdata=_ct_ids,
+            text=_ct_hover,
+            name="",
+            showlegend=False,
+            hovertemplate="%{text}<extra></extra>",
+        ))
+
     # ── Scene layout — CAD-style coloured axes, readable labels ───────────────
     _view = str(camera_view or "Isometric")
     _camera_presets = {
@@ -832,6 +857,7 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
     }
 
     fig.update_layout(
+        clickmode="event+select",
         title=dict(
             text="3D Preview — Part Shape (planning reference only)",
             font=dict(size=15),

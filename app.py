@@ -355,7 +355,19 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
         )
         if large:
             fig_mesh.update_layout(height=680)
-        st.plotly_chart(fig_mesh, use_container_width=True)
+        _chart_ev = st.plotly_chart(
+            fig_mesh,
+            on_select="rerun",
+            key=f"{key_prefix}chart",
+            use_container_width=True,
+        )
+        # Capture 3D marker click → store candidate_id for the right panel
+        if key_prefix == "_smw_3d_":
+            _ev_pts = (
+                getattr(getattr(_chart_ev, "selection", None), "points", None) or []
+            )
+            if _ev_pts and _ev_pts[0].get("customdata"):
+                st.session_state["_smw_3d_clicked_cid"] = _ev_pts[0]["customdata"]
 
         # ── Custom readable legend (stays on page even when chart is fullscreened) ──
         _LEGEND_ITEMS: list[tuple[str, str]] = [
@@ -3485,6 +3497,18 @@ def page_select_machining_work():
                 for _g in _groups:
                     _count_label = _g.get("count_label") or f"{_g['count']} found"
                     _hl_group_opts.append(f"{_g['description']} - {_count_label}")
+
+                # Auto-select group when user clicks a feature in the 3D viewer
+                _3d_clicked = st.session_state.pop("_smw_3d_clicked_cid", None)
+                if _3d_clicked:
+                    for _g in _groups:
+                        if _3d_clicked in (_g.get("member_ids") or []):
+                            _cnt = _g.get("count_label") or f"{_g['count']} found"
+                            _auto_lbl = f"{_g['description']} - {_cnt}"
+                            if _auto_lbl in _hl_group_opts:
+                                st.session_state["_smw_hl_group_sel"] = _auto_lbl
+                            break
+
                 _hl_group_sel = st.selectbox(
                     "Preview / highlight group",
                     options=_hl_group_opts,
