@@ -185,6 +185,72 @@
         "Face milling": 2,
         "Chamfer": 2
       }
+    },
+    {
+      "file": "T04_plain_cylinder_d60_l120.step",
+      "sha256": "21b6e0417f2a9d70d21021750ff6dfb06098e8b034fdfaeb1b2447ee3705d1d5",
+      "notes": "Epic 19 T04: plain cylinder D=60 L=120. Axisymmetric baseline — facing + OD only. Key assertion: is_axisymmetric=true, no milled features detected.",
+      "expected_counts": {
+        "Face milling": 2
+      }
+    },
+    {
+      "file": "T05_undercut_shaft.step",
+      "sha256": "4e4a7c930cf4c2566479b7c169733ededfd538fc043de6d25a8b7e70f129aeaf",
+      "notes": "Epic 19 T05: stepped shaft with undercut/thread-relief groove between two shoulders. Validates undercut flagging (Story 19-5). is_axisymmetric=true.",
+      "expected_counts": {
+        "Face milling": 2
+      }
+    },
+    {
+      "file": "T06_short_disc_hub_d120_l20.step",
+      "sha256": "996bfc0b63c974954bb4d0a40f9da81eb97fd11435800bae4500ad248411d2fe",
+      "notes": "Epic 19 T06: short disc/hub D=120 L=20 (L:D=0.17). Facing-dominant turned part. is_axisymmetric=true.",
+      "expected_counts": {
+        "Face milling": 2
+      }
+    },
+    {
+      "file": "T07_flange_bore_boltholes.step",
+      "sha256": "cd1a6104ee84ed2c365e6768f12750e7ec17ec5aeae54e95f890b54f8956dc31",
+      "notes": "Epic 19 T07: flange OD=150 with central through bore D=40 and 6 bolt holes on PCD=100. Mixed lathe (OD + bore) + drilling. is_axisymmetric=true.",
+      "expected_counts": {
+        "Face milling": 2,
+        "Hole": 6
+      }
+    },
+    {
+      "file": "T08_shaft_internal_groove.step",
+      "sha256": "c79424835c0d99e7e12ae26dabe4eef235d9342c0cfe25aa1b1e8a0615f2586d",
+      "notes": "Epic 19 T08: shaft with through bore containing an internal annular groove (ID grooving). Validates groove detection inside bore (Story 19-3). is_axisymmetric=true.",
+      "expected_counts": {
+        "Face milling": 2
+      }
+    },
+    {
+      "file": "T09_round_milled_part_not_lathe.step",
+      "sha256": "03fb61400db1e3e250263e92a1f3f7b77c1da73c232fdd59a5aebaa1c9e6fb67",
+      "notes": "Epic 19 T09: FALSE-POSITIVE TRAP — round cylindrical stock with a rectangular pocket milled on top. Must NOT be classified as a turned part. Key assertion: is_axisymmetric=false (or lathe=false). Pocket=1.",
+      "expected_counts": {
+        "Face milling": 2,
+        "Pocket": 1
+      }
+    },
+    {
+      "file": "T10_long_shaft_ld7_d40_l300.step",
+      "sha256": "127e8199be27d47ae93e3128da186b635e575b79735c8d97f463b343f3c06397",
+      "notes": "Epic 19 T10: long shaft D=40 L=300 (L:D=7.5). Must trigger tailstock/steady-rest flag in operation planning (Story 19-6). is_axisymmetric=true.",
+      "expected_counts": {
+        "Face milling": 2
+      }
+    },
+    {
+      "file": "T11_shaft_thread_region.step",
+      "sha256": "4ae8e3d6886eaab882323bb1a7383219a15d4cb522c70a80996169f99a7a2070",
+      "notes": "Epic 19 T11: stepped shaft with a narrower-diameter region representing a thread zone. Must not crash. Thread region should be flagged as unrecognised or 'Thread — verify manually' (Story 19-5). is_axisymmetric=true.",
+      "expected_counts": {
+        "Face milling": 2
+      }
     }
   ]
 }
