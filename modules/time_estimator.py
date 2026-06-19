@@ -1,5 +1,53 @@
+def _operation_identity(operation):
+    operation_id = operation.get("operation_id")
+    if operation_id:
+        return ("operation_id", str(operation_id))
+    return (
+        str(operation.get("feature_name") or "").strip().lower(),
+        str(operation.get("operation_type") or "").strip().lower(),
+        str(operation.get("setup_label") or "").strip().lower(),
+        int(operation.get("tool_number") or 0),
+        round(float(operation.get("_x_pos") or 0.0), 3),
+        round(float(operation.get("_y_pos") or 0.0), 3),
+        round(float(operation.get("_depth") or 0.0), 3),
+    )
+
+
+def _unique_operations(operations):
+    unique = []
+    seen = set()
+    for operation in operations or []:
+        identity = _operation_identity(operation)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(operation)
+    return unique
+
+
+def _unique_feature_positions(operations):
+    positions = []
+    seen = set()
+    for operation in operations:
+        feature_identity = operation.get("physical_feature_id") or (
+            str(operation.get("feature_name") or "").strip().lower(),
+            str(operation.get("setup_label") or "").strip().lower(),
+            round(float(operation.get("_x_pos") or 0.0), 3),
+            round(float(operation.get("_y_pos") or 0.0), 3),
+        )
+        if feature_identity in seen:
+            continue
+        seen.add(feature_identity)
+        positions.append((
+            float(operation.get("_x_pos") or 0.0),
+            float(operation.get("_y_pos") or 0.0),
+        ))
+    return positions
+
+
 def estimate_time(operations, machine, material, features):
     """Estimate cutting time, rapid time, tool change time and effort."""
+    operations = _unique_operations(operations)
     safety_factor = material.get("safety_factor", 1.3)
     rapid_feed = machine.get("rapid_feed_rate", 10000)
     tc_time_s = machine.get("tool_change_time_s", 8)
@@ -15,13 +63,12 @@ def estimate_time(operations, machine, material, features):
     cutting_time_min *= safety_factor
 
     rapid_distance = 0.0
-    for feature in features:
-        x = feature.get("x_pos", 0) or 0
-        y = feature.get("y_pos", 0) or 0
+    for x, y in _unique_feature_positions(operations):
         rapid_distance += (x ** 2 + y ** 2) ** 0.5
 
     rapid_distance = max(rapid_distance, 200.0)
-    rapid_time_min = (rapid_distance / rapid_feed) * 1000
+    # mm / (mm/min) = minutes — no extra multiplier needed.
+    rapid_time_min = rapid_distance / rapid_feed if rapid_feed > 0 else 0.0
 
     tool_numbers = list({op["tool_number"] for op in operations})
     num_tool_changes = max(len(tool_numbers) - 1, 0)

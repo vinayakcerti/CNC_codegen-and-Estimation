@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "coordinate_contract": "minimum transformed part corner; work X=length, Y=width, Z=height",
+  "samples": [
+    {
+      "file": "17b_top_milled_step_shoulder-Body.step",
+      "sha256": "55336cb22bbf4f94575410c8f498875b29819508a163f8b03a4a52b9ed7b7576",
+      "review_status": "operator_report_v2",
+      "bbox_mm": [120.0, 30.0, 90.0],
+      "stock_mm": [130.0, 100.0, 40.0],
+      "work_axes_from_cad": ["x", "z", "y"],
+      "detected_counts": {"Face milling": 2, "Step": 1},
+      "adjusted_counts": {"Face Milling": 2, "Step": 1, "Edge Milling": 4},
+      "required_features": [
+        {"type": "Face Milling", "setup": "Top", "length": 130.0, "width": 100.0, "depth": 5.0},
+        {"type": "Face Milling", "setup": "Bottom", "length": 130.0, "width": 100.0, "depth": 5.0},
+        {"type": "Step", "setup": "Top", "length": 90.0, "width": 90.0, "depth": 12.0}
+      ]
+    },
+    {
+      "file": "M01_vmc_basic_plate_holes.step",
+      "sha256": "3ab5e7d37301bb05ef44857bacf0d1bc3662d5a3ef6ae68e39d27d75149cb536",
+      "review_status": "existing_regression",
+      "bbox_mm": [120.0, 200.0, 30.0],
+      "stock_mm": [120.0, 200.0, 30.0],
+      "work_axes_from_cad": ["x", "y", "z"],
+      "detected_counts": {"Face milling": 2, "Hole": 4},
+      "adjusted_counts": {"Face Milling": 2, "Hole": 4}
+    },
+    {
+      "file": "M02_vmc_slot_plate.step",
+      "sha256": "47ab6dedd2dc96f8f4f5d0d7cc795888db493905a4058137a11b84c8b106cacf",
+      "review_status": "existing_regression",
+      "bbox_mm": [120.0, 200.0, 30.0],
+      "stock_mm": [120.0, 200.0, 30.0],
+      "work_axes_from_cad": ["x", "y", "z"],
+      "detected_counts": {"Face milling": 2, "Slot": 1},
+      "adjusted_counts": {"Face Milling": 2, "Slot": 1}
+    },
+    {
+      "file": "M03_vmc_blind_rectangular_pocket.step",
+      "sha256": "06b744650d236e82e762928d20d8820407ab8135ffa6298d12155f7d47f80e24",
+      "review_status": "existing_regression",
+      "bbox_mm": [100.0, 160.0, 30.0],
+      "stock_mm": [100.0, 160.0, 30.0],
+      "work_axes_from_cad": ["x", "y", "z"],
+      "detected_counts": {"Face milling": 2, "Pocket": 1},
+      "adjusted_counts": {"Face Milling": 2, "Pocket": 1}
+    },
+    {
+      "file": "M05_vmc_large_bore_plate.step",
+      "sha256": "c9a76b401752b6b519548e291e0b0847b5bbb4de9cdc72fdc1882b0a313f3f57",
+      "review_status": "existing_regression",
+      "bbox_mm": [100.0, 160.0, 30.0],
+      "stock_mm": [100.0, 160.0, 30.0],
+      "work_axes_from_cad": ["x", "y", "z"],
+      "detected_counts": {"Face milling": 2, "Hole": 2, "Large hole / boring": 1},
+      "adjusted_counts": {"Face Milling": 2, "Hole": 2, "Large hole / boring": 1}
+    },
+    {
+      "file": "M07_vmc_chamfered_plate.step",
+      "sha256": "2902400df8119db48c3f7d58746c58820215a54fe7b979452551fe25985f38a7",
+      "review_status": "existing_regression",
+      "bbox_mm": [80.0, 120.0, 25.0],
+      "stock_mm": [80.0, 120.0, 25.0],
+      "work_axes_from_cad": ["x", "y", "z"],
+      "detected_counts": {"Face milling": 2, "Hole": 4, "Chamfer": 1},
+      "adjusted_counts": {"Face Milling": 2, "Hole": 4, "Chamfer": 1}
+    },
+    {
+      "file": "25_vmc_job_plate_all_basic_features.step",
+      "sha256": "a1181013c4588d86de99c18f8dbb0cb7cb19db352c31793042c2bc7b772140b2",
+      "review_status": "existing_regression",
+      "bbox_mm": [250.0, 350.0, 50.0],
+      "stock_mm": [250.0, 350.0, 50.0],
+      "work_axes_from_cad": ["x", "y", "z"],
+      "detected_counts": {"Face milling": 2, "Large hole / boring": 1, "Slot": 2, "Chamfer": 1},
+      "adjusted_counts": {"Face Milling": 2, "Large hole / boring": 1, "Slot": 2, "Chamfer": 1}
+    },
+    {
+      "file": "3100171001_01 SLIDE BASE-1812 ( FOR TOOL LOADER ).STEP",
+      "sha256": "0ec7e7f85cb41cd5ff16e24297fe907510596fbc50d7e711e58bb0295f2e0195",
+      "review_status": "provisional_complex_weldment",
+      "bbox_mm": [685.0, 140.5, 200.0],
+      "stock_mm": [685.0, 140.5, 200.0],
+      "work_axes_from_cad": ["x", "y", "z"],
+      "detected_counts": {"Face milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 2},
+      "adjusted_counts": {"Face Milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 2},
+      "grouping": {"starting_part_type": "Weldment / Fabricated Part", "slot_review_locations": 38}
+    }
+  ]
+}

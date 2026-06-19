@@ -9,6 +9,13 @@ def _esc(v):
     return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _fmt_mm(v):
+    try:
+        return f"{float(v):.1f}"
+    except (TypeError, ValueError):
+        return "0.0"
+
+
 def generate_setup_sheet(operations, machine, material, stock, features, time_result,
                           cost_result=None, job_name="CNC Job", notes=None):
     now = datetime.now().strftime("%Y-%m-%d  %H:%M")
@@ -57,9 +64,17 @@ def generate_setup_sheet(operations, machine, material, stock, features, time_re
         op_rows += f"""
         <tr>
           <td>{op['op_num']:02d}</td>
+          <td>{_esc(op.get('operation_id', ''))}</td>
+          <td>{_esc(op.get('physical_feature_id', ''))}</td>
           <td>{_esc(op['feature_name'])}</td>
           <td>{_esc(op['feature_type'])}</td>
+          <td>{_esc(op.get('setup_label', 'Unknown'))}</td>
           <td>{_esc(op['operation_type'])}</td>
+          <td>{_fmt_mm(op.get('_x_pos'))}</td>
+          <td>{_fmt_mm(op.get('_y_pos'))}</td>
+          <td>{_fmt_mm(op.get('_length'))}</td>
+          <td>{_fmt_mm(op.get('_width'))}</td>
+          <td>{_fmt_mm(op.get('_depth'))}</td>
           <td>T{op['tool_number']:02d} — {_esc(op['tool_name'])}</td>
           <td>{op['spindle_rpm']}</td>
           <td>{op['feed_rate_mm_min']}</td>
@@ -373,7 +388,9 @@ def generate_setup_sheet(operations, machine, material, stock, features, time_re
   <table>
     <thead>
       <tr>
-        <th>#</th><th>Feature</th><th>Type</th><th>Operation</th>
+        <th>#</th><th>Operation ID</th><th>Feature ID</th>
+        <th>Feature</th><th>Type</th><th>Setup</th><th>Operation</th>
+        <th>X</th><th>Y</th><th>L</th><th>W</th><th>D</th>
         <th>Tool</th><th>RPM</th><th>Feed (mm/min)</th><th>Path (mm)</th><th>Notes</th>
       </tr>
     </thead>

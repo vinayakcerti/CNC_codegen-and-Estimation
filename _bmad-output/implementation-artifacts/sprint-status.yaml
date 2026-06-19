@@ -1,0 +1,80 @@
+# generated: 2026-06-11
+# last_updated: 2026-06-19
+# project: CNC Process Planner
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+generated: 2026-06-11
+last_updated: 2026-06-19
+project: CNC Process Planner
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  epic-9: done
+  9-1-define-coordinate-frames-and-datum-contract: done
+  9-2-implement-cad-to-planning-transform: done
+  9-3-apply-transform-across-the-product: done
+  9-4-3d-viewer-coordinate-frame-fix: done
+  9-5-feature-position-corner-vs-centroid-semantics: done
+  9-6-top-face-milling-footprint-needs-visual-verification: done
+  epic-9-retrospective: optional
+
+  epic-10: done
+  10-1-define-golden-expectation-schema: done
+  10-2-add-geometry-and-workflow-invariants: done
+  10-3-build-core-golden-sample-pack: done
+  10-4-add-metamorphic-orientation-tests: done
+  epic-10-retrospective: optional
+
+  epic-11: done
+  11-1-stable-face-provenance: done
+  11-2-exact-highlight-rendering: done
+  11-3-honest-approximate-markers: done
+  epic-11-retrospective: optional
+
+  epic-12: done
+  12-1-hole-and-bore-hardening: done
+  12-2-slot-and-pocket-hardening: done
+  12-3-step-and-shoulder-hardening: done
+  12-4-face-chamfer-and-profile-hardening: done
+  epic-12-retrospective: optional
+
+  epic-13: done
+  13-1-billet-allowance-model: done
+  13-2-casting-and-forging-mode: done
+  13-3-weldment-fabrication-mode: done
+  13-4-existing-part-rework-mode: done
+  epic-13-retrospective: optional
+
+  epic-14: done
+  14-1-stable-physical-feature-ids: done
+  14-2-idempotent-acceptance-and-grouping: done
+  14-3-idempotent-operation-generation: done
+  epic-14-retrospective: optional
+
+  epic-15: done
+  15-1-machine-capability-model: done
+  15-2-accessibility-and-setup-assignment: done
+  15-3-tool-and-holder-feasibility: done
+  epic-15-retrospective: optional
+
+  epic-16: done
+  16-1-operation-traceability: done
+  16-2-estimate-integrity: done
+  16-3-export-contract-tests: done
+  epic-16-retrospective: optional
+
+  epic-17: done
+  17-1-step-failure-and-degraded-mode-handling: done
+  17-2-database-and-onedrive-safety: done
+  17-3-session-and-restart-integrity: done
+  epic-17-retrospective: optional
+
+  epic-18: backlog
+  18-1-adversarial-operator-test-pack: backlog
+  18-2-automated-release-report: backlog
+  18-3-vmc-sign-off: backlog
+  epic-18-retrospective: optional

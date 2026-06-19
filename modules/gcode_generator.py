@@ -19,8 +19,11 @@ def generate_gcode(operations, machine, stock):
     lines = []
 
     lines.append("; ============================================================")
-    lines.append("; THIS IS DRAFT CNC CODE. VERIFY IN CAM/SIMULATOR BEFORE")
-    lines.append("; RUNNING ON A REAL CNC MACHINE.")
+    lines.append("; DO NOT RUN THIS PROGRAM DIRECTLY ON A MACHINE.")
+    lines.append("; THIS IS DRAFT PLANNING CODE ONLY.")
+    lines.append("; VERIFY IN CAM/SIMULATOR AND BY A QUALIFIED CNC PROGRAMMER")
+    lines.append("; BEFORE RUNNING ON ANY REAL MACHINE.")
+    lines.append("; Tool numbers, offsets, speeds, and feeds MUST be verified.")
     lines.append("; ============================================================")
     lines.append(";")
     lines.append(f"; Machine   : {machine_name}  ({controller})")
@@ -42,6 +45,8 @@ def generate_gcode(operations, machine, stock):
     lines.append(";")
 
     current_tool = None
+    _announced_setup_labels = set()
+    _setup2_announced = False
 
     for op in operations:
         tool_num = op["tool_number"]
@@ -59,6 +64,30 @@ def generate_gcode(operations, machine, stock):
         length = op.get("_length", 0.0)
         width = op.get("_width", 0.0)
         qty = op.get("_quantity", 1)
+
+        setup_label = op.get("setup_label") or "Unknown"
+        if setup_label not in ("Top", "Unknown", "Bottom") and setup_label not in _announced_setup_labels:
+            lines.append(";")
+            lines.append("; ============================================================")
+            lines.append(f"; ADDITIONAL SETUP - {setup_label.upper()} ORIENTATION")
+            lines.append("; Stop here. Re-fixture/re-orient the part as required.")
+            lines.append("; Re-indicate datums and verify workholding and fixture clearance.")
+            lines.append("; ============================================================")
+            lines.append(";")
+            _announced_setup_labels.add(setup_label)
+
+        # ── Setup 2 separator ──────────────────────────────────────────
+        if (op_type == "Face Mill"
+                and "bottom" in feature_name.lower()
+                and not _setup2_announced):
+            lines.append(";")
+            lines.append("; ============================================================")
+            lines.append("; SETUP 2 — FLIP PART BEFORE CONTINUING")
+            lines.append("; Remove from fixture. Flip part. Re-indicate and re-zero Z.")
+            lines.append("; Verify workholding and fixture clearance for second setup.")
+            lines.append("; ============================================================")
+            lines.append(";")
+            _setup2_announced = True
 
         # ── Tool change block ───────────────────────────────────────────
         if tool_num != current_tool:
