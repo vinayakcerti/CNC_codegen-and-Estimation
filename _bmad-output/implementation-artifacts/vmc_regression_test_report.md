@@ -1,6 +1,6 @@
 # VMC Feature Detection Regression Report
 
-**Date:** 2026-06-16  
+**Date:** 2026-06-18  
 **Branch:** v2-feature-review-engine  
 **Options:** `(none)`  
 
@@ -8,8 +8,8 @@
 
 | Metric | Count |
 |--------|-------|
-| Total entries | 19 |
-| PASS | 19 |
+| Total entries | 22 |
+| PASS | 22 |
 | FAIL | 0 |
 | MISSING | 0 |
 | ERROR | 0 |
@@ -37,6 +37,9 @@
 | `M05_vmc_large_bore_plate.step` | **PASS** | Face milling=2, Hole=2, Large hole / boring=1 | Face milling=2, Hole=2, Large hole / boring=1 | Large bore plate with pilot holes |
 | `M07_vmc_chamfered_plate.step` | **PASS** | Chamfer=1, Face milling=2, Hole=4 | Chamfer=1, Face milling=2, Hole=4 | Chamfered plate; 4 angled PLANE faces on top edges detected as Chamfer (Section F), ~2.0mm |
 | `test5slotted.step` | **PASS** | Face milling=2, Large hole / boring=4, Slot=1 | Face milling=2, Large hole / boring=4, Slot=1 | 5-feature slotted plate with large bores |
+| `SF11_bottom_chamfer_plate.step` | **PASS** | Chamfer=1, Face milling=2 | Chamfer=1, Face milling=2 | Epic 12.4 SF-11: 80x120x25 block with 2mm chamfer on all bottom edges only. Validates bottom-edge chamfer detection (Section F nz<0 branch). Chamfer setup=Bottom, depth=2.0. |
+| `SF14_top_fillet_no_chamfer.step` | **PASS** | Face milling=2, Slot=2 | Face milling=2, Slot=2 | Epic 12.4 SF-14: 80x120x25 block with 3mm fillet on all top edges. Fillets are TOROIDAL faces — Section F must NOT emit a Chamfer candidate. The Slot=2 count is a known TOROIDAL-surface false positive (same class of issue as X01 freeform, tracked in Epic F3). Key assertion: Chamfer=0. |
+| `SF13_variable_chamfer_top_bottom.step` | **PASS** | Chamfer=2, Face milling=2 | Chamfer=2, Face milling=2 | Epic 12.4 SF-13: 100x80x30 block with 3mm chamfer top edges and 1mm chamfer bottom edges. Validates that top and bottom chamfers are emitted as SEPARATE candidates (Chamfer=2) with correct setup labels and depths, never collapsed into one. |
 
 ## Uncovered STEP Files
 

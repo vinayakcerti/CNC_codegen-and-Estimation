@@ -1,12 +1,12 @@
 # generated: 2026-06-11
-# last_updated: 2026-06-18
+# last_updated: 2026-06-19
 # project: CNC Process Planner
 # project_key: NOKEY
 # tracking_system: file-system
 # story_location: _bmad-output/implementation-artifacts
 
 generated: 2026-06-11
-last_updated: 2026-06-18
+last_updated: 2026-06-19
 project: CNC Process Planner
 project_key: NOKEY
 tracking_system: file-system
@@ -29,13 +29,13 @@ development_status:
   10-4-add-metamorphic-orientation-tests: done
   epic-10-retrospective: optional
 
-  epic-11: in-progress
+  epic-11: done
   11-1-stable-face-provenance: done
   11-2-exact-highlight-rendering: done
-  11-3-honest-approximate-markers: backlog
+  11-3-honest-approximate-markers: done
   epic-11-retrospective: optional
 
-  epic-12: in-progress
+  epic-12: done
   12-1-hole-and-bore-hardening: done
   12-2-slot-and-pocket-hardening: done
   12-3-step-and-shoulder-hardening: done
