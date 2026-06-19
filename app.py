@@ -3339,6 +3339,27 @@ def page_job_notes():
         ji_m2.metric("Controller", _ji_machine.get("controller", "—"))
 
 
+def _render_position_reference_widget(key_suffix: str) -> None:
+    """Compact center / min-corner toggle shown below 3D viewers."""
+    _cur = st.session_state.get("position_reference", "center")
+    _sel = st.radio(
+        "X/Y position reference",
+        options=["center", "corner"],
+        format_func=lambda k: "⊕ Center point" if k == "center" else "⌐ Min corner (datum edge)",
+        index=0 if _cur == "center" else 1,
+        key=f"_pos_ref_{key_suffix}",
+        horizontal=True,
+        help=(
+            "**Center point:** X/Y at the feature centroid — matches tool-centre programming. "
+            "\n\n**Min corner:** X/Y at the nearest edge from the work datum — matches "
+            "setup sheets and inspection plans."
+        ),
+    )
+    if _sel != _cur:
+        st.session_state.position_reference = _sel
+        st.rerun()
+
+
 def page_select_machining_work():
     st.title("Select Machining Work")
     st.caption(
@@ -3383,6 +3404,7 @@ def page_select_machining_work():
 
     with _left:
         _render_3d_panel("_smw_3d_", large=True)
+        _render_position_reference_widget("smw")
 
     with _right:
         st.subheader("Feature Candidates")
@@ -3781,6 +3803,7 @@ def page_part_setup():
     with _left:
         if _mesh:
             _render_3d_panel("_ps_3d_", large=True)
+            _render_position_reference_widget("ps")
         else:
             st.subheader("Upload STEP File")
             st.info(
