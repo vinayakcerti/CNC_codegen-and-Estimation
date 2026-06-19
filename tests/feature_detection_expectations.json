@@ -229,7 +229,7 @@
     },
     {
       "file": "T09_round_milled_part_not_lathe.step",
-      "sha256": "03fb61400db1e3e250263e92a1f3f7b77c1da73c232fdd59a5aebaa1c9e6fb67",
+      "sha256": "3a880b7698b9f5b00843e9fbc0370764036d3512a492a31b034b1b06056f586b",
       "notes": "Epic 19 T09: FALSE-POSITIVE TRAP — round cylindrical stock with a rectangular pocket milled on top. Must NOT be classified as a turned part. Key assertion: is_axisymmetric=false (or lathe=false). Pocket=1.",
       "expected_counts": {
         "Face milling": 2,

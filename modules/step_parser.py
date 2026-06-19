@@ -2412,6 +2412,116 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                 "file may be a surface shell or CadQuery found no topology."
             )
 
+        # ── Section G — Axisymmetric (turned part) detection ──────────────────
+        # Determines whether the part is a lathe/turning job by checking the
+        # fraction of surface area on CYLINDER faces that share a common axis.
+        #
+        # Axis inference: since the OCC adaptor for cylinder_axis_x/y/z is not
+        # always available, the axis is inferred from the face bounding box.
+        # A cylinder face bbox has two equal dimensions (the diameter) and one
+        # different dimension (the length / height along the axis).  The "odd"
+        # dimension is the axis direction.  Works for both shafts (long axis >
+        # diameter) and discs (height < diameter).
+        #
+        # False-positive guard: round milled parts (cylindrical stock with milled
+        # pockets/slots) are rejected by looking for PLANE faces whose normals are
+        # perpendicular to the candidate turning axis and that sit away from the
+        # part ends — a signature of milling, not turning.
+        _G_cyl_faces  = [r for r in face_records if r.get("geom_type") == "CYLINDER"]
+        _G_total_area = sum(r.get("area_mm2") or 0.0 for r in face_records)
+        is_axisymmetric         = False
+        turning_axis            = None
+        axisymmetric_confidence = "none"
+
+        if _G_cyl_faces and _G_total_area > 0:
+            _G_axis_area  = {"x": 0.0, "y": 0.0, "z": 0.0}
+            _G_axis_count = {"x": 0,   "y": 0,   "z": 0}
+
+            for _r in _G_cyl_faces:
+                _area = _r.get("area_mm2") or 0.0
+                if _area <= 0:
+                    continue
+                # Prefer OCC-derived axis when available; fall back to bbox inference.
+                _ax = _r.get("cylinder_axis_x")
+                _ay = _r.get("cylinder_axis_y")
+                _az = _r.get("cylinder_axis_z")
+                if _ax is not None and _ay is not None and _az is not None:
+                    _mag = (_ax**2 + _ay**2 + _az**2) ** 0.5
+                    if _mag > 0.5:
+                        _ax, _ay, _az = _ax/_mag, _ay/_mag, _az/_mag
+                        for _an, _dot in [("x", abs(_ax)), ("y", abs(_ay)), ("z", abs(_az))]:
+                            if _dot > 0.95:
+                                _G_axis_area[_an]  += _area
+                                _G_axis_count[_an] += 1
+                        continue
+                # Bbox-based axis inference: the axis is the dimension whose value
+                # is most different from the other two (the "odd one out").
+                _bx = _r.get("bbox_length_x") or 0.0
+                _by = _r.get("bbox_length_y") or 0.0
+                _bz = _r.get("bbox_length_z") or 0.0
+                _dims = {"x": _bx, "y": _by, "z": _bz}
+                _odd_axis = None
+                _odd_score = 0.0
+                for _cand_ax, _d_cand in _dims.items():
+                    _others = [v for k, v in _dims.items() if k != _cand_ax]
+                    _max_o = max(_others)
+                    if _max_o <= 0:
+                        continue
+                    _similarity = min(_others) / _max_o  # how equal are the other two?
+                    if _similarity > _odd_score:
+                        _odd_score = _similarity
+                        _odd_axis = _cand_ax
+                if _odd_axis is not None and _odd_score > 0.65:
+                    _G_axis_area[_odd_axis]  += _area
+                    _G_axis_count[_odd_axis] += 1
+
+            _G_best_axis     = max(_G_axis_area, key=_G_axis_area.get)
+            _G_aligned_area  = _G_axis_area[_G_best_axis]
+            _G_aligned_count = _G_axis_count[_G_best_axis]
+            _G_cyl_fraction  = _G_aligned_area / _G_total_area
+            _G_axis_ratio    = _G_aligned_count / len(_G_cyl_faces) if _G_cyl_faces else 0.0
+
+            # Determine part extents along candidate turning axis
+            _G_bbox_mins = [r.get(f"bbox_{_G_best_axis}min") for r in face_records
+                            if r.get(f"bbox_{_G_best_axis}min") is not None]
+            _G_bbox_maxs = [r.get(f"bbox_{_G_best_axis}max") for r in face_records
+                            if r.get(f"bbox_{_G_best_axis}max") is not None]
+            _G_ax_min  = min(_G_bbox_mins) if _G_bbox_mins else 0.0
+            _G_ax_max  = max(_G_bbox_maxs) if _G_bbox_maxs else 0.0
+            _G_ax_span = _G_ax_max - _G_ax_min
+            _G_end_tol = max(5.0, _G_ax_span * 0.12)
+
+            # False-positive guard: PLANE faces whose normals are perpendicular to
+            # the turning axis and that sit away from the part ends indicate milling.
+            _G_milled_area = 0.0
+            for _r in face_records:
+                if _r.get("geom_type") != "PLANE":
+                    continue
+                _t_norm = abs({
+                    "x": _r.get("normal_x") or 0.0,
+                    "y": _r.get("normal_y") or 0.0,
+                    "z": _r.get("normal_z") or 0.0,
+                }[_G_best_axis])
+                if _t_norm > 0.85:
+                    continue  # shoulder / end face — expected on turned parts
+                _ctr = _r.get(f"center_{_G_best_axis}") or 0.0
+                _at_end = (_ctr <= _G_ax_min + _G_end_tol) or (_ctr >= _G_ax_max - _G_end_tol)
+                if not _at_end:
+                    _G_milled_area += _r.get("area_mm2") or 0.0
+
+            _G_milled_fraction = _G_milled_area / _G_total_area
+
+            if (_G_cyl_fraction >= 0.20 and _G_axis_ratio >= 0.65
+                    and _G_milled_fraction < 0.08):
+                is_axisymmetric = True
+                turning_axis    = _G_best_axis
+                axisymmetric_confidence = "high" if _G_cyl_fraction >= 0.50 else "medium"
+            elif (_G_cyl_fraction >= 0.12 and _G_axis_ratio >= 0.50
+                  and _G_milled_fraction < 0.04):
+                is_axisymmetric = True
+                turning_axis    = _G_best_axis
+                axisymmetric_confidence = "low"
+
         candidates = _classify_face_records(face_records, part_bbox)
 
         if not candidates:
@@ -2483,11 +2593,14 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
 
         assign_stable_candidate_ids(candidates, source_file_hash)
         return {
-            "success":            True,
-            "candidate_features": candidates,
-            "candidate_count":    len(candidates),
-            "source_file_hash":   source_file_hash,
-            "warnings":           warnings_out,
+            "success":                   True,
+            "candidate_features":        candidates,
+            "candidate_count":           len(candidates),
+            "source_file_hash":          source_file_hash,
+            "warnings":                  warnings_out,
+            "is_axisymmetric":           is_axisymmetric,
+            "turning_axis":              turning_axis,
+            "axisymmetric_confidence":   axisymmetric_confidence,
         }
 
     except Exception as exc:
