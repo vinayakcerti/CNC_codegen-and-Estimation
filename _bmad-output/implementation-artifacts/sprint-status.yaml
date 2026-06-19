@@ -83,7 +83,18 @@ development_status:
   19-1-axisymmetric-detection: in-progress
   19-2-od-turning-region-detection: backlog
   19-3-groove-detection-turning: backlog
-  19-4-turning-operation-planning: backlog
-  19-5-lathe-tool-selection: backlog
-  19-6-lathe-gcode-output: backlog
+  19-4-id-bore-detection-turning: backlog
+  19-5-undercut-and-thread-region-flagging: backlog
+  19-6-long-shaft-tailstock-flag: backlog
+  19-7-false-positive-guard-milled-round-parts: backlog
+  19-8-turning-operation-planning: backlog
+  19-9-lathe-tool-selection: backlog
+  19-10-lathe-gcode-output: backlog
   epic-19-retrospective: optional
+
+  epic-20: backlog
+  20-1-synthetic-lathe-step-pack-t04-t11: backlog
+  20-2-operator-real-job-step-files: backlog
+  20-3-lathe-golden-regression-suite: backlog
+  20-4-vmc-lathe-combined-smoke-test: backlog
+  epic-20-retrospective: optional
