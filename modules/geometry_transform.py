@@ -200,6 +200,21 @@ def transform_mesh_and_candidates(mesh_data, candidates, transform):
                 new_face_mesh["vertices"] = new_verts
                 new_face_mesh_data.append(new_face_mesh)
             new_cand["face_mesh_data"] = new_face_mesh_data
+
+        vb = cand.get("visual_bounds")
+        if vb and all(vb.get(k) is not None for k in ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")):
+            corners = [
+                transform.point(x, y, z)
+                for x in (float(vb["x_min"]), float(vb["x_max"]))
+                for y in (float(vb["y_min"]), float(vb["y_max"]))
+                for z in (float(vb["z_min"]), float(vb["z_max"]))
+            ]
+            new_cand["visual_bounds"] = {
+                "x_min": min(c[0] for c in corners), "x_max": max(c[0] for c in corners),
+                "y_min": min(c[1] for c in corners), "y_max": max(c[1] for c in corners),
+                "z_min": min(c[2] for c in corners), "z_max": max(c[2] for c in corners),
+            }
+
         new_candidates.append(new_cand)
 
     return new_mesh, new_candidates
