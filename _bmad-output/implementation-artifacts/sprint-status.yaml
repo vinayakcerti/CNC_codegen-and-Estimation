@@ -1,5 +1,5 @@
 # generated: 2026-06-11
-# last_updated: 2026-06-19
+# last_updated: 2026-06-19 (v3-lathe-turning branch created)
 # project: CNC Process Planner
 # project_key: NOKEY
 # tracking_system: file-system
@@ -78,3 +78,12 @@ development_status:
   18-2-automated-release-report: backlog
   18-3-vmc-sign-off: backlog
   epic-18-retrospective: optional
+
+  epic-19: in-progress
+  19-1-axisymmetric-detection: in-progress
+  19-2-od-turning-region-detection: backlog
+  19-3-groove-detection-turning: backlog
+  19-4-turning-operation-planning: backlog
+  19-5-lathe-tool-selection: backlog
+  19-6-lathe-gcode-output: backlog
+  epic-19-retrospective: optional
