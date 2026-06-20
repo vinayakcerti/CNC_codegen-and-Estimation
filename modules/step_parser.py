@@ -1306,10 +1306,21 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
     # and centers aligned primarily along one axis (X or Y slot orientation).
     # Only non-circular cylinder faces (circular_xy=False) are considered as
     # slot-end walls.  Circular cylinders are holes/bores and excluded here.
+    _SLOT_MIN_DIM_MM = 8.0   # largest bbox dimension of a slot end cap must be ≥ this
     _slot_items = []
     for r in cyl_faces:
         lx = r.get("bbox_length_x") or 0
         ly = r.get("bbox_length_y") or 0
+        lz_val = r.get("bbox_length_z") or 0
+
+        # Slot end caps must have at least one meaningful bbox dimension.
+        # We test the MAXIMUM of lx/ly/lz so that end caps whose primary
+        # dimension maps to frame_lx or frame_ly (not frame_lz) in a permuted
+        # axis frame are not incorrectly filtered.  Tiny faces in all three
+        # dimensions are edge roundings or blends, not slot walls.
+        if max(lx, ly, lz_val) < _SLOT_MIN_DIM_MM:
+            continue
+
         circular_xy = (
             lx > 0 and ly > 0
             and abs(lx - ly) / max(lx, ly) <= 0.15
@@ -1330,6 +1341,15 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
         if est_r is None or est_r <= 0:
             continue
 
+        # Normal must be predominantly along a principal axis.
+        # Oblique normals (e.g. 45° chamfer blends, n=±0.71) indicate edge
+        # roundings or chamfered corners — not slot end-cap walls.
+        _nx_abs = abs(r.get("normal_x") or 0)
+        _ny_abs = abs(r.get("normal_y") or 0)
+        _nz_abs = abs(r.get("normal_z") or 0)
+        if max(_nx_abs, _ny_abs, _nz_abs) < 0.85:
+            continue
+
         _slot_items.append({
             "rec":        r,
             "est_radius": est_r,
@@ -1337,83 +1357,208 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
             "cy":   r.get("center_y") or 0.0,
             "zmin": r.get("bbox_zmin"),
             "zmax": r.get("bbox_zmax"),
+            "lx":   r.get("bbox_length_x") or 0.0,
+            "ly":   r.get("bbox_length_y") or 0.0,
             "lz":   r.get("bbox_length_z") or 0.0,
+            "nx":   r.get("normal_x") or 0.0,
+            "ny":   r.get("normal_y") or 0.0,
+            "nz":   r.get("normal_z") or 0.0,
         })
 
-    _RADIUS_TOL = 0.20   # pair radii must be within 20% of their average
-    _Z_TOL_MM   = 2.0    # absolute mm tolerance for matching Z extents
-    used        = set()
-    slot_pairs  = []
+    _RADIUS_TOL  = 0.20   # pair radii must be within 20% of their average
+    _Z_TOL_MM    = 2.0    # absolute mm tolerance for matching Z extents
+    _LZ_TOL_FRAC = 0.20   # slot Z-width must agree within 20% between both end caps
 
-    for i in range(len(_slot_items)):
-        if i in used:
-            continue
-        a = _slot_items[i]
-
-        for j in range(i + 1, len(_slot_items)):
-            if j in used:
-                continue
-            b = _slot_items[j]
+    # ── Build all valid candidate pairs, then assign shortest-first with
+    # directional exclusivity so a shared end cap (e.g. the middle face of
+    # three collinear end caps at x=−300/0/+300) can serve as the right end
+    # of one slot AND the left end of the adjacent slot simultaneously,
+    # without producing a spurious long-range pairing (−300 to +300).
+    _all_cand_pairs = []
+    for _i in range(len(_slot_items)):
+        for _j in range(_i + 1, len(_slot_items)):
+            _a = _slot_items[_i]
+            _b = _slot_items[_j]
 
             # Radius similarity
-            r_avg = (a["est_radius"] + b["est_radius"]) / 2.0
-            if abs(a["est_radius"] - b["est_radius"]) / r_avg > _RADIUS_TOL:
+            _r_avg = (_a["est_radius"] + _b["est_radius"]) / 2.0
+            if abs(_a["est_radius"] - _b["est_radius"]) / _r_avg > _RADIUS_TOL:
                 continue
 
-            # Z-range overlap: both zmin and zmax must agree within tolerance
-            if (a["zmin"] is None or b["zmin"] is None
-                    or a["zmax"] is None or b["zmax"] is None):
+            # Z-range agreement
+            if (_a["zmin"] is None or _b["zmin"] is None
+                    or _a["zmax"] is None or _b["zmax"] is None):
                 continue
-            if (abs(a["zmin"] - b["zmin"]) > _Z_TOL_MM
-                    or abs(a["zmax"] - b["zmax"]) > _Z_TOL_MM):
-                continue
-
-            # Axis alignment: one axis dominates, the other is within one diameter
-            dx   = abs(a["cx"] - b["cx"])
-            dy   = abs(a["cy"] - b["cy"])
-            diam = r_avg * 2.0
-            x_aligned = dx > diam and dy < diam * 0.6   # slot runs along X
-            y_aligned = dy > diam and dx < diam * 0.6   # slot runs along Y
-
-            if not (x_aligned or y_aligned):
+            if (abs(_a["zmin"] - _b["zmin"]) > _Z_TOL_MM
+                    or abs(_a["zmax"] - _b["zmax"]) > _Z_TOL_MM):
                 continue
 
-            used.add(i)
-            used.add(j)
-            slot_pairs.append((a, b, r_avg))
-            break   # face i is consumed; move to i+1
+            # Slot Z-width agreement
+            if _a["lz"] > 0 and _b["lz"] > 0:
+                _lz_avg = (_a["lz"] + _b["lz"]) / 2.0
+                if abs(_a["lz"] - _b["lz"]) / _lz_avg > _LZ_TOL_FRAC:
+                    continue
+
+            # Axis alignment
+            _dx   = abs(_a["cx"] - _b["cx"])
+            _dy   = abs(_a["cy"] - _b["cy"])
+            _diam = _r_avg * 2.0
+            _x_al = _dx > _diam and _dy < _diam * 0.6
+            _y_al = _dy > _diam and _dx < _diam * 0.6
+
+            if not (_x_al or _y_al):
+                continue
+
+            # Skip pairs where both face normals point OUTWARD from each other.
+            # Genuine slot inner walls face INWARD (toward the slot interior /
+            # the other end cap).  Structural bosses / rod ends face OUTWARD
+            # (away from each other), e.g. fi=634 at x=+289.9 nx=+1 and
+            # fi=638 at x=−289.9 nx=−1 on the Slide Base weldment.
+            # For real slot end caps: left cap nx≈+1 (pointing right, inward),
+            # right cap nx≈−1 (pointing left, inward) — the outward check does
+            # NOT trigger.  Tenon Slot end caps with nx≈0 also pass through.
+            if _x_al:
+                _left_x  = _a if _a["cx"] <= _b["cx"] else _b
+                _right_x = _b if _a["cx"] <= _b["cx"] else _a
+                if _left_x["nx"] < -0.7 and _right_x["nx"] > 0.7:
+                    continue
+            if _y_al:
+                _low_y  = _a if _a["cy"] <= _b["cy"] else _b
+                _high_y = _b if _a["cy"] <= _b["cy"] else _a
+                if _low_y["ny"] < -0.7 and _high_y["ny"] > 0.7:
+                    continue
+
+            _dist = math.sqrt((_a["cx"] - _b["cx"])**2 + (_a["cy"] - _b["cy"])**2)
+
+            # Directional tags encode which side of each face this pairing uses.
+            #
+            # Two kinds of end caps:
+            #   "axis-normal" — face normal is along the slot axis (|nx| > 0.5 for
+            #     x-aligned), e.g. standard top-milled slot with nx≈±1 end caps.
+            #     One such face consumes ALL x-aligned capacity (marks xpos+xneg).
+            #   "perp-normal" — face normal is perpendicular to the slot axis (ny or
+            #     nz dominant), e.g. Tenon Slot end caps with ny≈+1.
+            #     One such face only consumes one directional slot, allowing an
+            #     adjacent slot to claim the opposite direction on the same face
+            #     (shared boundary between two consecutive slots).
+            if _x_al:
+                _b_right  = _b["cx"] > _a["cx"]
+                _i_ax_nrm = abs(_a["nx"]) > 0.5   # A's normal is along X
+                _j_ax_nrm = abs(_b["nx"]) > 0.5   # B's normal is along X
+                _i_dir = "xpos" if _b_right else "xneg"
+                _j_dir = "xneg" if _b_right else "xpos"
+            else:   # _y_al
+                _b_up     = _b["cy"] > _a["cy"]
+                _i_ax_nrm = abs(_a["ny"]) > 0.5
+                _j_ax_nrm = abs(_b["ny"]) > 0.5
+                _i_dir = "ypos" if _b_up else "yneg"
+                _j_dir = "yneg" if _b_up else "ypos"
+
+            _all_cand_pairs.append(
+                (_dist, _i, _j, _r_avg, _i_dir, _j_dir, _i_ax_nrm, _j_ax_nrm)
+            )
+
+    # Sort by center-distance so adjacent end caps are paired before far-end ones.
+    _all_cand_pairs.sort(key=lambda _p: _p[0])
+
+    slot_pairs    = []
+    _dir_used     = {}   # (face_index, "xpos"/"xneg"/"ypos"/"yneg") → True
+    # axis-normal faces mark both ± directions when first paired so they cannot
+    # appear in any further same-axis pair.
+
+    def _is_x_blocked(_idx, _dir_str, _ax_nrm):
+        if _ax_nrm:
+            return _dir_used.get((_idx, "xpos")) or _dir_used.get((_idx, "xneg"))
+        return _dir_used.get((_idx, _dir_str))
+
+    def _is_y_blocked(_idx, _dir_str, _ax_nrm):
+        if _ax_nrm:
+            return _dir_used.get((_idx, "ypos")) or _dir_used.get((_idx, "yneg"))
+        return _dir_used.get((_idx, _dir_str))
+
+    def _mark_used(_idx, _dir_str, _ax_nrm, _xy):
+        if _ax_nrm:
+            _dir_used[(_idx, f"{_xy}pos")] = True
+            _dir_used[(_idx, f"{_xy}neg")] = True
+        else:
+            _dir_used[(_idx, _dir_str)] = True
+
+    for _dist, _i, _j, _r_avg, _i_dir, _j_dir, _i_ax_nrm, _j_ax_nrm in _all_cand_pairs:
+        _xy = _i_dir[0]   # "x" or "y"
+        _bl_fn = _is_x_blocked if _xy == "x" else _is_y_blocked
+        if _bl_fn(_i, _i_dir, _i_ax_nrm) or _bl_fn(_j, _j_dir, _j_ax_nrm):
+            continue
+        _mark_used(_i, _i_dir, _i_ax_nrm, _xy)
+        _mark_used(_j, _j_dir, _j_ax_nrm, _xy)
+        slot_pairs.append((_slot_items[_i], _slot_items[_j], _r_avg))
 
     for (a, b, r_avg) in slot_pairs:
         _s_n[0] += 1
         cid = f"S{_s_n[0]:03d}"
 
-        diam_slot   = round(r_avg * 2.0, 3)
-        ctr_dist    = math.sqrt(
+        diam_slot = round(r_avg * 2.0, 3)
+        ctr_dist  = math.sqrt(
             (a["cx"] - b["cx"]) ** 2 + (a["cy"] - b["cy"]) ** 2
         )
         slot_length = round(ctr_dist + diam_slot, 3)
-        slot_depth  = (
-            round((a["lz"] + b["lz"]) / 2.0, 3)
-            if a["lz"] and b["lz"] else None
-        )
         slot_cx = round((a["cx"] + b["cx"]) / 2.0, 3)
         slot_cy = round((a["cy"] + b["cy"]) / 2.0, 3)
 
+        # Infer setup direction from end-cap face normals.
+        # End-cap inner surfaces face INTO the slot void; their dominant normal
+        # component reveals the slot's depth axis and access direction.
+        #
+        # Standard top slots have paired end caps whose normals cancel to ~0
+        # when averaged (left cap nx≈−1, right cap nx≈+1 for an X-running slot).
+        # A magnitude threshold of 0.4 guards against promoting those to a
+        # false side-access classification.
+        avg_nx = (a["nx"] + b["nx"]) / 2.0
+        avg_ny = (a["ny"] + b["ny"]) / 2.0
+        avg_nz = (a["nz"] + b["nz"]) / 2.0
+        abs_nx, abs_ny, abs_nz = abs(avg_nx), abs(avg_ny), abs(avg_nz)
+        _nmag  = math.sqrt(avg_nx**2 + avg_ny**2 + avg_nz**2)
+
+        if _nmag < 0.4:
+            # Normals cancel to ~0 (paired caps with opposite ±X or ±Y normals).
+            # Cannot reliably infer direction; assume standard top slot.
+            slot_setup = "Top"
+            slot_depth = round((a["lz"] + b["lz"]) / 2.0, 3) if a["lz"] and b["lz"] else None
+            slot_width = diam_slot
+        elif abs_nz >= max(abs_nx, abs_ny):
+            # Z-dominant: inner surface faces up/down → slot accessed from above/below
+            slot_setup = "Top" if avg_nz < 0 else "Bottom"
+            slot_depth = round((a["lz"] + b["lz"]) / 2.0, 3) if a["lz"] and b["lz"] else None
+            slot_width = diam_slot
+        elif abs_ny >= abs_nx:
+            # Y-dominant: slot accessed from the ±Y (Front/Back) face.
+            # ny > 0 → inner surface faces +Y → slot void is on +Y side
+            # → tool enters from -Y (Front direction).
+            slot_setup = "Front" if avg_ny > 0 else "Back"
+            # Depth = Y-span of the end caps (penetration from the Y face)
+            slot_depth = round((a["ly"] + b["ly"]) / 2.0, 3) if a["ly"] and b["ly"] else None
+            # Width = Z-span of the end caps (slot height in Z)
+            slot_width = round((a["lz"] + b["lz"]) / 2.0, 3) if a["lz"] and b["lz"] else diam_slot
+        else:
+            # X-dominant: slot accessed from the ±X (Left/Right) face.
+            slot_setup = "Left" if avg_nx > 0 else "Right"
+            slot_depth = round((a["lx"] + b["lx"]) / 2.0, 3) if a["lx"] and b["lx"] else None
+            slot_width = round((a["lz"] + b["lz"]) / 2.0, 3) if a["lz"] and b["lz"] else diam_slot
+
         candidates.append({
             "candidate_id":     cid,
-            "feature_name":     f"Slot {slot_length:.2f}×{diam_slot:.2f} mm",
+            "feature_name":     f"Slot {slot_length:.2f}×{slot_width:.2f} mm",
             "feature_type":     "Slot",
             "quantity":         1,
             "x_pos":            slot_cx,
             "y_pos":            slot_cy,
             "diameter":         None,
             "length":           slot_length,
-            "width":            diam_slot,
+            "width":            slot_width,
             "depth":            slot_depth,
             "tolerance_note":   "",
             "priority":         3,
             "confidence":       "medium",
-            "setup_label":      "Top",
+            "setup_label":      slot_setup,
             "detection_source": "cadquery_face_records",
             "detection_note":   (
                 f"Paired non-circular cylinder end faces "
@@ -1421,7 +1566,9 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
                 f"(circular_xy=False on both, excluded from hole detection); "
                 f"est. radius={r_avg:.3f} mm; "
                 f"center separation={ctr_dist:.2f} mm → "
-                f"length={slot_length} mm, width={diam_slot} mm."
+                f"length={slot_length} mm, width={slot_width} mm, depth={slot_depth} mm; "
+                f"setup inferred from end-cap normals "
+                f"(avg_n=({avg_nx:.2f},{avg_ny:.2f},{avg_nz:.2f}))."
             ),
             "face_indices":     [a["rec"]["face_index"], b["rec"]["face_index"]],
             "accepted": False,
@@ -1448,6 +1595,7 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
     _pz_span = float(part_height)   # part_height already computed at top of function
     _pzr     = part_bbox.get("z_range", (0.0, 0.0))
     _p_z_min = float(_pzr[0])      # part Z minimum — used for floor-face Z guard
+    _p_z_max = float(_pzr[1])      # part Z maximum — used for top-reach guard
 
     # Bucket axis-aligned vertical PLANE faces by normal direction.
     _vxp, _vxn, _vyp, _vyn = [], [], [], []   # +X, -X, +Y, -Y normals
@@ -1522,6 +1670,15 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
             _zlo = max(_xp["zlo"], _yp["zlo"])
             _zhi = min(_xp["zhi"], _yp["zhi"])
             if _zhi <= _zlo:
+                continue
+
+            # Guard: pocket walls must reach close to the part's top Z face.
+            # In the current machining frame, a genuine top-accessible pocket
+            # has its wall tops at or near z_max. Features whose walls sit
+            # entirely in the mid-section of the part are side-accessible and
+            # will be correctly captured in the frame where that side is "top".
+            _top_tol = max(3.0, _pz_span * 0.10)
+            if _zhi < _p_z_max - _top_tol:
                 continue
 
             _px = round(_xp["gap"], 3)
@@ -2536,7 +2693,7 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
         # approximate marker shapes.  Failures per-face are silenced; the
         # candidate falls back to its marker representation.
         _FACE_COLOR_TYPES = {
-            "Face milling", "Hole", "Large hole / boring", "Pocket", "Chamfer",
+            "Face milling", "Hole", "Large hole / boring", "Pocket", "Chamfer", "Slot",
         }
         try:
             _faces_list = cq_result.faces().vals()

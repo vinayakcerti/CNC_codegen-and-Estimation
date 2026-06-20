@@ -171,10 +171,10 @@
     {
       "file": "SF14_top_fillet_no_chamfer.step",
       "sha256": "2eb4dad6bb3260e311f30df39da709534d57cdb0f2447e3761b4c65afecca436",
-      "notes": "Epic 12.4 SF-14: 80x120x25 block with 3mm fillet on all top edges. Fillets are TOROIDAL faces — Section F must NOT emit a Chamfer candidate. The Slot=2 count is a known TOROIDAL-surface false positive (same class of issue as X01 freeform, tracked in Epic F3). Key assertion: Chamfer=0.",
+      "notes": "Epic 12.4 SF-14: 80x120x25 block with 3mm fillet on all top edges. Fillets are TOROIDAL faces — Section F must NOT emit a Chamfer candidate. After the Section C lz>=8mm filter (Tenon Slot fix), toroidal fillet faces (lz=3mm) are excluded from slot detection and surface as Hole=2 instead — still a known TOROIDAL false positive tracked in Epic F3. Key assertion: Chamfer=0.",
       "expected_counts": {
         "Face milling": 2,
-        "Slot": 2
+        "Hole": 2
       }
     },
     {
