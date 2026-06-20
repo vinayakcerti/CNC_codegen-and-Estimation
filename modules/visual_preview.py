@@ -714,15 +714,19 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
     if show_face_colors:
         _legend_shown_fc = set()
         _active_fc = _face_cands + (_face_mill_cands if show_face_milling else [])
-        # Cap per-type overlay count to prevent the browser crashing when a
-        # complex part produces hundreds of candidates of the same type.
-        _MAX_OVERLAYS_PER_TYPE = 30
-        _overlay_type_count: dict = {}
+        # When the part has many candidates (complex weldments, etc.) rendering
+        # all of them as colored Mesh3d traces sends hundreds of MB of JSON to
+        # the browser and causes it to crash/hang.
+        # Strategy: only render face-color overlays for ALL candidates when the
+        # total count is small (≤ 20).  For larger parts, suppress per-candidate
+        # overlays here — the highlighted-group section below still colors the
+        # operator's selected group with full accuracy.
+        _OVERLAY_TOTAL_MAX = 20
+        _render_all_overlays = len(_active_fc) <= _OVERLAY_TOTAL_MAX
         for _fc in _active_fc:
+            if not _render_all_overlays:
+                continue  # heavyweight parts: skip; highlighted group handles coloring
             _ftype = _fc.get("feature_type", "Unknown")
-            _overlay_type_count[_ftype] = _overlay_type_count.get(_ftype, 0) + 1
-            if _overlay_type_count[_ftype] > _MAX_OVERLAYS_PER_TYPE:
-                continue  # too many of this type — skip face overlay (click markers still work)
             _color = _feature_color(_ftype)
             _fname = _fc.get("feature_name", _ftype)
             _fcid  = _fc.get("candidate_id", "")
