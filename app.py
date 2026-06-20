@@ -361,13 +361,18 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
             key=f"{key_prefix}chart",
             use_container_width=True,
         )
-        # Capture 3D marker click → store candidate_id for the right panel
+        # Capture 3D marker/face click → store candidate_id for the right panel
         if key_prefix == "_smw_3d_":
             _ev_pts = (
                 getattr(getattr(_chart_ev, "selection", None), "points", None) or []
             )
-            if _ev_pts and _ev_pts[0].get("customdata"):
-                st.session_state["_smw_3d_clicked_cid"] = _ev_pts[0]["customdata"]
+            if _ev_pts:
+                _cd = _ev_pts[0].get("customdata")
+                # Mesh3d customdata is per-vertex and may arrive as a list
+                if isinstance(_cd, list) and _cd:
+                    _cd = _cd[0]
+                if _cd:
+                    st.session_state["_smw_3d_clicked_cid"] = _cd
 
         # ── Custom readable legend (stays on page even when chart is fullscreened) ──
         _LEGEND_ITEMS: list[tuple[str, str]] = [
@@ -3507,6 +3512,9 @@ def page_select_machining_work():
                             _auto_lbl = f"{_g['description']} - {_cnt}"
                             if _auto_lbl in _hl_group_opts:
                                 st.session_state["_smw_hl_group_sel"] = _auto_lbl
+                            # Check the group checkbox so it's selected for machining
+                            _ck = f"_smw_card_accept_{_group_widget_suffix(_g)}"
+                            st.session_state[_ck] = True
                             break
 
                 _hl_group_sel = st.selectbox(

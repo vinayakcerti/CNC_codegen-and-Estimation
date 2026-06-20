@@ -718,6 +718,7 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
             _ftype = _fc.get("feature_type", "Unknown")
             _color = _feature_color(_ftype)
             _fname = _fc.get("feature_name", _ftype)
+            _fcid  = _fc.get("candidate_id", "")
             for _fm in _fc.get("face_mesh_data", []):
                 _verts = _fm.get("vertices", [])
                 _tris  = _fm.get("triangles", [])
@@ -745,6 +746,7 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
                     showlegend=_first_fc,
                     hovertext=f"CAD face: {_fname}",
                     hoverinfo="text",
+                    customdata=[_fcid] * len(_ov),
                 ))
                 _bx, _by, _bz = _boundary_edge_coords(_ov, _tris)
                 if _bx:

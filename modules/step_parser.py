@@ -1357,6 +1357,10 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
             "cy":   r.get("center_y") or 0.0,
             "zmin": r.get("bbox_zmin"),
             "zmax": r.get("bbox_zmax"),
+            "ymin": r.get("bbox_ymin"),
+            "ymax": r.get("bbox_ymax"),
+            "xmin": r.get("bbox_xmin"),
+            "xmax": r.get("bbox_xmax"),
             "lx":   r.get("bbox_length_x") or 0.0,
             "ly":   r.get("bbox_length_y") or 0.0,
             "lz":   r.get("bbox_length_z") or 0.0,
@@ -1364,6 +1368,10 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
             "ny":   r.get("normal_y") or 0.0,
             "nz":   r.get("normal_z") or 0.0,
         })
+
+    # PLANE faces used to expand face_indices beyond the two cylinder end-caps
+    # so the slot body walls/floor are colored in the 3D viewer.
+    _plane_recs = [r for r in face_records if r.get("geom_type") == "PLANE"]
 
     _RADIUS_TOL  = 0.20   # pair radii must be within 20% of their average
     _Z_TOL_MM    = 2.0    # absolute mm tolerance for matching Z extents
@@ -1521,9 +1529,11 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
         if _nmag < 0.4:
             # Normals cancel to ~0 (paired caps with opposite ±X or ±Y normals).
             # Cannot reliably infer direction; assume standard top slot.
+            # Use lz (end-cap Z-span = slot height) for slot_width rather than
+            # the diam_slot estimate, which underestimates most real slots.
             slot_setup = "Top"
-            slot_depth = round((a["lz"] + b["lz"]) / 2.0, 3) if a["lz"] and b["lz"] else None
-            slot_width = diam_slot
+            slot_depth = None
+            slot_width = round((a["lz"] + b["lz"]) / 2.0, 3) if a["lz"] and b["lz"] else diam_slot
         elif abs_nz >= max(abs_nx, abs_ny):
             # Z-dominant: inner surface faces up/down → slot accessed from above/below
             slot_setup = "Top" if avg_nz < 0 else "Bottom"
@@ -1543,6 +1553,33 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
             slot_setup = "Left" if avg_nx > 0 else "Right"
             slot_depth = round((a["lx"] + b["lx"]) / 2.0, 3) if a["lx"] and b["lx"] else None
             slot_width = round((a["lz"] + b["lz"]) / 2.0, 3) if a["lz"] and b["lz"] else diam_slot
+
+        # Find PLANE faces inside this slot's bounding box so the slot body
+        # walls/floor/ceiling get colored in the 3D viewer (not just end-caps).
+        _TOL_BB = 3.0  # mm expansion on each side of the end-cap bbox union
+        _s_xmin = min(a.get("xmin") or a["cx"], b.get("xmin") or b["cx"]) - _TOL_BB
+        _s_xmax = max(a.get("xmax") or a["cx"], b.get("xmax") or b["cx"]) + _TOL_BB
+        _s_ymin = min(a.get("ymin") or a["cy"], b.get("ymin") or b["cy"]) - _TOL_BB
+        _s_ymax = max(a.get("ymax") or a["cy"], b.get("ymax") or b["cy"]) + _TOL_BB
+        _s_zmin = (
+            min(a["zmin"] or a["cy"], b["zmin"] or b["cy"]) - _TOL_BB
+            if (a["zmin"] is not None and b["zmin"] is not None) else None
+        )
+        _s_zmax = (
+            max(a["zmax"] or a["cy"], b["zmax"] or b["cy"]) + _TOL_BB
+            if (a["zmax"] is not None and b["zmax"] is not None) else None
+        )
+        _body_fi: list[int] = []
+        for _pr in _plane_recs:
+            _pcx = _pr.get("center_x") or 0
+            _pcy = _pr.get("center_y") or 0
+            _pcz = _pr.get("center_z") or 0
+            _in_x = _s_xmin <= _pcx <= _s_xmax
+            _in_y = _s_ymin <= _pcy <= _s_ymax
+            _in_z = (_s_zmin is None or _s_zmax is None
+                     or _s_zmin <= _pcz <= _s_zmax)
+            if _in_x and _in_y and _in_z:
+                _body_fi.append(_pr["face_index"])
 
         candidates.append({
             "candidate_id":     cid,
@@ -1568,9 +1605,10 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
                 f"center separation={ctr_dist:.2f} mm → "
                 f"length={slot_length} mm, width={slot_width} mm, depth={slot_depth} mm; "
                 f"setup inferred from end-cap normals "
-                f"(avg_n=({avg_nx:.2f},{avg_ny:.2f},{avg_nz:.2f}))."
+                f"(avg_n=({avg_nx:.2f},{avg_ny:.2f},{avg_nz:.2f})); "
+                f"body PLANE faces: {len(_body_fi)}."
             ),
-            "face_indices":     [a["rec"]["face_index"], b["rec"]["face_index"]],
+            "face_indices":     [a["rec"]["face_index"], b["rec"]["face_index"]] + _body_fi,
             "accepted": False,
             "ignored":  False,
         })
