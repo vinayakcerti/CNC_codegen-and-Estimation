@@ -714,8 +714,15 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
     if show_face_colors:
         _legend_shown_fc = set()
         _active_fc = _face_cands + (_face_mill_cands if show_face_milling else [])
+        # Cap per-type overlay count to prevent the browser crashing when a
+        # complex part produces hundreds of candidates of the same type.
+        _MAX_OVERLAYS_PER_TYPE = 30
+        _overlay_type_count: dict = {}
         for _fc in _active_fc:
             _ftype = _fc.get("feature_type", "Unknown")
+            _overlay_type_count[_ftype] = _overlay_type_count.get(_ftype, 0) + 1
+            if _overlay_type_count[_ftype] > _MAX_OVERLAYS_PER_TYPE:
+                continue  # too many of this type — skip face overlay (click markers still work)
             _color = _feature_color(_ftype)
             _fname = _fc.get("feature_name", _ftype)
             _fcid  = _fc.get("candidate_id", "")

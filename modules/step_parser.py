@@ -1554,6 +1554,18 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
             slot_depth = round((a["lx"] + b["lx"]) / 2.0, 3) if a["lx"] and b["lx"] else None
             slot_width = round((a["lz"] + b["lz"]) / 2.0, 3) if a["lz"] and b["lz"] else diam_slot
 
+        # Sanity-check dimensions — skip implausible pairs that squeaked through
+        # the pairing logic.  Very thin "slots" (width < 5 mm) are almost
+        # certainly corner-fillet or edge-rounding false positives, not real
+        # machined slots.  Very long ones (> 2 × part length) are spurious
+        # cross-part pairings that inflate the candidate list on complex
+        # weldments.
+        _part_span_x = abs((part_bbox.get("xmax") or 0) - (part_bbox.get("xmin") or 0))
+        _part_span_y = abs((part_bbox.get("ymax") or 0) - (part_bbox.get("ymin") or 0))
+        _part_diag   = math.sqrt(_part_span_x ** 2 + _part_span_y ** 2) or 9999
+        if slot_width < 5.0 or slot_length > _part_diag * 1.1:
+            continue
+
         # Find PLANE faces inside this slot's bounding box so the slot body
         # walls/floor/ceiling get colored in the 3D viewer (not just end-caps).
         _TOL_BB = 3.0  # mm expansion on each side of the end-cap bbox union
