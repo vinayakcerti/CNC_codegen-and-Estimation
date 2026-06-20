@@ -713,19 +713,36 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
     # visible even if residual z-fighting affects the filled face.
     if show_face_colors:
         _legend_shown_fc = set()
-        _active_fc = _face_cands + (_face_mill_cands if show_face_milling else [])
-        # When the part has many candidates (complex weldments, etc.) rendering
-        # all of them as colored Mesh3d traces sends hundreds of MB of JSON to
-        # the browser and causes it to crash/hang.
-        # Strategy: only render face-color overlays for ALL candidates when the
-        # total count is small (≤ 20).  For larger parts, suppress per-candidate
-        # overlays here — the highlighted-group section below still colors the
-        # operator's selected group with full accuracy.
-        _OVERLAY_TOTAL_MAX = 20
-        _render_all_overlays = len(_active_fc) <= _OVERLAY_TOTAL_MAX
+        _active_fc_raw = _face_cands + (_face_mill_cands if show_face_milling else [])
+        # For types that can have many candidates (e.g. Slot on complex weldments),
+        # sort by length descending so the most significant features (longest =
+        # most likely real machined features) get colored first, then cap each
+        # type at a safe limit.  This keeps the Plotly figure lightweight while
+        # still showing the important features.  The highlighted-group section
+        # below colors the operator's selected group at full fidelity regardless.
+        _TYPE_OVERLAY_CAP = {
+            "Slot": 8,          # longest 8 slots only — avoids 100+ traces on weldments
+            "Pocket": 12,
+            "Step": 10,
+        }
+        _DEFAULT_OVERLAY_CAP = 20
+        # Sort slots by length so the longest (most significant) appear first
+        _active_fc_raw.sort(
+            key=lambda _c: (
+                _c.get("feature_type", "") == "Slot",  # slots float to front for sort
+                -(_c.get("length") or 0),
+            ),
+            reverse=True,
+        )
+        _overlay_type_count: dict = {}
+        _active_fc = []
+        for _c in _active_fc_raw:
+            _ft = _c.get("feature_type", "Unknown")
+            _cap = _TYPE_OVERLAY_CAP.get(_ft, _DEFAULT_OVERLAY_CAP)
+            _overlay_type_count[_ft] = _overlay_type_count.get(_ft, 0) + 1
+            if _overlay_type_count[_ft] <= _cap:
+                _active_fc.append(_c)
         for _fc in _active_fc:
-            if not _render_all_overlays:
-                continue  # heavyweight parts: skip; highlighted group handles coloring
             _ftype = _fc.get("feature_type", "Unknown")
             _color = _feature_color(_ftype)
             _fname = _fc.get("feature_name", _ftype)
