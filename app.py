@@ -45,6 +45,11 @@ from modules.tolerance_guide import (
     get_it_tolerance_um, get_it_band_label,
     get_process_for_feature, SURFACE_FINISH_TABLE, COMMON_FITS,
 )
+from modules.weldment.weldment_analyzer import analyze_weldment
+from modules.weldment.mesh_combine import (
+    combine_meshes as combine_weldment_meshes,
+    mesh_bbox_dims as weldment_mesh_bbox_dims,
+)
 
 st.set_page_config(
     page_title="CNC Plan and Process Pro",
@@ -61,6 +66,7 @@ LOGO_PATH = os.path.join(os.path.dirname(__file__), "public", "logo.png")
 _SECTION_TABS = {
     "CONFIGURE": [
         ("Part Setup",                "🧱 Part Setup"),
+        ("Weldment",                  "🔩 Weldment"),
         ("Select Machining Work",     "🧩 Select Work"),
         ("4. Setup & Feature Review", "✅ Feature Review"),
     ],
@@ -4128,6 +4134,422 @@ def page_part_setup():
             )
 
 
+def page_weldment():
+    """Weldment / Fabrication Assembly workflow page."""
+    import hashlib as _hashlib
+
+    st.title("Weldment / Fabrication Assembly")
+    st.caption(
+        "Upload a multi-body STEP file representing a weldment or fabricated assembly. "
+        "The tool will split each solid body, classify it, group identical parts, "
+        "suggest machining operations per part, and estimate total time."
+    )
+    st.divider()
+
+    # ── Init session keys ─────────────────────────────────────────────
+    if "wm_result" not in st.session_state:
+        st.session_state.wm_result = None
+    if "wm_filename" not in st.session_state:
+        st.session_state.wm_filename = None
+    if "wm_file_hash" not in st.session_state:
+        st.session_state.wm_file_hash = None
+    if "wm_uploader_key" not in st.session_state:
+        st.session_state.wm_uploader_key = 0
+
+    # ── Clear button ──────────────────────────────────────────────────
+    if st.session_state.wm_filename:
+        wm_hdr1, wm_hdr2 = st.columns([4, 1])
+        wm_hdr1.info(f"Loaded: **{st.session_state.wm_filename}**")
+        if wm_hdr2.button("Clear", key="wm_clear", type="secondary"):
+            st.session_state.wm_result       = None
+            st.session_state.wm_filename     = None
+            st.session_state.wm_file_hash    = None
+            st.session_state.wm_uploader_key = st.session_state.wm_uploader_key + 1
+            st.rerun()
+
+    # ── File uploader ─────────────────────────────────────────────────
+    wm_uploaded = st.file_uploader(
+        "Upload STEP / STP file (multi-body weldment)",
+        type=["step", "stp"],
+        help="Upload the assembly STEP file. Each solid body will be analysed separately.",
+        key=f"wm_uploader_{st.session_state.wm_uploader_key}",
+    )
+
+    if wm_uploaded:
+        wm_bytes = wm_uploaded.read()
+        wm_hash  = _hashlib.sha256(wm_bytes).hexdigest()
+
+        if wm_hash != st.session_state.wm_file_hash:
+            with st.spinner("Splitting bodies and analysing weldment..."):
+                wm_analysis = analyze_weldment(wm_bytes, wm_uploaded.name)
+            st.session_state.wm_result    = wm_analysis
+            st.session_state.wm_filename  = wm_uploaded.name
+            st.session_state.wm_file_hash = wm_hash
+
+    result = st.session_state.wm_result
+    if result is None:
+        st.info("Upload a multi-body STEP file above to begin weldment analysis.")
+        return
+
+    if not result["success"]:
+        st.error(f"**Analysis failed:** {result['message']}")
+        for w in result.get("warnings", []):
+            st.warning(w)
+        return
+
+    job = result["job"]
+
+    for w in result.get("warnings", []):
+        st.warning(w)
+
+    # ── Summary metrics ───────────────────────────────────────────────
+    st.subheader("Assembly Summary")
+    sm1, sm2, sm3, sm4, sm5 = st.columns(5)
+    sm1.metric("Total Bodies", job.total_bodies)
+    sm2.metric("Unique Part Types", len(job.groups))
+    sm3.metric("Machining Time", f"{job.total_machining_time_min:.0f} min")
+    sm4.metric("Assembly Time", f"{job.total_assembly_time_min:.0f} min")
+    sm5.metric("Total Time", f"{job.total_time_min:.0f} min")
+    st.divider()
+
+    # ── BOM — grouped parts table ─────────────────────────────────────
+    st.subheader("Bill of Materials — Grouped Parts")
+    bom_rows = []
+    for g in job.groups:
+        rep = g.representative
+        bom_rows.append({
+            "Group": g.group_id.split("_")[0],
+            "Classification": rep.classification.title(),
+            "Qty": g.quantity,
+            "L (mm)": round(rep.length_mm, 1),
+            "W (mm)": round(rep.width_mm, 1),
+            "H (mm)": round(rep.height_mm, 1),
+            "Vol (cm³)": round(rep.volume_cm3, 2),
+            "Faces": rep.faces_count,
+            "Material": rep.material_guess,
+            "Machining (min/pc)": rep.machining_time_min,
+            "Bodies": ", ".join(str(i + 1) for i in g.body_indices),
+        })
+    st.dataframe(
+        pd.DataFrame(bom_rows),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Machining (min/pc)": st.column_config.NumberColumn(format="%.1f"),
+            "Vol (cm³)":          st.column_config.NumberColumn(format="%.2f"),
+        },
+    )
+    st.divider()
+
+    # ── Part detail — group-first selector + single persistent viewer ─
+    st.subheader("Part Detail by Group")
+    # Build a lookup: body_index → raw mesh_data from the splitter
+    _body_mesh_lookup = {
+        b["body_index"]: b.get("mesh_data")
+        for b in result.get("bodies_raw", [])
+    }
+
+    _WM_CLASS_ICONS = {
+        "plate":   "🔲",
+        "block":   "🧊",
+        "tube":    "🛢️",
+        "shaft":   "⚙️",
+        "gusset":  "📐",
+        "bracket": "🔩",
+        "unknown": "❓",
+    }
+    _WM_ASSEMBLY_KEY = "__assembly__"
+
+    if "wm_selected_group" not in st.session_state:
+        st.session_state.wm_selected_group = _WM_ASSEMBLY_KEY
+    _valid_group_ids = {g.group_id for g in job.groups}
+    if (st.session_state.wm_selected_group != _WM_ASSEMBLY_KEY
+            and st.session_state.wm_selected_group not in _valid_group_ids):
+        st.session_state.wm_selected_group = _WM_ASSEMBLY_KEY
+    _wm_sel = st.session_state.wm_selected_group
+
+    def _wm_op_categories(ops):
+        """Bucket operations into display categories (ordered)."""
+        cats = {
+            "Facing": [],
+            "Holes / Drilling": [],
+            "Slots / Pockets": [],
+            "Turning": [],
+            "Other": [],
+        }
+        for op in ops or []:
+            name = (op.get("operation") or "").lower()
+            if "face milling" in name:
+                cats["Facing"].append(op)
+            elif "drill" in name or "boring" in name:
+                cats["Holes / Drilling"].append(op)
+            elif "slot" in name or "pocket" in name:
+                cats["Slots / Pockets"].append(op)
+            elif "turning" in name or "steady rest" in name:
+                cats["Turning"].append(op)
+            else:
+                cats["Other"].append(op)
+        return cats
+
+    _sel_col, _view_col = st.columns([1, 2], gap="medium")
+
+    # ── Left: one card per group (+ Full Assembly) ────────────────────
+    with _sel_col:
+        st.markdown("**Select a part group**")
+
+        # Full Assembly card
+        if st.button(
+            "🏗️ Full Assembly",
+            key="wm_grp_card_assembly",
+            type="primary" if _wm_sel == _WM_ASSEMBLY_KEY else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state.wm_selected_group = _WM_ASSEMBLY_KEY
+            st.rerun()
+        st.caption(f"All {job.total_bodies} bodies · {len(job.groups)} unique part types")
+
+        for g in job.groups:
+            rep = g.representative
+            _icon = _WM_CLASS_ICONS.get(rep.classification, "❓")
+            if st.button(
+                f"{_icon} {rep.classification.title()} ×{g.quantity}",
+                key=f"wm_grp_card_{g.group_id}",
+                type="primary" if _wm_sel == g.group_id else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state.wm_selected_group = g.group_id
+                st.rerun()
+            _bodies_str = ", ".join(str(i + 1) for i in g.body_indices)
+            st.caption(
+                f"{rep.length_mm:.0f} × {rep.width_mm:.0f} × {rep.height_mm:.0f} mm · "
+                f"{rep.machining_time_min:.1f} min/pc · Bodies {_bodies_str}"
+            )
+
+    # ── Right: single persistent 3D viewer + detail ───────────────────
+    with _view_col:
+        if _wm_sel == _WM_ASSEMBLY_KEY:
+            # Combine every body mesh into ONE Mesh3d figure
+            _all_meshes = [
+                _body_mesh_lookup.get(b["body_index"])
+                for b in result.get("bodies_raw", [])
+            ]
+            _combined_mesh = combine_weldment_meshes(_all_meshes)
+            if _combined_mesh:
+                _fig = build_step_mesh3d(
+                    _combined_mesh,
+                    weldment_mesh_bbox_dims(_combined_mesh),
+                    candidates=[],
+                    show_labels=False,
+                    show_stock_box=False,
+                    show_face_colors=False,
+                    show_markers=False,
+                    part_opacity=1.0,
+                    camera_view="Isometric",
+                )
+                _fig.update_layout(
+                    height=480,
+                    margin=dict(l=0, r=0, t=32, b=0),
+                    title=dict(
+                        text=f"Full Assembly — {job.total_bodies} bodies",
+                        font=dict(size=14),
+                        x=0.05,
+                    ),
+                )
+                st.plotly_chart(_fig, use_container_width=True, key="wm_group_3d")
+            else:
+                st.info("3D preview not available for this assembly.")
+            st.caption(
+                f"Showing the complete weldment: {job.total_bodies} bodies across "
+                f"{len(job.groups)} unique part types. Select a group on the left "
+                f"for per-part machining detail."
+            )
+        else:
+            _grp = next(g for g in job.groups if g.group_id == _wm_sel)
+            _rep = _grp.representative
+            _grp_label = (
+                f"{_rep.classification.title()} ×{_grp.quantity} — "
+                f"{_rep.length_mm:.0f} × {_rep.width_mm:.0f} × {_rep.height_mm:.0f} mm"
+            )
+            _rep_mesh = _body_mesh_lookup.get(_rep.body_index)
+            if _rep_mesh:
+                _fig = build_step_mesh3d(
+                    _rep_mesh,
+                    {
+                        "length": _rep.length_mm,
+                        "width":  _rep.width_mm,
+                        "height": _rep.height_mm,
+                    },
+                    candidates=[],
+                    show_labels=False,
+                    show_stock_box=False,
+                    show_face_colors=False,
+                    show_markers=False,
+                    part_opacity=1.0,
+                    camera_view="Isometric",
+                )
+                _fig.update_layout(
+                    height=420,
+                    margin=dict(l=0, r=0, t=32, b=0),
+                    title=dict(text=_grp_label, font=dict(size=14), x=0.05),
+                )
+                st.plotly_chart(_fig, use_container_width=True, key="wm_group_3d")
+            else:
+                st.info("3D preview not available for this group.")
+
+            _bodies_str = ", ".join(str(i + 1) for i in _grp.body_indices)
+            if _grp.quantity > 1:
+                st.info(
+                    f"Applies to all {_grp.quantity} identical bodies: Body {_bodies_str}"
+                )
+            else:
+                st.caption(f"Single body: Body {_bodies_str}")
+
+            _dc1, _dc2, _dc3, _dc4 = st.columns(4)
+            _dc1.metric("Class", _rep.classification.title())
+            _dc2.metric("Vol (cm³)", f"{_rep.volume_cm3:.2f}")
+            _dc3.metric("Faces", _rep.faces_count)
+            _dc4.metric("Machining", f"{_rep.machining_time_min:.1f} min/pc")
+            st.caption(
+                f"L {_rep.length_mm:.1f} × W {_rep.width_mm:.1f} × H {_rep.height_mm:.1f} mm"
+            )
+
+            if _rep.features:
+                st.markdown("**Detected Features**")
+                for feat in _rep.features:
+                    st.markdown(
+                        f"- **{feat['feature_type']}** ×{feat['count']} — {feat.get('note', '')}"
+                    )
+
+            if _rep.operations:
+                st.markdown("**Machining Operations**")
+                for _cat_name, _cat_ops in _wm_op_categories(_rep.operations).items():
+                    if not _cat_ops:
+                        continue
+                    st.markdown(f"**{_cat_name}**")
+                    for op in _cat_ops:
+                        note = op.get("note", "")
+                        st.markdown(
+                            f"- **{op['operation']}**  \n"
+                            f"  Tool: {op['tool_type']}"
+                            + (f"  \n  _{note}_" if note else "")
+                        )
+            else:
+                st.info("No machining operations recommended.")
+
+    st.divider()
+
+    # ── Assembly operations ───────────────────────────────────────────
+    st.subheader("Assembly & Welding Operations")
+    asm_rows = [
+        {
+            "Phase": o["phase"],
+            "Operation": o["operation"],
+            "Tool / Equipment": o["tool_equipment"],
+            "Note": o.get("note", ""),
+        }
+        for o in job.assembly_operations
+    ]
+    st.dataframe(pd.DataFrame(asm_rows), use_container_width=True, hide_index=True)
+    st.divider()
+
+    # ── Time summary ──────────────────────────────────────────────────
+    st.subheader("Time Estimate Summary")
+    ts_rows = []
+    for g in job.groups:
+        rep = g.representative
+        ts_rows.append({
+            "Part Type": f"{rep.classification.title()} {rep.length_mm:.0f}×{rep.width_mm:.0f}×{rep.height_mm:.0f}",
+            "Qty": g.quantity,
+            "Min / pc": rep.machining_time_min,
+            "Total (min)": round(rep.machining_time_min * g.quantity, 1),
+        })
+    ts_rows.append({
+        "Part Type": "Assembly / Welding",
+        "Qty": 1,
+        "Min / pc": job.total_assembly_time_min,
+        "Total (min)": job.total_assembly_time_min,
+    })
+    ts_df = pd.DataFrame(ts_rows)
+    st.dataframe(
+        ts_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Min / pc":    st.column_config.NumberColumn(format="%.1f"),
+            "Total (min)": st.column_config.NumberColumn(format="%.1f"),
+        },
+    )
+    ts_total_col1, ts_total_col2 = st.columns([3, 1])
+    ts_total_col2.metric("Grand Total", f"{job.total_time_min:.0f} min")
+    st.divider()
+
+    # ── Export ────────────────────────────────────────────────────────
+    st.subheader("Export")
+    exp_col1, exp_col2 = st.columns(2)
+
+    # CSV — BOM + time
+    _export_bom_rows = []
+    for g in job.groups:
+        rep = g.representative
+        _export_bom_rows.append({
+            "Group": g.group_id,
+            "Classification": rep.classification,
+            "Qty": g.quantity,
+            "Length_mm": rep.length_mm,
+            "Width_mm": rep.width_mm,
+            "Height_mm": rep.height_mm,
+            "Volume_cm3": rep.volume_cm3,
+            "Faces": rep.faces_count,
+            "Material": rep.material_guess,
+            "Machining_min_per_pc": rep.machining_time_min,
+            "Machining_min_total": round(rep.machining_time_min * g.quantity, 1),
+        })
+    _csv_buf = io.StringIO()
+    pd.DataFrame(_export_bom_rows).to_csv(_csv_buf, index=False)
+    exp_col1.download_button(
+        "Download BOM CSV",
+        data=_csv_buf.getvalue().encode("utf-8"),
+        file_name=f"{st.session_state.wm_filename or 'weldment'}_bom.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+    # JSON — full job
+    _json_payload = {
+        "filename": job.filename,
+        "total_bodies": job.total_bodies,
+        "total_machining_time_min": job.total_machining_time_min,
+        "total_assembly_time_min": job.total_assembly_time_min,
+        "total_time_min": job.total_time_min,
+        "groups": [
+            {
+                "group_id": g.group_id,
+                "classification": g.classification,
+                "quantity": g.quantity,
+                "body_indices": g.body_indices,
+                "dims_mm": {
+                    "L": g.representative.length_mm,
+                    "W": g.representative.width_mm,
+                    "H": g.representative.height_mm,
+                },
+                "volume_cm3": g.representative.volume_cm3,
+                "machining_min_per_pc": g.representative.machining_time_min,
+                "operations": g.representative.operations,
+            }
+            for g in job.groups
+        ],
+        "assembly_operations": job.assembly_operations,
+        "warnings": job.warnings,
+    }
+    exp_col2.download_button(
+        "Download JSON",
+        data=json.dumps(_json_payload, indent=2).encode("utf-8"),
+        file_name=f"{st.session_state.wm_filename or 'weldment'}_plan.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+
 def main():
     init_session()
     page = sidebar_nav()
@@ -4136,6 +4558,7 @@ def main():
 
     if   page == "1. Upload / Overview":          page_upload_step()
     elif page == "Part Setup":                    page_part_setup()
+    elif page == "Weldment":                      page_weldment()
     elif page == "Select Machining Work":         page_select_machining_work()
     elif page == "2. Material & Machine":         page_machine_setup()
     elif page == "3. Stock & Setup":              page_material_setup()
