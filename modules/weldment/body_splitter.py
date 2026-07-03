@@ -87,6 +87,38 @@ def split_step_bodies(file_bytes: bytes) -> dict:
                 except Exception as te:
                     warnings.append(f"Body {idx + 1}: tessellation failed — {te}")
 
+                # Per-face-type overlay meshes for viewer highlighting.
+                # Only cylindrical faces are extracted individually — they map
+                # to the "Holes / Drilling" operation category. Planar/other
+                # faces are skipped to keep the payload small.
+                face_overlays: dict[str, list] = {}
+                try:
+                    for f_idx, face in enumerate(solid.Faces()):
+                        try:
+                            geom = face.geomType()
+                        except Exception:
+                            geom = "OTHER"
+                        if geom != "CYLINDER":
+                            continue
+                        try:
+                            f_verts, f_tris = face.tessellate(0.5)
+                            if not f_verts or not f_tris:
+                                continue
+                            face_overlays.setdefault("cylindrical", []).append({
+                                "x": [v.x for v in f_verts],
+                                "y": [v.y for v in f_verts],
+                                "z": [v.z for v in f_verts],
+                                "i": [t[0] for t in f_tris],
+                                "j": [t[1] for t in f_tris],
+                                "k": [t[2] for t in f_tris],
+                            })
+                        except Exception as fe:
+                            warnings.append(
+                                f"Body {idx + 1}, face {f_idx + 1}: overlay tessellation failed — {fe}"
+                            )
+                except Exception as foe:
+                    warnings.append(f"Body {idx + 1}: face overlay extraction failed — {foe}")
+
                 bodies.append({
                     "body_index": idx,
                     "label": f"Body {idx + 1}",
@@ -97,6 +129,7 @@ def split_step_bodies(file_bytes: bytes) -> dict:
                     "surface_area_mm2": round(sa_mm2, 1),
                     "faces_count": faces_count,
                     "mesh_data": mesh_data,
+                    "face_overlays": face_overlays,
                     "bbox": {
                         "xmin": round(bb.xmin, 3), "xmax": round(bb.xmax, 3),
                         "ymin": round(bb.ymin, 3), "ymax": round(bb.ymax, 3),
@@ -110,7 +143,7 @@ def split_step_bodies(file_bytes: bytes) -> dict:
                     "label": f"Body {idx + 1}",
                     "length_mm": 0.0, "width_mm": 0.0, "height_mm": 0.0,
                     "volume_cm3": 0.0, "surface_area_mm2": 0.0, "faces_count": 0,
-                    "mesh_data": None, "bbox": {},
+                    "mesh_data": None, "face_overlays": {}, "bbox": {},
                 })
 
         return {

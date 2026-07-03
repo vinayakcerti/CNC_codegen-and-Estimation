@@ -4248,6 +4248,11 @@ def page_weldment():
         b["body_index"]: b.get("mesh_data")
         for b in result.get("bodies_raw", [])
     }
+    # body_index → per-face-type overlay meshes (for category highlighting)
+    _body_overlay_lookup = {
+        b["body_index"]: b.get("face_overlays") or {}
+        for b in result.get("bodies_raw", [])
+    }
 
     _WM_CLASS_ICONS = {
         "plate":   "🔲",
@@ -4371,7 +4376,36 @@ def page_weldment():
                 f"{_rep.length_mm:.0f} × {_rep.width_mm:.0f} × {_rep.height_mm:.0f} mm"
             )
             _rep_mesh = _body_mesh_lookup.get(_rep.body_index)
+
+            # ── Operation-category highlight selector ─────────────────
+            # Map display category → face-overlay type on the body.
+            _WM_HIGHLIGHT_CATS = {"Holes / Drilling": "cylindrical"}
+            _rep_overlays = _body_overlay_lookup.get(_rep.body_index, {})
+            _avail_highlights = ["None"] + [
+                cat for cat, ov_type in _WM_HIGHLIGHT_CATS.items()
+                if _rep_overlays.get(ov_type)
+            ]
+            # Reset highlight when the selected group changes.
+            if st.session_state.get("wm_highlight_group") != _wm_sel:
+                st.session_state.wm_highlight_group = _wm_sel
+                st.session_state.wm_highlight_cat = "None"
+            if st.session_state.get("wm_highlight_cat") not in _avail_highlights:
+                st.session_state.wm_highlight_cat = "None"
+            if len(_avail_highlights) > 1:
+                st.radio(
+                    "Highlight",
+                    _avail_highlights,
+                    horizontal=True,
+                    key="wm_highlight_cat",
+                )
+            _wm_hl = st.session_state.get("wm_highlight_cat", "None")
+
             if _rep_mesh:
+                _hl_mesh = None
+                if _wm_hl in _WM_HIGHLIGHT_CATS:
+                    _hl_mesh = combine_weldment_meshes(
+                        _rep_overlays.get(_WM_HIGHLIGHT_CATS[_wm_hl]) or []
+                    )
                 _fig = build_step_mesh3d(
                     _rep_mesh,
                     {
@@ -4384,9 +4418,20 @@ def page_weldment():
                     show_stock_box=False,
                     show_face_colors=False,
                     show_markers=False,
-                    part_opacity=1.0,
+                    part_opacity=0.45 if _hl_mesh else 1.0,
                     camera_view="Isometric",
                 )
+                if _hl_mesh:
+                    import plotly.graph_objects as _go
+                    _fig.add_trace(_go.Mesh3d(
+                        x=_hl_mesh["x"], y=_hl_mesh["y"], z=_hl_mesh["z"],
+                        i=_hl_mesh["i"], j=_hl_mesh["j"], k=_hl_mesh["k"],
+                        color="#1E90FF",
+                        opacity=1.0,
+                        name=_wm_hl,
+                        hoverinfo="name",
+                        showscale=False,
+                    ))
                 _fig.update_layout(
                     height=420,
                     margin=dict(l=0, r=0, t=32, b=0),
@@ -4422,6 +4467,8 @@ def page_weldment():
 
             if _rep.operations:
                 st.markdown("**Machining Operations**")
+                if len(_avail_highlights) > 1:
+                    st.caption("💡 Select a highlight above to see these faces in the viewer")
                 for _cat_name, _cat_ops in _wm_op_categories(_rep.operations).items():
                     if not _cat_ops:
                         continue
