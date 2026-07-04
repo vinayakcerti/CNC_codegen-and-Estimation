@@ -102,3 +102,33 @@ def estimate_time(operations, machine, material, features):
         "effort_score_value": round(effort_score, 2),
         "effort_label": effort_label,
     }
+
+
+def estimate_time_per_operation(operations, machine, material):
+    """Per-operation cycle-time rows for the estimate breakdown table.
+
+    Additive companion to estimate_time(): same feed/path/safety-factor
+    model, itemised per operation so a quote can show where the minutes go.
+    Returns a list of dicts sorted by op_num.
+    """
+    operations = _unique_operations(operations)
+    safety_factor = material.get("safety_factor", 1.3)
+    rows = []
+    for op in operations:
+        feed = op.get("feed_rate_mm_min", 200)
+        path = op.get("est_path_length_mm", 50)
+        cut_min = (path / feed) * safety_factor if feed > 0 else 0.0
+        rows.append({
+            "op_num": op.get("op_num", 0),
+            "operation": op.get("operation_type", "—"),
+            "feature": op.get("feature_name", "—"),
+            "setup": op.get("setup_label", "—"),
+            "tool": op.get("tool_name", "—"),
+            "spindle_rpm": op.get("spindle_rpm", 0),
+            "feed_mm_min": feed,
+            "path_mm": path,
+            "cut_min": round(cut_min, 2),
+            "blocked": bool(op.get("planning_blocked")),
+        })
+    rows.sort(key=lambda r: r["op_num"])
+    return rows

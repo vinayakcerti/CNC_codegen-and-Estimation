@@ -24,7 +24,7 @@ from modules.operation_planner import (
     secondary_setup_labels,
 )
 from modules.machine_capability import machine_feasibility_summary
-from modules.time_estimator import estimate_time
+from modules.time_estimator import estimate_time, estimate_time_per_operation
 from modules.gcode_generator import generate_gcode
 from modules.visual_preview import build_top_view, build_3d_view, build_step_mesh3d, FEATURE_COLORS
 from modules.step_parser import parse_step_bounding_box, parse_step_geometry, parse_step_auto
@@ -2842,6 +2842,48 @@ def page_time_estimate():
     d2.metric("Operator Effort Time", f"{result['operator_effort_min']:.1f} min")
     d3.metric("Effort Score", f"{effort_color} {result['effort_label']}",
               delta=f"Score: {result['effort_score_value']:.1f}")
+
+    # ── Per-operation cycle breakdown ─────────────────────────────────────────
+    with st.expander("Per-operation cycle breakdown", expanded=False):
+        _po_rows = estimate_time_per_operation(
+            st.session_state.operations,
+            st.session_state.selected_machine,
+            st.session_state.selected_material,
+        )
+        if _po_rows:
+            _po_df = pd.DataFrame([{
+                "Op": r["op_num"],
+                "Operation": r["operation"],
+                "Feature": r["feature"],
+                "Setup": r["setup"],
+                "Tool": r["tool"],
+                "RPM": r["spindle_rpm"],
+                "Feed (mm/min)": r["feed_mm_min"],
+                "Path (mm)": r["path_mm"],
+                "Cut (min)": r["cut_min"],
+            } for r in _po_rows])
+            st.dataframe(
+                _po_df, use_container_width=True, hide_index=True,
+                column_config={
+                    "Cut (min)": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+            _po_cut_total = sum(r["cut_min"] for r in _po_rows)
+            st.caption(
+                f"Cutting total {_po_cut_total:.1f} min (safety factor applied) "
+                f"+ setup {result['setup_time_min']:.0f} + rapids "
+                f"{result['rapid_time_min']:.1f} + tool changes "
+                f"{result['tool_change_time_min']:.1f} = "
+                f"{result['total_machine_time_min']:.1f} min total."
+            )
+            st.download_button(
+                "Download breakdown CSV",
+                data=_po_df.to_csv(index=False).encode("utf-8"),
+                file_name="cycle_time_breakdown.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("No operations planned yet.")
 
     st.subheader("Details")
     details = {
