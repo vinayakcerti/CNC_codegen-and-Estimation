@@ -172,6 +172,11 @@ def top_tabs(page: str) -> str:
     active_section = _PAGE_TO_SECTION.get(page, "CONFIGURE")
     tabs = _SECTION_TABS[active_section]
 
+    # The Weldment tab is only relevant when the operator chose the
+    # Weldment / Fabricated Part starting type on Part Setup.
+    if st.session_state.get("starting_part_type") != "Weldment / Fabricated Part":
+        tabs = [t for t in tabs if t[0] != "Weldment"]
+
     _tab_cols = st.columns(len(tabs))
     for _col, (route_key, label) in zip(_tab_cols, tabs):
         with _col:
@@ -917,6 +922,11 @@ def reset_current_job_state():
     """Clear all current-job state. Preserves tool/material/machine libraries."""
     clear_import_derived_state(st.session_state)
     st.session_state.step_uploader_key = st.session_state.get("step_uploader_key", 0) + 1
+    # Weldment workflow state + raw upload bytes
+    st.session_state.pop("uploaded_file_bytes", None)
+    st.session_state.wm_result    = None
+    st.session_state.wm_filename  = None
+    st.session_state.wm_file_hash = None
     save_features_to_db([])
     st.session_state._nav_page = "Part Setup"
     st.session_state._job_reset_done = True
@@ -1012,6 +1022,8 @@ def _parse_and_tessellate(file_bytes: bytes, filename: str):
         geo_result = parse_step_geometry(file_bytes)
         st.session_state.uploaded_filename        = filename
         st.session_state.uploaded_file_hash       = file_hash
+        # Keep raw bytes so the Weldment workflow can reuse the same upload
+        st.session_state.uploaded_file_bytes      = file_bytes
         st.session_state.step_parse_result      = parse_result
         st.session_state.step_geometry          = geo_result
         st.session_state.stock["length"]        = parse_result["length_mm"]
@@ -4112,12 +4124,27 @@ def page_part_setup():
                 _sm3.metric("Removed", "—")
                 st.caption("Upload a STEP file to calculate part volume and removed material.")
 
-        # ── Next → Select Machining Work ──────────────────────────────────
+        # ── Next → Weldment Breakdown or Select Machining Work ────────────
         st.divider()
+        _is_weldment = (_spt == "Weldment / Fabricated Part")
         if _fname:
+            if _is_weldment:
+                if st.button(
+                    "🔩 Next → Weldment Breakdown",
+                    type="primary",
+                    use_container_width=True,
+                    key="ps_next_wm",
+                ):
+                    st.session_state._nav_page = "Weldment"
+                    st.rerun()
+                st.caption(
+                    "The assembly will be split into individual bodies with "
+                    "per-part operations. You can still open Select Machining Work "
+                    "afterwards for final-machining selection."
+                )
             if st.button(
                 "🧩 Next → Select Machining Work",
-                type="primary",
+                type="secondary" if _is_weldment else "primary",
                 use_container_width=True,
                 key="ps_next_smw",
             ):
@@ -4167,13 +4194,27 @@ def page_weldment():
             st.session_state.wm_uploader_key = st.session_state.wm_uploader_key + 1
             st.rerun()
 
-    # ── File uploader ─────────────────────────────────────────────────
-    wm_uploaded = st.file_uploader(
-        "Upload STEP / STP file (multi-body weldment)",
-        type=["step", "stp"],
-        help="Upload the assembly STEP file. Each solid body will be analysed separately.",
-        key=f"wm_uploader_{st.session_state.wm_uploader_key}",
-    )
+    # ── Reuse the file already uploaded on Part Setup, if any ─────────
+    _ps_bytes  = st.session_state.get("uploaded_file_bytes")
+    _ps_fname  = st.session_state.get("uploaded_filename")
+    if _ps_bytes and _ps_fname:
+        _ps_hash = _hashlib.sha256(_ps_bytes).hexdigest()
+        if _ps_hash != st.session_state.wm_file_hash:
+            st.success(f"Using the file uploaded on Part Setup: **{_ps_fname}**")
+            with st.spinner("Splitting bodies and analysing weldment..."):
+                wm_analysis = analyze_weldment(_ps_bytes, _ps_fname)
+            st.session_state.wm_result    = wm_analysis
+            st.session_state.wm_filename  = _ps_fname
+            st.session_state.wm_file_hash = _ps_hash
+
+    # ── File uploader (fallback / different assembly) ─────────────────
+    with st.expander("Upload a different STEP file", expanded=st.session_state.wm_result is None):
+        wm_uploaded = st.file_uploader(
+            "Upload STEP / STP file (multi-body weldment)",
+            type=["step", "stp"],
+            help="Upload the assembly STEP file. Each solid body will be analysed separately.",
+            key=f"wm_uploader_{st.session_state.wm_uploader_key}",
+        )
 
     if wm_uploaded:
         wm_bytes = wm_uploaded.read()
@@ -4188,7 +4229,10 @@ def page_weldment():
 
     result = st.session_state.wm_result
     if result is None:
-        st.info("Upload a multi-body STEP file above to begin weldment analysis.")
+        st.info(
+            "Upload a STEP file here, or upload one on **Part Setup** and select "
+            "**Weldment / Fabricated Part** — it will be analysed here automatically."
+        )
         return
 
     if not result["success"]:
