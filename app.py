@@ -46,6 +46,7 @@ from modules.tolerance_guide import (
     get_process_for_feature, SURFACE_FINISH_TABLE, COMMON_FITS,
 )
 from modules.weldment.weldment_analyzer import analyze_weldment
+from modules.dfm_score import compute_dfm_score
 from modules.weldment.mesh_combine import (
     combine_meshes as combine_weldment_meshes,
     mesh_bbox_dims as weldment_mesh_bbox_dims,
@@ -4117,6 +4118,42 @@ def page_part_setup():
                 _sm2.metric("Part vol (cm³)", "—")
                 _sm3.metric("Removed", "—")
                 st.caption("Upload a STEP file to calculate part volume and removed material.")
+
+        # ── Machinability / DFM score ──────────────────────────────────────
+        _dfm_cands = st.session_state.get("step_candidates") or []
+        if _fname and _dfm_cands:
+            _dfm = compute_dfm_score(
+                _dfm_cands,
+                st.session_state.get("tools") or [],
+                st.session_state.get("selected_material") or {},
+                st.session_state.get("selected_machine"),
+            )
+            _dfm_icon = {"A": "🟢", "B": "🟡", "C": "🟠", "D": "🔴"}.get(_dfm["grade"], "⚪")
+            with st.expander(
+                f"{_dfm_icon} Machinability — {_dfm['score_pct']}% (grade {_dfm['grade']})",
+                expanded=False,
+            ):
+                _dm1, _dm2, _dm3, _dm4 = st.columns(4)
+                _dm1.metric("Score", f"{_dfm['score_pct']}%")
+                _dm2.metric("Machinable", f"{_dfm['machinable']}/{_dfm['total_features']}")
+                _dm3.metric("At risk", _dfm["at_risk"])
+                _dm4.metric("Setups", _dfm["setup_count"])
+                if _dfm["setup_labels"]:
+                    st.caption("Setups: " + ", ".join(_dfm["setup_labels"]))
+                if _dfm["issues"]:
+                    st.markdown("**Issues** (from tool library + machine limits)")
+                    for _iss in _dfm["issues"][:12]:
+                        _sev = "🔴" if _iss["severity"] == "blocked" else "🟡"
+                        st.markdown(f"- {_sev} **{_iss['feature']}** — {_iss['message']}")
+                    if len(_dfm["issues"]) > 12:
+                        st.caption(f"… and {len(_dfm['issues']) - 12} more")
+                else:
+                    st.success("No tooling or machine-limit issues detected.")
+                st.caption(
+                    "Score = detected features that plan cleanly with the current "
+                    "tool library, material, and machine. Fix issues by adding "
+                    "tools or adjusting the machine on Material & Machine."
+                )
 
         # ── Next → Select Machining Work ──────────────────────────────────
         st.divider()
