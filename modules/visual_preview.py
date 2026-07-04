@@ -721,16 +721,27 @@ def build_step_mesh3d(mesh_data, stock, candidates=None, show_labels=False,
         # still showing the important features.  The highlighted-group section
         # below colors the operator's selected group at full fidelity regardless.
         _TYPE_OVERLAY_CAP = {
-            "Slot": 8,          # longest 8 slots only — avoids 100+ traces on weldments
+            "Slot": 20,         # up to 20 slot overlays; gated by face-count sort below
             "Pocket": 12,
             "Step": 10,
         }
         _DEFAULT_OVERLAY_CAP = 20
-        # Sort slots by length so the longest (most significant) appear first
+        # Sort slots by a quality score that rewards 5 faces (the expected count
+        # for a well-defined slot: 2 end-caps + 2 side-walls + 1 floor) and
+        # penalises extras.  On complex weldments structural plate faces bloat
+        # the face count for false-positive pairs; penalising counts > 5 pushes
+        # those below real machined slots which sit at exactly 5.
+        # Tiebreaker: prefer shorter candidates.
+        def _slot_quality(c):
+            n = len(c.get("face_indices") or [])
+            # score = min(n, 5) − penalty for each face above 5
+            return min(n, 5) - max(0, n - 5)
+
         _active_fc_raw.sort(
             key=lambda _c: (
-                _c.get("feature_type", "") == "Slot",  # slots float to front for sort
-                -(_c.get("length") or 0),
+                _c.get("feature_type", "") == "Slot",   # slots float to front
+                _slot_quality(_c),                       # prefer ~5 face count
+                -(_c.get("length") or 0),               # shorter wins as tiebreaker
             ),
             reverse=True,
         )

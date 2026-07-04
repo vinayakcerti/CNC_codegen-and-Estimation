@@ -1569,10 +1569,22 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
         # Find PLANE faces inside this slot's bounding box so the slot body
         # walls/floor/ceiling get colored in the 3D viewer (not just end-caps).
         _TOL_BB = 3.0  # mm expansion on each side of the end-cap bbox union
-        _s_xmin = min(a.get("xmin") or a["cx"], b.get("xmin") or b["cx"]) - _TOL_BB
-        _s_xmax = max(a.get("xmax") or a["cx"], b.get("xmax") or b["cx"]) + _TOL_BB
-        _s_ymin = min(a.get("ymin") or a["cy"], b.get("ymin") or b["cy"]) - _TOL_BB
-        _s_ymax = max(a.get("ymax") or a["cy"], b.get("ymax") or b["cy"]) + _TOL_BB
+        # When face bbox values are None (BoundingBox() unavailable for this
+        # cylinder face) fall back to center ± r_avg so the search covers at
+        # least the estimated slot diameter.  Using `is not None` rather than
+        # `or` avoids incorrectly discarding a valid 0.0 coordinate.
+        _a_xmin = a["xmin"] if a.get("xmin") is not None else a["cx"] - r_avg
+        _a_xmax = a["xmax"] if a.get("xmax") is not None else a["cx"] + r_avg
+        _a_ymin = a["ymin"] if a.get("ymin") is not None else a["cy"] - r_avg
+        _a_ymax = a["ymax"] if a.get("ymax") is not None else a["cy"] + r_avg
+        _b_xmin = b["xmin"] if b.get("xmin") is not None else b["cx"] - r_avg
+        _b_xmax = b["xmax"] if b.get("xmax") is not None else b["cx"] + r_avg
+        _b_ymin = b["ymin"] if b.get("ymin") is not None else b["cy"] - r_avg
+        _b_ymax = b["ymax"] if b.get("ymax") is not None else b["cy"] + r_avg
+        _s_xmin = min(_a_xmin, _b_xmin) - _TOL_BB
+        _s_xmax = max(_a_xmax, _b_xmax) + _TOL_BB
+        _s_ymin = min(_a_ymin, _b_ymin) - _TOL_BB
+        _s_ymax = max(_a_ymax, _b_ymax) + _TOL_BB
         _s_zmin = (
             min(a["zmin"] or a["cy"], b["zmin"] or b["cy"]) - _TOL_BB
             if (a["zmin"] is not None and b["zmin"] is not None) else None
@@ -1592,6 +1604,25 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
                      or _s_zmin <= _pcz <= _s_zmax)
             if _in_x and _in_y and _in_z:
                 _body_fi.append(_pr["face_index"])
+
+        # ── Quality gates — skip degenerate / false-positive pairs ────────────
+        # Gate 1: a real machined slot always has adjacent flat surfaces (walls /
+        # floor) visible in the CAD model.  Two cylinder faces with ZERO adjacent
+        # PLANE faces within a compact bbox are almost certainly a pair of weld
+        # fillets or edge roundings, not a machined slot.
+        # Exception: long slots (≥ 100 mm) where the opening plate face may sit
+        # just outside the tight end-cap bbox — those survive to be reviewed on
+        # other criteria (AR, visual confirmation).  All known SLIDE BASE weld-
+        # fillet false positives are ≤ 93 mm, so 100 mm is a safe cut-off.
+        if not _body_fi and slot_length < 100.0:
+            continue
+
+        # Gate 2: a machined slot is always substantially longer than it is wide.
+        # An aspect ratio ≤ 2.0 (nearly square) indicates a structural
+        # coincidence — e.g. two corner fillets at the same Z height — not a
+        # real slot channel.
+        if slot_width > 0 and slot_length / slot_width < 2.0:
+            continue
 
         candidates.append({
             "candidate_id":     cid,
