@@ -4,6 +4,8 @@ import os
 import tempfile
 from typing import Optional
 
+from .slot_hole_classifier import classify_cylindrical_faces
+
 
 def split_step_bodies(file_bytes: bytes) -> dict:
     """Parse a STEP file and extract each solid body as separate geometry data.
@@ -88,23 +90,33 @@ def split_step_bodies(file_bytes: bytes) -> dict:
                     warnings.append(f"Body {idx + 1}: tessellation failed — {te}")
 
                 # Per-face-type overlay meshes for viewer highlighting.
-                # Only cylindrical faces are extracted individually — they map
-                # to the "Holes / Drilling" operation category. Planar/other
-                # faces are skipped to keep the payload small.
+                # Cylindrical faces are classified as round holes ("cylindrical")
+                # or slot end-caps ("slot_cyl") — a slot is two offset partial
+                # cylinders of the same radius, the same signature step_parser's
+                # billet-path slot pairing uses. Planar/other faces are skipped
+                # to keep the payload small.
                 face_overlays: dict[str, list] = {}
+                cyl_classification = {"hole_count": 0, "slot_count": 0, "slots": []}
                 try:
-                    for f_idx, face in enumerate(solid.Faces()):
-                        try:
-                            geom = face.geomType()
-                        except Exception:
-                            geom = "OTHER"
-                        if geom != "CYLINDER":
-                            continue
+                    _solid_faces = solid.Faces()
+                    _cls = classify_cylindrical_faces(
+                        _solid_faces,
+                        bbox={"xmin": bb.xmin, "xmax": bb.xmax,
+                              "ymin": bb.ymin, "ymax": bb.ymax,
+                              "zmin": bb.zmin, "zmax": bb.zmax},
+                    )
+                    cyl_classification = _cls
+                    _face_cats = _cls.get("face_categories", {})
+                    for f_idx, face in enumerate(_solid_faces):
+                        _cat = _face_cats.get(f_idx)
+                        if _cat is None:
+                            continue  # not cylindrical, or classification failed
+                        _overlay_key = "slot_cyl" if _cat == "slot" else "cylindrical"
                         try:
                             f_verts, f_tris = face.tessellate(0.5)
                             if not f_verts or not f_tris:
                                 continue
-                            face_overlays.setdefault("cylindrical", []).append({
+                            face_overlays.setdefault(_overlay_key, []).append({
                                 "x": [v.x for v in f_verts],
                                 "y": [v.y for v in f_verts],
                                 "z": [v.z for v in f_verts],
@@ -130,6 +142,10 @@ def split_step_bodies(file_bytes: bytes) -> dict:
                     "faces_count": faces_count,
                     "mesh_data": mesh_data,
                     "face_overlays": face_overlays,
+                    "hole_count": cyl_classification.get("hole_count", 0),
+                    "slot_count": cyl_classification.get("slot_count", 0),
+                    "slots": cyl_classification.get("slots", []),
+                    "cyl_classifier_available": cyl_classification.get("available", False),
                     "bbox": {
                         "xmin": round(bb.xmin, 3), "xmax": round(bb.xmax, 3),
                         "ymin": round(bb.ymin, 3), "ymax": round(bb.ymax, 3),
@@ -143,7 +159,9 @@ def split_step_bodies(file_bytes: bytes) -> dict:
                     "label": f"Body {idx + 1}",
                     "length_mm": 0.0, "width_mm": 0.0, "height_mm": 0.0,
                     "volume_cm3": 0.0, "surface_area_mm2": 0.0, "faces_count": 0,
-                    "mesh_data": None, "face_overlays": {}, "bbox": {},
+                    "mesh_data": None, "face_overlays": {},
+                    "hole_count": 0, "slot_count": 0, "slots": [],
+                    "cyl_classifier_available": False, "bbox": {},
                 })
 
         return {

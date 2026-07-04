@@ -4374,7 +4374,14 @@ def _render_weldment_breakdown():
 
             # ── Operation-category highlight selector ─────────────────
             # Map display category → face-overlay type on the body.
-            _WM_HIGHLIGHT_CATS = {"Holes / Drilling": "cylindrical"}
+            _WM_HIGHLIGHT_CATS = {
+                "Holes / Drilling": "cylindrical",
+                "Slots":            "slot_cyl",
+            }
+            _WM_HIGHLIGHT_COLORS = {
+                "Holes / Drilling": "#1E90FF",   # dodger blue — Hole palette
+                "Slots":            "#FF8C00",   # dark orange — Slot palette
+            }
             _rep_overlays = _body_overlay_lookup.get(_rep.body_index, {})
             _avail_highlights = ["None"] + [
                 cat for cat, ov_type in _WM_HIGHLIGHT_CATS.items()
@@ -4421,7 +4428,7 @@ def _render_weldment_breakdown():
                     _fig.add_trace(_go.Mesh3d(
                         x=_hl_mesh["x"], y=_hl_mesh["y"], z=_hl_mesh["z"],
                         i=_hl_mesh["i"], j=_hl_mesh["j"], k=_hl_mesh["k"],
-                        color="#1E90FF",
+                        color=_WM_HIGHLIGHT_COLORS.get(_wm_hl, "#1E90FF"),
                         opacity=1.0,
                         name=_wm_hl,
                         hoverinfo="name",
