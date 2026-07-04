@@ -47,6 +47,10 @@ from modules.tolerance_guide import (
 )
 from modules.weldment.weldment_analyzer import analyze_weldment
 from modules.dfm_score import compute_dfm_score
+from modules.workholding import (
+    WORKHOLDING_OPTIONS, JAW_MODES,
+    recommend_workholding, workholding_warnings,
+)
 from modules.weldment.mesh_combine import (
     combine_meshes as combine_weldment_meshes,
     mesh_bbox_dims as weldment_mesh_bbox_dims,
@@ -1920,6 +1924,63 @@ def page_material_setup():
             _co1.metric("X range (mm)", f"{_xr[0]} → {_xr[1]}")
             _co2.metric("Y range (mm)", f"{_yr[0]} → {_yr[1]}")
             _co3.metric("Z range (mm)", f"{_zr[0]} → {_zr[1]}")
+
+    st.divider()
+
+    # ── Section: Workholding & Setups ─────────────────────────────────────────
+    st.subheader("Workholding & Setups")
+    _wh_stock = st.session_state.get("stock", {})
+    # Setup labels: from accepted features' planned ops when available,
+    # otherwise from detected candidates so the panel works pre-selection.
+    _wh_feats = st.session_state.get("features") or []
+    _wh_cands = st.session_state.get("step_candidates") or []
+    _wh_setups: list = []
+    _wh_src = _wh_feats if _wh_feats else _wh_cands
+    if _wh_src:
+        _wh_setups = sorted({
+            (f.get("setup_label") or f.get("setup") or "Top") for f in _wh_src
+        })
+    if not _wh_setups:
+        _wh_setups = ["Top"]
+
+    if "workholding" not in st.session_state:
+        st.session_state.workholding = {}
+
+    st.caption(
+        f"{len(_wh_setups)} setup(s) planned: {', '.join(_wh_setups)}. "
+        "Choose how the part is held in each setup — recommendations come "
+        "from stock geometry."
+    )
+    _wh_names = list(WORKHOLDING_OPTIONS.keys())
+    for _su in _wh_setups:
+        _rec = recommend_workholding(_wh_stock, _su)
+        _saved = st.session_state.workholding.get(_su, {})
+        with st.expander(
+            f"Setup: {_su} — {_saved.get('method', _rec['method'])}",
+            expanded=False,
+        ):
+            _whc1, _whc2 = st.columns(2)
+            _cur_method = _saved.get("method", _rec["method"])
+            _midx = _wh_names.index(_cur_method) if _cur_method in _wh_names else 0
+            _sel_method = _whc1.selectbox(
+                "Workholding", _wh_names, index=_midx, key=f"wh_method_{_su}",
+            )
+            _cur_jaw = _saved.get("jaw_mode", _rec["jaw_mode"])
+            _jidx = JAW_MODES.index(_cur_jaw) if _cur_jaw in JAW_MODES else 0
+            _sel_jaw = _whc2.selectbox(
+                "Jaw / clamp mode", JAW_MODES, index=_jidx, key=f"wh_jaw_{_su}",
+            )
+            st.caption(f"💡 Recommended: **{_rec['method']}** — {_rec['reason']}")
+            _spec_note = (WORKHOLDING_OPTIONS.get(_sel_method) or {}).get("note", "")
+            if _spec_note:
+                st.caption(_spec_note)
+            for _w in workholding_warnings(_sel_method, _wh_stock):
+                st.warning(_w)
+            st.session_state.workholding[_su] = {
+                "method": _sel_method,
+                "jaw_mode": _sel_jaw,
+                "recommended": _rec["method"],
+            }
 
     st.divider()
 
