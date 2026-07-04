@@ -46,6 +46,7 @@ from modules.tolerance_guide import (
     get_process_for_feature, SURFACE_FINISH_TABLE, COMMON_FITS,
 )
 from modules.weldment.weldment_analyzer import analyze_weldment
+from modules.body_scope import scope_candidates_to_bodies
 from modules.dfm_score import compute_dfm_score
 from modules.workholding import (
     WORKHOLDING_OPTIONS, JAW_MODES,
@@ -845,6 +846,145 @@ def _stock_adjusted_candidates():
     return result["candidates"]
 
 
+def _candidate_count_text(n_working, n_raw, short=False):
+    """One consistent working-vs-raw candidate count for every display site.
+
+    n_working: candidates prepared for review (post starting-part policy,
+               possibly body-scoped) — what the operator actually reviews.
+    n_raw:     raw geometry detections in st.session_state.step_candidates.
+
+    Every page must source both numbers from these same two variables so the
+    header, banner, and metrics never disagree (competitor-review Defect B).
+    """
+    n_working = int(n_working or 0)
+    n_raw = int(n_raw or 0)
+    if n_raw and n_raw != n_working:
+        if short:
+            return f"{n_working} ({n_raw} raw)"
+        return f"{n_working} candidate(s) ({n_raw} raw detections)"
+    return f"{n_working}" if short else f"{n_working} candidate(s)"
+
+
+_WELDMENT_SPT = "Weldment / Fabricated Part"
+
+
+def _weldment_scope_context():
+    """Return the weldment part-group scope selected on Part Setup, or None.
+
+    A scope exists only when weldment mode is active, the weldment analysis
+    succeeded, and the operator selected a specific part group (not Full
+    Assembly) in the Weldment Breakdown. The returned dict carries the group,
+    its representative part, the bodies_raw entries (with bboxes) for the
+    group's bodies, and display labels.
+    """
+    if st.session_state.get("starting_part_type") != _WELDMENT_SPT:
+        return None
+    result = st.session_state.get("wm_result") or {}
+    if not result.get("success"):
+        return None
+    job = result.get("job")
+    selected = st.session_state.get("wm_selected_group") or "__assembly__"
+    if job is None or selected == "__assembly__":
+        return None
+    group = next((g for g in job.groups if g.group_id == selected), None)
+    if group is None:
+        return None
+    bodies_by_index = {
+        b.get("body_index"): b for b in result.get("bodies_raw", [])
+    }
+    bodies = [
+        bodies_by_index[idx]
+        for idx in group.body_indices
+        if idx in bodies_by_index and bodies_by_index[idx].get("bbox")
+    ]
+    if not bodies:
+        return None
+    rep = group.representative
+    return {
+        "group": group,
+        "representative": rep,
+        "bodies": bodies,
+        "label": (
+            f"{rep.classification.title()} ×{group.quantity} — "
+            f"{rep.length_mm:.0f} × {rep.width_mm:.0f} × {rep.height_mm:.0f} mm"
+        ),
+        "bodies_label": ", ".join(str(idx + 1) for idx in group.body_indices),
+    }
+
+
+def _apply_weldment_body_scope(candidates, page_key):
+    """Scope the working candidate list to the selected weldment part group.
+
+    Renders the scope banner and the "scope to selected part" toggle when a
+    specific group is selected on Part Setup; otherwise renders nothing.
+    Filters at render time only — st.session_state.step_candidates is never
+    mutated.
+
+    Returns (working_candidates, scope_info). scope_info is None when no group
+    scope applies; otherwise a dict with the scope context plus:
+        active              — True when filtering is applied
+        kept_count          — candidates on the selected part
+        total_count         — candidates across the whole assembly
+        unpositioned_count  — kept candidates that could not be position-tested
+    """
+    scope_ctx = _weldment_scope_context()
+    if scope_ctx is None:
+        return candidates, None
+
+    group_id = scope_ctx["group"].group_id
+    # Re-arm scoping whenever the operator picks a (different) group.
+    if st.session_state.get("_scope_last_group") != group_id:
+        st.session_state._scope_last_group = group_id
+        st.session_state.scope_to_selected_body = True
+        for _stale_key in ("_scope_toggle_smw", "_scope_toggle_sfr"):
+            st.session_state.pop(_stale_key, None)
+    if "scope_to_selected_body" not in st.session_state:
+        st.session_state.scope_to_selected_body = True
+
+    _toggle_key = f"_scope_toggle_{page_key}"
+    if _toggle_key not in st.session_state:
+        st.session_state[_toggle_key] = bool(st.session_state.scope_to_selected_body)
+
+    _banner_col, _toggle_col = st.columns([3.4, 1.1])
+    with _toggle_col:
+        scoped_on = st.toggle(
+            "Scope to selected part",
+            key=_toggle_key,
+            help="Off = show the whole assembly's candidates and totals.",
+        )
+    st.session_state.scope_to_selected_body = scoped_on
+
+    scoped = scope_candidates_to_bodies(candidates, scope_ctx["bodies"])
+    kept = scoped["kept"]
+    with _banner_col:
+        if scoped_on:
+            _unpos_note = (
+                f" · {scoped['unpositioned']} without position data included"
+                if scoped["unpositioned"] else ""
+            )
+            st.info(
+                f"🔍 **Scope: {scope_ctx['label']}** "
+                f"(Body {scope_ctx['bodies_label']}) — "
+                f"**{len(kept)} of {len(candidates)}** candidates on this "
+                f"part{_unpos_note}."
+            )
+        else:
+            st.info(
+                f"🏗️ **Whole assembly view** — {len(candidates)} candidates "
+                f"across all bodies. Selected on Part Setup: "
+                f"{scope_ctx['label']} (Body {scope_ctx['bodies_label']})."
+            )
+
+    scope_info = dict(scope_ctx)
+    scope_info.update({
+        "active": bool(scoped_on),
+        "kept_count": len(kept),
+        "total_count": len(candidates),
+        "unpositioned_count": scoped["unpositioned"],
+    })
+    return (kept if scoped_on else candidates), scope_info
+
+
 def init_session():
     if "tools" not in st.session_state:
         db_tools = load_tools_from_db()
@@ -1410,7 +1550,7 @@ def page_upload_step():
     # ── Next step guidance ─────────────────────────────────────────────
     if _display_r or st.session_state.get("step_candidates"):
         _n = len(st.session_state.get("step_candidates", []))
-        _cand_str = f" **{_n} feature candidate(s) detected.**" if _n > 0 else ""
+        _cand_str = f" **{_n} raw feature detection(s).**" if _n > 0 else ""
         st.success(
             f"STEP file loaded.{_cand_str}  "
             "**Next →** Select which features to machine, then review in Setup & Feature Review."
@@ -2308,7 +2448,8 @@ def page_setup_review():
     features = st.session_state.get("features", [])
     step_ok  = bool(st.session_state.get("step_parse_result"))
     _is_raw_block    = st.session_state.get("starting_part_type", "Raw Block / Billet") == "Raw Block / Billet"
-    _candidates      = _stock_adjusted_candidates()
+    _candidates_all  = _stock_adjusted_candidates()
+    _raw_count       = len(st.session_state.get("step_candidates", []))
     _cand_warns      = (
         list(st.session_state.get("step_candidate_warnings", []))
         + list(st.session_state.get("_starting_part_policy_warnings", []))
@@ -2318,10 +2459,21 @@ def page_setup_review():
     _from_candidates = st.session_state.get("features_from_candidates", False)
     _filename        = st.session_state.get("uploaded_filename")
 
+    # ── Weldment body scope (banner + toggle render here) ───────────────────
+    _candidates, _scope_info = _apply_weldment_body_scope(_candidates_all, "sfr")
+
     # ── Top status cards ─────────────────────────────────────────────────────
     tm1, tm2, tm3, tm4 = st.columns(4)
     tm1.metric("STEP File", _filename if _filename else "None")
-    tm2.metric("CAD Candidates", len(_candidates))
+    tm2.metric(
+        "CAD Candidates",
+        _candidate_count_text(len(_candidates), _raw_count, short=True),
+        help=(
+            "Candidates prepared for review (raw geometry detections in "
+            "parentheses — duplicates and off-orientation detections are "
+            "consolidated before review)."
+        ),
+    )
     tm3.metric("Accepted Features", len(features))
     tm4.metric("Source", "From CAD" if _from_candidates else ("Manual / Demo" if features else "—"))
 
@@ -2333,7 +2485,7 @@ def page_setup_review():
         _rc1, _rc2 = st.columns([5, 1])
         _rc1.info(
             f"**{len(features)} accepted feature(s)**  ·  "
-            f"**{len(st.session_state.get('step_candidates', []))} CAD candidate(s)**"
+            f"**{_candidate_count_text(len(_candidates), _raw_count)}**"
             + (f"  ·  File: **{st.session_state.uploaded_filename}**"
                if st.session_state.get("uploaded_filename") else "")
         )
@@ -2343,7 +2495,75 @@ def page_setup_review():
 
     # ── A. Stock summary ─────────────────────────────────────────────────────
     st.subheader("Stock Dimensions")
-    if stock:
+    _scope_active = bool(_scope_info and _scope_info.get("active"))
+    if _scope_active:
+        # Scoped weldment review: selected-part numbers alongside the whole
+        # assembly so single-part and assembly totals are never conflated.
+        _sc_rep = _scope_info["representative"]
+        _sc_grp = _scope_info["group"]
+        _sp_col, _wa_col = st.columns(2)
+        with _sp_col:
+            st.markdown(
+                f"**Selected part** — {_scope_info['label']} "
+                f"(Body {_scope_info['bodies_label']})"
+            )
+            _sp_part_vol = round(float(_sc_rep.volume_cm3 or 0.0), 3)
+            _sp_bbox_vol = round(
+                float(_sc_rep.length_mm or 0.0)
+                * float(_sc_rep.width_mm or 0.0)
+                * float(_sc_rep.height_mm or 0.0) / 1000.0,
+                3,
+            )
+            sp1, sp2, sp3 = st.columns(3)
+            sp1.metric(
+                "Part L×W×H (mm)",
+                f"{_sc_rep.length_mm:.0f}×{_sc_rep.width_mm:.0f}×{_sc_rep.height_mm:.0f}",
+            )
+            sp2.metric("Part Vol (cm³)", f"{_sp_part_vol:.2f}")
+            sp3.metric(
+                "Stock Vol (cm³) approx",
+                f"{_sp_bbox_vol:.2f}",
+                help=(
+                    "Approximation: the selected body's bounding box is used "
+                    "as the stock proxy — actual fabricated stock is unknown."
+                ),
+            )
+            if _sp_bbox_vol > 0:
+                _sp_removed = max(round(_sp_bbox_vol - _sp_part_vol, 3), 0.0)
+                _sp_pct = round(_sp_removed / _sp_bbox_vol * 100, 1)
+                st.caption(
+                    f"Material removed (approx, body bbox as stock proxy): "
+                    f"**{_sp_removed} cm³** ({_sp_pct}% of bbox)"
+                )
+            if _sc_grp.quantity > 1:
+                st.caption(
+                    f"Group total: {_sc_grp.quantity} identical parts × "
+                    f"{_sp_part_vol:.2f} cm³ = "
+                    f"{round(_sp_part_vol * _sc_grp.quantity, 2)} cm³"
+                )
+        with _wa_col:
+            st.markdown("**Whole assembly** — all bodies")
+            if stock:
+                wa1, wa2, wa3 = st.columns(3)
+                wa1.metric(
+                    "Stock L×W×H (mm)",
+                    f"{stock.get('length', '—')}×{stock.get('width', '—')}"
+                    f"×{stock.get('height', '—')}",
+                )
+                wa2.metric("Stock Vol (cm³)", stock.get("stock_volume", "—"))
+                wa3.metric("Part Vol (cm³)",  stock.get("part_volume",  "—"))
+                sv = stock.get("stock_volume") or 0
+                pv = stock.get("part_volume")  or 0
+                removed = round(sv - pv, 3)
+                if sv > 0:
+                    pct = round((removed / sv) * 100, 1)
+                    st.caption(
+                        f"Assembly material removed: **{removed} cm³** "
+                        f"({pct}% of stock)"
+                    )
+            else:
+                st.warning("Stock dimensions not set. Complete page 1 or 2 first.")
+    elif stock:
         sc1, sc2, sc3, sc4, sc5 = st.columns(5)
         sc1.metric("Length (mm)", stock.get("length", "—"))
         sc2.metric("Width (mm)",  stock.get("width",  "—"))
@@ -2492,7 +2712,7 @@ def page_setup_review():
                     "Ticked rows will be added as machining features."
                 )
             st.caption(
-                f"{len(_candidates)} candidate(s) detected from STEP geometry. "
+                f"{_candidate_count_text(len(_candidates), _raw_count)} from STEP geometry. "
                 "Tick rows to select, then click **Add selected machining features**."
             )
             for _w in _cand_warns:
@@ -3538,18 +3758,29 @@ def page_select_machining_work():
         return
 
     _is_raw_block = _spt == "Raw Block / Billet"
-    _candidates = _stock_adjusted_candidates()
+    _candidates_all = _stock_adjusted_candidates()
+    _raw_count = len(st.session_state.get("step_candidates", []))
     _cand_warns = (
         list(st.session_state.get("step_candidate_warnings", []))
         + list(st.session_state.get("_starting_part_policy_warnings", []))
     )
     _stock_errors = list(st.session_state.get("_starting_part_policy_errors", []))
+
+    # ── Weldment body scope (banner + toggle render here) ────────────────
+    _candidates, _scope_info = _apply_weldment_body_scope(_candidates_all, "smw")
     st.session_state._smw_preview_candidates = _candidates
 
     _job_file = st.session_state.get("uploaded_filename") or "STEP loaded"
     _jm1, _jm2, _jm3, _jm4 = st.columns(4)
     _jm1.metric("STEP File", _job_file)
-    _jm2.metric("Detected", len(_candidates))
+    _jm2.metric(
+        "Detected",
+        _candidate_count_text(len(_candidates), _raw_count, short=True),
+        help=(
+            "Candidates prepared for review (raw geometry detections in "
+            "parentheses)."
+        ),
+    )
     _jm3.metric("Selected", len(_features))
     _jm4.metric("Starting From", _spt)
     st.divider()
@@ -4011,7 +4242,10 @@ def page_part_setup():
                     if _ps_result.get("cadquery_warning"):
                         st.warning(f"**CadQuery fallback:** {_ps_result['cadquery_warning']}")
                     _n_cands = len(st.session_state.get("step_candidates", []))
-                    st.success(f"Parsed — **{_n_cands} feature candidate(s)** detected.")
+                    st.success(
+                        f"Parsed — **{_n_cands} raw feature detection(s)** "
+                        "(consolidated into review candidates on Select Machining Work)."
+                    )
                     st.rerun()
                 else:
                     st.warning(f"**STEP parse failed:** {_ps_result['message']}")
