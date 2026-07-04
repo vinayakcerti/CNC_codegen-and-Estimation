@@ -51,6 +51,7 @@ from modules.workholding import (
     WORKHOLDING_OPTIONS, JAW_MODES,
     recommend_workholding, workholding_warnings,
 )
+from modules.quote_export import generate_quote_html
 from modules.weldment.mesh_combine import (
     combine_meshes as combine_weldment_meshes,
     mesh_bbox_dims as weldment_mesh_bbox_dims,
@@ -3130,11 +3131,35 @@ def page_time_estimate():
     st.dataframe(_breakdown, use_container_width=True, hide_index=True)
 
     _cost_csv = _breakdown.to_csv(index=False).encode()
-    st.download_button(
+    _dlq1, _dlq2 = st.columns(2)
+    _dlq1.download_button(
         "Download Quotation Estimate (CSV)",
         data=_cost_csv,
         file_name="quotation_estimate.csv",
         mime="text/csv",
+    )
+    _q_fname = st.session_state.get("uploaded_filename") or "Part"
+    _quote_html = generate_quote_html({
+        "part_name": _q_fname,
+        "material": st.session_state.selected_material.get("name", "—"),
+        "machine": st.session_state.selected_machine.get("name", "—"),
+        "stock_dims": (
+            f"{st.session_state.stock.get('length', 0)} × "
+            f"{st.session_state.stock.get('width', 0)} × "
+            f"{st.session_state.stock.get('height', 0)} mm"
+        ),
+        "batch_qty": int(_batch_qty),
+        "machine_time_min": result["total_machine_time_min"],
+        "cost_rows": list(zip(_cost_items, _cost_col_values)),
+        "currency": _sym,
+        "sell_price": round(_price_per_part, 2),
+        "quote_ref": f"Q-{hashlib.sha256(_q_fname.encode()).hexdigest()[:6].upper()}",
+    })
+    _dlq2.download_button(
+        "Download Customer Quote (HTML → print to PDF)",
+        data=_quote_html.encode("utf-8"),
+        file_name=f"quote_{_q_fname.rsplit('.', 1)[0][:40]}.html",
+        mime="text/html",
     )
 
     st.divider()
