@@ -66,7 +66,6 @@ LOGO_PATH = os.path.join(os.path.dirname(__file__), "public", "logo.png")
 _SECTION_TABS = {
     "CONFIGURE": [
         ("Part Setup",                "🧱 Part Setup"),
-        ("Weldment",                  "🔩 Weldment"),
         ("Select Machining Work",     "🧩 Select Work"),
         ("4. Setup & Feature Review", "✅ Feature Review"),
     ],
@@ -171,11 +170,6 @@ def top_tabs(page: str) -> str:
     """
     active_section = _PAGE_TO_SECTION.get(page, "CONFIGURE")
     tabs = _SECTION_TABS[active_section]
-
-    # The Weldment tab is only relevant when the operator chose the
-    # Weldment / Fabricated Part starting type on Part Setup.
-    if st.session_state.get("starting_part_type") != "Weldment / Fabricated Part":
-        tabs = [t for t in tabs if t[0] != "Weldment"]
 
     _tab_cols = st.columns(len(tabs))
     for _col, (route_key, label) in zip(_tab_cols, tabs):
@@ -4124,27 +4118,12 @@ def page_part_setup():
                 _sm3.metric("Removed", "—")
                 st.caption("Upload a STEP file to calculate part volume and removed material.")
 
-        # ── Next → Weldment Breakdown or Select Machining Work ────────────
+        # ── Next → Select Machining Work ──────────────────────────────────
         st.divider()
-        _is_weldment = (_spt == "Weldment / Fabricated Part")
         if _fname:
-            if _is_weldment:
-                if st.button(
-                    "🔩 Next → Weldment Breakdown",
-                    type="primary",
-                    use_container_width=True,
-                    key="ps_next_wm",
-                ):
-                    st.session_state._nav_page = "Weldment"
-                    st.rerun()
-                st.caption(
-                    "The assembly will be split into individual bodies with "
-                    "per-part operations. You can still open Select Machining Work "
-                    "afterwards for final-machining selection."
-                )
             if st.button(
                 "🧩 Next → Select Machining Work",
-                type="secondary" if _is_weldment else "primary",
+                type="primary",
                 use_container_width=True,
                 key="ps_next_smw",
             ):
@@ -4160,18 +4139,24 @@ def page_part_setup():
                 help="Upload a STEP file first",
             )
 
+    # ── Weldment breakdown — full width, below the setup columns ─────────
+    if _spt == "Weldment / Fabricated Part" and _fname:
+        st.divider()
+        st.header("🔩 Weldment Breakdown")
+        st.caption(
+            "The assembly is split into individual bodies — grouped by identical "
+            "geometry — with per-part machining operations and time estimates."
+        )
+        _render_weldment_breakdown()
 
-def page_weldment():
-    """Weldment / Fabrication Assembly workflow page."""
+
+def _render_weldment_breakdown():
+    """Weldment breakdown — split bodies, group, per-part ops, time, export.
+
+    Embedded in Part Setup when the operator selects the Weldment /
+    Fabricated Part starting type. Reuses the Part Setup upload.
+    """
     import hashlib as _hashlib
-
-    st.title("Weldment / Fabrication Assembly")
-    st.caption(
-        "Upload a multi-body STEP file representing a weldment or fabricated assembly. "
-        "The tool will split each solid body, classify it, group identical parts, "
-        "suggest machining operations per part, and estimate total time."
-    )
-    st.divider()
 
     # ── Init session keys ─────────────────────────────────────────────
     if "wm_result" not in st.session_state:
@@ -4180,58 +4165,24 @@ def page_weldment():
         st.session_state.wm_filename = None
     if "wm_file_hash" not in st.session_state:
         st.session_state.wm_file_hash = None
-    if "wm_uploader_key" not in st.session_state:
-        st.session_state.wm_uploader_key = 0
 
-    # ── Clear button ──────────────────────────────────────────────────
-    if st.session_state.wm_filename:
-        wm_hdr1, wm_hdr2 = st.columns([4, 1])
-        wm_hdr1.info(f"Loaded: **{st.session_state.wm_filename}**")
-        if wm_hdr2.button("Clear", key="wm_clear", type="secondary"):
-            st.session_state.wm_result       = None
-            st.session_state.wm_filename     = None
-            st.session_state.wm_file_hash    = None
-            st.session_state.wm_uploader_key = st.session_state.wm_uploader_key + 1
-            st.rerun()
-
-    # ── Reuse the file already uploaded on Part Setup, if any ─────────
+    # ── Analyse the file uploaded on Part Setup ───────────────────────
     _ps_bytes  = st.session_state.get("uploaded_file_bytes")
     _ps_fname  = st.session_state.get("uploaded_filename")
     if _ps_bytes and _ps_fname:
         _ps_hash = _hashlib.sha256(_ps_bytes).hexdigest()
         if _ps_hash != st.session_state.wm_file_hash:
-            st.success(f"Using the file uploaded on Part Setup: **{_ps_fname}**")
             with st.spinner("Splitting bodies and analysing weldment..."):
                 wm_analysis = analyze_weldment(_ps_bytes, _ps_fname)
             st.session_state.wm_result    = wm_analysis
             st.session_state.wm_filename  = _ps_fname
             st.session_state.wm_file_hash = _ps_hash
 
-    # ── File uploader (fallback / different assembly) ─────────────────
-    with st.expander("Upload a different STEP file", expanded=st.session_state.wm_result is None):
-        wm_uploaded = st.file_uploader(
-            "Upload STEP / STP file (multi-body weldment)",
-            type=["step", "stp"],
-            help="Upload the assembly STEP file. Each solid body will be analysed separately.",
-            key=f"wm_uploader_{st.session_state.wm_uploader_key}",
-        )
-
-    if wm_uploaded:
-        wm_bytes = wm_uploaded.read()
-        wm_hash  = _hashlib.sha256(wm_bytes).hexdigest()
-
-        if wm_hash != st.session_state.wm_file_hash:
-            with st.spinner("Splitting bodies and analysing weldment..."):
-                wm_analysis = analyze_weldment(wm_bytes, wm_uploaded.name)
-            st.session_state.wm_result    = wm_analysis
-            st.session_state.wm_filename  = wm_uploaded.name
-            st.session_state.wm_file_hash = wm_hash
-
     result = st.session_state.wm_result
     if result is None:
         st.info(
-            "Upload a STEP file here, or upload one on **Part Setup** and select "
-            "**Weldment / Fabricated Part** — it will be analysed here automatically."
+            "Upload a STEP file above — the assembly will be split into its "
+            "individual bodies automatically."
         )
         return
 
@@ -4649,7 +4600,6 @@ def main():
 
     if   page == "1. Upload / Overview":          page_upload_step()
     elif page == "Part Setup":                    page_part_setup()
-    elif page == "Weldment":                      page_weldment()
     elif page == "Select Machining Work":         page_select_machining_work()
     elif page == "2. Material & Machine":         page_machine_setup()
     elif page == "3. Stock & Setup":              page_material_setup()
