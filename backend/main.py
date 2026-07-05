@@ -22,6 +22,7 @@ if _REPO_ROOT not in sys.path:
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from modules.step_parser import parse_step_auto
 from modules.dfm_score import compute_dfm_score
@@ -80,6 +81,19 @@ def _default_context():
         get_default_materials()[0],
         get_default_machines()[0],
     )
+
+
+_SAMPLES_DIR = os.path.join(_REPO_ROOT, "test_samples")
+
+
+@app.get("/api/sample/{name}")
+def sample(name: str):
+    """Serve a bundled sample STEP so the UI has a one-click 'try it' path."""
+    safe = os.path.basename(name)
+    path = os.path.join(_SAMPLES_DIR, safe)
+    if not safe.lower().endswith((".step", ".stp")) or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Sample not found.")
+    return FileResponse(path, filename=safe, media_type="application/octet-stream")
 
 
 @app.get("/api/health")
