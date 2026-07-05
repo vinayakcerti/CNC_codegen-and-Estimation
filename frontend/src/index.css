@@ -99,3 +99,18 @@ body { background: var(--bg-0); }
 .op-row .main { flex: 1; }
 .op-row .tool { font-size: 11px; color: var(--text-2); }
 .op-row .t { color: var(--text-1); font-variant-numeric: tabular-nums; }
+
+.num-input {
+  width: 90px; padding: 4px 8px; border-radius: 6px; font-size: 13px;
+  background: var(--bg-2); color: var(--text-0);
+  border: 1px solid var(--border); text-align: right;
+}
+.num-input:focus { outline: none; border-color: var(--accent); }
+
+.total-card {
+  margin-top: 18px; background: var(--bg-2); border: 1px solid var(--border-strong);
+  border-radius: 10px; padding: 14px;
+}
+.total-card .label { font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.05em; }
+.total-card .big { font-size: 26px; font-weight: 600; color: var(--orange); margin: 4px 0; }
+.total-card .sub { font-size: 12px; color: var(--text-1); }

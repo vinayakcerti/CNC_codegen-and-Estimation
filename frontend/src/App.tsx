@@ -20,6 +20,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [selOp, setSelOp] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<OpGeo | null>(null);
+  const [rateHr, setRateHr] = useState(800);
+  const [setupCharge, setSetupCharge] = useState(500);
+  const [matPriceKg, setMatPriceKg] = useState(650);
+  const [marginPct, setMarginPct] = useState(20);
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function runAnalysis(file: File) {
@@ -238,11 +242,85 @@ export default function App() {
                 </>
               )}
 
-              {tab === "estimate" && (
-                <div style={{ color: "var(--text-1)", fontSize: 13, paddingTop: 20 }}>
-                  Estimate screen — coming next.
-                </div>
-              )}
+              {tab === "estimate" && strategy && (() => {
+                const machineMin = strategy.totals.total_machine_time_min ?? 0;
+                const machining = (machineMin / 60) * rateHr;
+                const massKg = ((analysis.volumes_cm3.part ?? 0) * 2.7) / 1000;
+                const material = massKg * matPriceKg;
+                const setupsCost = strategy.setups.length * setupCharge;
+                const subtotal = machining + material + setupsCost;
+                const margin = subtotal * (marginPct / 100);
+                const total = subtotal + margin;
+                const inr = (v: number) =>
+                  "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+                return (
+                  <>
+                    <div className="section-title">Estimate settings</div>
+                    <div className="row">
+                      <span className="k">Machining rate (₹/hr)</span>
+                      <input
+                        className="num-input" type="number" value={rateHr}
+                        onChange={(e) => setRateHr(+e.target.value)}
+                      />
+                    </div>
+                    <div className="row">
+                      <span className="k">Setup charge (₹)</span>
+                      <input
+                        className="num-input" type="number" value={setupCharge}
+                        onChange={(e) => setSetupCharge(+e.target.value)}
+                      />
+                    </div>
+                    <div className="row">
+                      <span className="k">Material (₹/kg)</span>
+                      <input
+                        className="num-input" type="number" value={matPriceKg}
+                        onChange={(e) => setMatPriceKg(+e.target.value)}
+                      />
+                    </div>
+                    <div className="row">
+                      <span className="k">Margin (%)</span>
+                      <input
+                        className="num-input" type="number" value={marginPct}
+                        onChange={(e) => setMarginPct(+e.target.value)}
+                      />
+                    </div>
+
+                    <div className="section-title">Machining — {machineMin.toFixed(0)} min</div>
+                    {strategy.setups.map((su) => (
+                      <div className="row" key={su.setup_label}>
+                        <span className="k">Setup · {su.setup_label} ({su.subtotal_min.toFixed(0)}m)</span>
+                        <span className="v">{inr((su.subtotal_min / 60) * rateHr)}</span>
+                      </div>
+                    ))}
+                    <div className="row">
+                      <span className="k">Machine time total</span>
+                      <span className="v">{inr(machining)}</span>
+                    </div>
+
+                    <div className="section-title">Costs</div>
+                    <div className="row">
+                      <span className="k">Material ({massKg.toFixed(1)} kg Al)</span>
+                      <span className="v">{inr(material)}</span>
+                    </div>
+                    <div className="row">
+                      <span className="k">Setup charges × {strategy.setups.length}</span>
+                      <span className="v">{inr(setupsCost)}</span>
+                    </div>
+                    <div className="row">
+                      <span className="k">Margin ({marginPct}%)</span>
+                      <span className="v">{inr(margin)}</span>
+                    </div>
+
+                    <div className="total-card">
+                      <div className="label">Grand total (per part)</div>
+                      <div className="big">{inr(total)}</div>
+                      <div className="sub">
+                        {machineMin.toFixed(0)} min machine time · {strategy.setups.length} setups
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
         </div>
