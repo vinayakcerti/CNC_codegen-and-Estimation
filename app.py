@@ -5,6 +5,7 @@ import io
 import copy
 import contextlib
 import hashlib
+import inspect
 import os
 import sys
 import tempfile
@@ -255,6 +256,38 @@ _FTYPE_MAP = {
     "slot":                "Slot",
 }
 
+# Shared Plotly config for every 3D scene: mouse-wheel zoom + no logo button.
+_PLOTLY_3D_CONFIG = {"scrollZoom": True, "displaylogo": False}
+
+# Streamlit >= 1.35 supports st.dataframe(on_select=..., selection_mode=...).
+# Older versions degrade gracefully: tables render without row selection and
+# the selectbox/checkbox-driven highlights remain the only drivers.
+try:
+    _DF_ROW_SELECT_SUPPORTED = (
+        "on_select" in inspect.signature(st.dataframe).parameters
+    )
+except (ValueError, TypeError):  # pragma: no cover - exotic streamlit builds
+    _DF_ROW_SELECT_SUPPORTED = False
+
+
+def _selectable_dataframe(df, *, key, **kwargs):
+    """st.dataframe with single-row selection when supported.
+
+    Returns the selected row index (int) or None. On Streamlit versions
+    without dataframe selections the table still renders, returning None.
+    """
+    if _DF_ROW_SELECT_SUPPORTED:
+        _event = st.dataframe(
+            df,
+            key=key,
+            on_select="rerun",
+            selection_mode="single-row",
+            **kwargs,
+        )
+        return _dataframe_selected_row_index(_event)
+    st.dataframe(df, **kwargs)
+    return None
+
 
 def _render_3d_panel(key_prefix: str, large: bool = False):
     """Render the interactive 3D preview panel with horizontal viewer controls.
@@ -267,11 +300,13 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
     _mesh      = st.session_state.get("step_mesh_data")
     _geo       = st.session_state.get("step_geometry")
     _stk       = st.session_state.get("stock", {})
-    _all_cands = (
-        st.session_state.get("_smw_preview_candidates")
-        if key_prefix == "_smw_3d_"
-        else st.session_state.get("step_candidates", [])
-    ) or []
+    if key_prefix == "_smw_3d_":
+        _all_cands = st.session_state.get("_smw_preview_candidates") or []
+    elif f"{key_prefix}preview_candidates" in st.session_state:
+        # Page-scoped candidate list (e.g. weldment body scope on _sfr_3d_).
+        _all_cands = st.session_state.get(f"{key_prefix}preview_candidates") or []
+    else:
+        _all_cands = st.session_state.get("step_candidates", []) or []
 
     _FACE_COLOR_DEFAULT_TYPES = {"Hole", "Large hole / boring", "Pocket", "Chamfer"}
     _has_face_colors = any(
@@ -325,16 +360,18 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
         "Part opacity",
         min_value=0.20,
         max_value=1.00,
-        value=0.82 if key_prefix == "_smw_3d_" else 1.00,
+        value=0.82 if key_prefix in ("_smw_3d_", "_sfr_3d_") else 1.00,
         step=0.05,
         key=f"{key_prefix}part_opacity",
         help="Lower opacity makes colored machining surfaces easier to inspect",
     )
 
-    # Highlight IDs scoped to Select Machining Work panel only.
-    _hl_ids = (
-        st.session_state.get("_smw_highlight_candidate_ids") or set()
-    ) if key_prefix == "_smw_3d_" else set()
+    # Highlight IDs — per-panel session keys. Select Machining Work keeps its
+    # historical key; other panels read "{key_prefix}highlight_ids".
+    if key_prefix == "_smw_3d_":
+        _hl_ids = st.session_state.get("_smw_highlight_candidate_ids") or set()
+    else:
+        _hl_ids = st.session_state.get(f"{key_prefix}highlight_ids") or set()
 
     if _mesh:
         _transform = infer_work_transform(st.session_state.get("step_parse_result", {}), _stk)
@@ -364,14 +401,26 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
                 bordercolor="rgba(0,0,0,0.15)",
                 borderwidth=1,
             ),
+            # Streamlit forces layout.dragmode to "pan" on charts with
+            # selections activated (on_select) whenever the figure leaves
+            # dragmode unset — the 3D scene inherits "pan" and drag stops
+            # rotating. Setting it explicitly restores orbit-style rotation.
+            dragmode="turntable",
+            scene_dragmode="turntable",
+            # Keep the operator's camera across reruns (row clicks / ticks
+            # rebuild the figure); changing the View preset intentionally
+            # changes uirevision so the camera snaps to the new preset.
+            uirevision=f"{key_prefix}{_camera_view}",
         )
         if large:
             fig_mesh.update_layout(height=680)
         _chart_ev = st.plotly_chart(
             fig_mesh,
             on_select="rerun",
+            selection_mode="points",
             key=f"{key_prefix}chart",
             use_container_width=True,
+            config=_PLOTLY_3D_CONFIG,
         )
         # Capture 3D marker/face click → store candidate_id for the right panel
         if key_prefix == "_smw_3d_":
@@ -448,9 +497,10 @@ def _render_3d_panel(key_prefix: str, large: bool = False):
     elif (_geo and _geo.get("success")
           and (_geo.get("line_segments") or _geo.get("circle_traces"))):
         fig_wire = build_3d_view(_stk, [], step_geometry=_geo)
+        fig_wire.update_layout(dragmode="turntable", scene_dragmode="turntable")
         if large:
             fig_wire.update_layout(height=680)
-        st.plotly_chart(fig_wire, use_container_width=True)
+        st.plotly_chart(fig_wire, use_container_width=True, config=_PLOTLY_3D_CONFIG)
         st.caption("Wireframe preview — STEP edge geometry · Planning reference only.")
     elif st.session_state.get("step_parse_result"):
         _tess_err = st.session_state.get("_tess_error")
@@ -779,6 +829,115 @@ def _preview_member_ids_for_group(group, candidates, max_members=12):
         if len(reps) >= max_members:
             break
     return reps or list(member_ids[:max_members])
+
+
+# ── Table-row -> 3D highlight mapping (pure helpers, unit-tested headless) ──
+
+def _dataframe_selected_row_index(selection_event):
+    """Return the first selected row index from a st.dataframe selection event.
+
+    Accepts the object returned by st.dataframe(on_select="rerun") or an
+    equivalent plain dict (used by headless tests). Returns None when nothing
+    is selected or the payload has an unexpected shape.
+    """
+    if selection_event is None:
+        return None
+    if isinstance(selection_event, dict):
+        selection = selection_event.get("selection")
+    else:
+        selection = getattr(selection_event, "selection", None)
+    if selection is None:
+        return None
+    if isinstance(selection, dict):
+        rows = selection.get("rows")
+    else:
+        rows = getattr(selection, "rows", None)
+    if not rows:
+        return None
+    try:
+        return int(rows[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_selection_candidate_ids(row_index, groups=None, candidates=None):
+    """Map a selected table-row index to the candidate ids it represents.
+
+    Grouped mode (groups given): row_index indexes the groups list (table rows
+    follow group order); returns the group's preview member ids — trimmed for
+    noisy slot groups exactly like the card highlight path.
+    Ungrouped mode (candidates only): row_index indexes the candidates list;
+    returns that row's single candidate id.
+    Returns an empty set for None / out-of-range selections.
+    """
+    if row_index is None:
+        return set()
+    try:
+        row_index = int(row_index)
+    except (TypeError, ValueError):
+        return set()
+    if groups is not None:
+        if 0 <= row_index < len(groups):
+            return set(
+                _preview_member_ids_for_group(groups[row_index], candidates or [])
+            )
+        return set()
+    if candidates is not None and 0 <= row_index < len(candidates):
+        cid = (candidates[row_index] or {}).get("candidate_id")
+        return {cid} if cid else set()
+    return set()
+
+
+def _feature_row_candidate_ids(row_index, features, candidates=None):
+    """Map a selected accepted-features table row to its candidate ids.
+
+    Features accepted from CAD carry source_candidate_id; when the candidates
+    list is supplied, physical_feature_id matches are included as well so the
+    highlight survives candidate-id regeneration. Manual features map to an
+    empty set (nothing to highlight).
+    """
+    if row_index is None:
+        return set()
+    try:
+        row_index = int(row_index)
+    except (TypeError, ValueError):
+        return set()
+    if not (0 <= row_index < len(features or [])):
+        return set()
+    feature = features[row_index] or {}
+    ids = set()
+    source_cid = feature.get("source_candidate_id")
+    if source_cid:
+        ids.add(source_cid)
+    physical_id = feature.get("physical_feature_id")
+    if physical_id:
+        for cand in candidates or []:
+            if (cand or {}).get("physical_feature_id") == physical_id:
+                cid = cand.get("candidate_id")
+                if cid:
+                    ids.add(cid)
+    return ids
+
+
+def _resolve_highlight_ids(*sources):
+    """Return the first non-empty id set; callers pass sources in priority order."""
+    for source in sources:
+        if source:
+            return set(source)
+    return set()
+
+
+def _bom_row_group_id(row_index, group_ids):
+    """Map a selected weldment BOM row to its group_id (rows follow job.groups)."""
+    if row_index is None:
+        return None
+    try:
+        row_index = int(row_index)
+    except (TypeError, ValueError):
+        return None
+    if 0 <= row_index < len(group_ids or []):
+        return group_ids[row_index]
+    return None
 
 
 def _commit_group_selections(edited_grouped_df, groups, candidates) -> int:
@@ -2462,6 +2621,14 @@ def page_setup_review():
     # ── Weldment body scope (banner + toggle render here) ───────────────────
     _candidates, _scope_info = _apply_weldment_body_scope(_candidates_all, "sfr")
 
+    # Row-click -> 3D highlight state. Captured before the 3D panel renders
+    # (the panel sits above the tables) so the rerun-on-change guard at the
+    # bottom of the tables can refresh it. Recomputed every run — clears
+    # itself when selections disappear or a new file is loaded.
+    _prev_sfr_hl = st.session_state.get("_sfr_3d_highlight_ids") or set()
+    _sfr_feat_row_ids = set()
+    _sfr_cand_sel_ids = set()
+
     # ── Top status cards ─────────────────────────────────────────────────────
     tm1, tm2, tm3, tm4 = st.columns(4)
     tm1.metric("STEP File", _filename if _filename else "None")
@@ -2611,6 +2778,18 @@ def page_setup_review():
 
     st.divider()
 
+    # ── 3D Preview — synced to the review tables below ───────────────────────
+    if step_ok:
+        # Page-scoped candidate list for the _sfr_3d_ panel (respects the
+        # weldment body scope applied above).
+        st.session_state._sfr_3d_preview_candidates = _candidates
+        with st.expander(
+            "3D Preview — click a table row below to highlight it",
+            expanded=bool(_prev_sfr_hl),
+        ):
+            _render_3d_panel("_sfr_3d_")
+        st.divider()
+
     # ── C. Current features — conflict warning + clear option ───────────────
     _has_features   = bool(features)
     _has_candidates = bool(st.session_state.get("step_candidates"))
@@ -2643,7 +2822,12 @@ def page_setup_review():
         for col in display_cols:
             if col not in df.columns:
                 df[col] = None
-        st.dataframe(
+        if _DF_ROW_SELECT_SUPPORTED and step_ok:
+            st.caption(
+                "Click a row to highlight that feature in the 3D preview "
+                "above (features accepted from CAD candidates only)."
+            )
+        _feat_row_idx = _selectable_dataframe(
             df[display_cols].rename(columns={
                 "feature_name":           "Name",
                 "feature_type":           "Type",
@@ -2660,11 +2844,15 @@ def page_setup_review():
                 "machining_action":       "Action",
                 "selected_for_machining": "Machine?",
             }),
+            key="_sfr_feat_table",
             column_config={
                 "Machine?": st.column_config.CheckboxColumn("Machine?"),
             },
             use_container_width=True,
             hide_index=True,
+        )
+        _sfr_feat_row_ids = _feature_row_candidate_ids(
+            _feat_row_idx, features, _candidates
         )
         _n_machining = sum(1 for f in features if f.get("selected_for_machining", True))
         _n_excluded  = len(features) - _n_machining
@@ -2719,6 +2907,27 @@ def page_setup_review():
                 st.warning(_w)
             for _error in _stock_errors:
                 st.error(_error)
+
+            # Candidate rows live in st.data_editor (needed for the accept /
+            # action editing), which has no row-selection API — this selectbox
+            # is the single-candidate spotlight for the 3D preview above.
+            if step_ok:
+                _sfr_hl_opts = ["(none)"] + [
+                    f"#{_ci + 1} "
+                    f"{_c.get('feature_name') or _c.get('feature_type', 'Unknown')}"
+                    for _ci, _c in enumerate(_candidates)
+                ]
+                _sfr_hl_sel = st.selectbox(
+                    "Preview / highlight candidate",
+                    options=_sfr_hl_opts,
+                    key="_sfr_hl_cand_sel",
+                    help="Highlights the candidate in gold in the 3D preview above.",
+                )
+                if _sfr_hl_sel != "(none)":
+                    _sfr_cand_sel_ids = _row_selection_candidate_ids(
+                        _sfr_hl_opts.index(_sfr_hl_sel) - 1,
+                        candidates=_candidates,
+                    )
 
             _default_action = "Machine" if _is_raw_block else "Existing Geometry – No Machining"
             _rows = []
@@ -2780,6 +2989,13 @@ def page_setup_review():
                     st.rerun()
                 else:
                     st.info("No rows ticked — tick the checkbox for each feature you want to machine.")
+
+    # ── Resolve table selections into the 3D highlight ───────────────────────
+    # Feature-row click > candidate spotlight selectbox.
+    _new_sfr_hl = _resolve_highlight_ids(_sfr_feat_row_ids, _sfr_cand_sel_ids)
+    st.session_state._sfr_3d_highlight_ids = _new_sfr_hl
+    if step_ok and _new_sfr_hl != _prev_sfr_hl:
+        st.rerun()
 
     st.divider()
 
@@ -3424,7 +3640,8 @@ def page_visual_preview():
 
     with tab2:
         fig_3d = build_3d_view(stock, features, step_geometry=step_geometry)
-        st.plotly_chart(fig_3d, use_container_width=True)
+        fig_3d.update_layout(dragmode="turntable", scene_dragmode="turntable")
+        st.plotly_chart(fig_3d, use_container_width=True, config=_PLOTLY_3D_CONFIG)
 
 
 def page_cnc_export():
@@ -3986,19 +4203,18 @@ def page_select_machining_work():
                     if st.session_state.get(f"_smw_card_accept_{_suffix}", False):
                         _hl_from_ticks.update(_preview_member_ids_for_group(_g, _filtered))
 
-                _new_hl_ids = (
-                    _hl_from_ticks if _hl_from_ticks else _hl_from_selectbox
-                )
-                st.session_state._smw_highlight_candidate_ids = _new_hl_ids
-                if _new_hl_ids != _prev_hl_ids:
-                    st.rerun()
-
                 _n_ticked = sum(
                     1 for _g in _groups
                     if st.session_state.get(f"_smw_card_accept_{_group_widget_suffix(_g)}", False)
                 )
 
                 with st.expander("Advanced: flat group table"):
+                    if _DF_ROW_SELECT_SUPPORTED:
+                        st.caption(
+                            "Click a row to spotlight that group in the 3D "
+                            "viewer — it overrides the ticked-card highlight "
+                            "until you deselect the row."
+                        )
                     _adv_rows = []
                     for _gi, _g in enumerate(_groups):
                         _aa = all(
@@ -4037,7 +4253,23 @@ def page_select_machining_work():
                             "detected faces": _g.get("detected_count", _g["count"]),
                             "confidence":  _g["confidence_summary"],
                         })
-                    st.dataframe(pd.DataFrame(_adv_rows), use_container_width=True, hide_index=True)
+                    _adv_row_idx = _selectable_dataframe(
+                        pd.DataFrame(_adv_rows),
+                        key="_smw_adv_group_table",
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                # Row selection (explicit spotlight) > ticked cards > selectbox.
+                _hl_from_row = _row_selection_candidate_ids(
+                    _adv_row_idx, groups=_groups, candidates=_filtered
+                )
+                _new_hl_ids = _resolve_highlight_ids(
+                    _hl_from_row, _hl_from_ticks, _hl_from_selectbox
+                )
+                st.session_state._smw_highlight_candidate_ids = _new_hl_ids
+                if _new_hl_ids != _prev_hl_ids:
+                    st.rerun()
 
                 if st.button(
                     "Confirm & proceed to Feature Review",
@@ -4148,6 +4380,8 @@ def page_select_machining_work():
                     )
 
                 # Auto-highlight from ticked rows; fall back to selectbox.
+                # (st.data_editor has no row-selection API, so ticks + the
+                # highlight selectbox are the drivers in flat mode.)
                 _hl_from_ticks = set()
                 if "candidate_id" in _edited.columns and "accept" in _edited.columns:
                     for _, _r in _edited.iterrows():
@@ -4155,8 +4389,8 @@ def page_select_machining_work():
                             _cid = _r.get("candidate_id", "")
                             if _cid:
                                 _hl_from_ticks.add(_cid)
-                _new_hl_ids = (
-                    _hl_from_ticks if _hl_from_ticks else _hl_from_selectbox
+                _new_hl_ids = _resolve_highlight_ids(
+                    _hl_from_ticks, _hl_from_selectbox
                 )
                 st.session_state._smw_highlight_candidate_ids = _new_hl_ids
                 if _new_hl_ids != _prev_hl_ids:
@@ -4576,6 +4810,8 @@ def _render_weldment_breakdown():
             st.session_state.wm_result    = wm_analysis
             st.session_state.wm_filename  = _ps_fname
             st.session_state.wm_file_hash = _ps_hash
+            # New assembly — drop BOM row-selection tracking from the old one.
+            st.session_state._wm_bom_last_sel = None
 
     result = st.session_state.wm_result
     if result is None:
@@ -4624,8 +4860,11 @@ def _render_weldment_breakdown():
             "Machining (min/pc)": rep.machining_time_min,
             "Bodies": ", ".join(str(i + 1) for i in g.body_indices),
         })
-    st.dataframe(
+    if _DF_ROW_SELECT_SUPPORTED:
+        st.caption("Click a BOM row to open that part group in the 3D detail view below.")
+    _bom_row_idx = _selectable_dataframe(
         pd.DataFrame(bom_rows),
+        key="wm_bom_table",
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -4633,6 +4872,15 @@ def _render_weldment_breakdown():
             "Vol (cm³)":          st.column_config.NumberColumn(format="%.2f"),
         },
     )
+    # BOM row click -> select that group (same state the group cards set).
+    # Only react when the selection CHANGES so the group cards below keep
+    # working while a BOM row stays selected; deselecting changes nothing.
+    _bom_sel_gid = _bom_row_group_id(_bom_row_idx, [g.group_id for g in job.groups])
+    if _bom_sel_gid != st.session_state.get("_wm_bom_last_sel"):
+        st.session_state._wm_bom_last_sel = _bom_sel_gid
+        if _bom_sel_gid is not None:
+            st.session_state.wm_selected_group = _bom_sel_gid
+            st.rerun()
     st.divider()
 
     # ── Part detail — group-first selector + single persistent viewer ─
@@ -4753,8 +5001,16 @@ def _render_weldment_breakdown():
                         font=dict(size=14),
                         x=0.05,
                     ),
+                    dragmode="turntable",
+                    scene_dragmode="turntable",
+                    uirevision=f"wm-{_wm_sel}",
                 )
-                st.plotly_chart(_fig, use_container_width=True, key="wm_group_3d")
+                st.plotly_chart(
+                    _fig,
+                    use_container_width=True,
+                    key="wm_group_3d",
+                    config=_PLOTLY_3D_CONFIG,
+                )
             else:
                 st.info("3D preview not available for this assembly.")
             st.caption(
@@ -4837,8 +5093,16 @@ def _render_weldment_breakdown():
                     height=420,
                     margin=dict(l=0, r=0, t=32, b=0),
                     title=dict(text=_grp_label, font=dict(size=14), x=0.05),
+                    dragmode="turntable",
+                    scene_dragmode="turntable",
+                    uirevision=f"wm-{_wm_sel}",
                 )
-                st.plotly_chart(_fig, use_container_width=True, key="wm_group_3d")
+                st.plotly_chart(
+                    _fig,
+                    use_container_width=True,
+                    key="wm_group_3d",
+                    config=_PLOTLY_3D_CONFIG,
+                )
             else:
                 st.info("3D preview not available for this group.")
 
