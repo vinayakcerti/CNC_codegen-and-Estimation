@@ -927,6 +927,56 @@ def _resolve_highlight_ids(*sources):
     return set()
 
 
+def _group_operations_by_setup(operations, per_op_rows=None):
+    """Group sequenced operations by setup_label, preserving op_num order.
+
+    operations: the sequenced list from plan_operations() (already ordered by
+    op_num). per_op_rows: optional rows from estimate_time_per_operation(),
+    matched to operations by op_num to attach a per-op cutting time.
+
+    Returns a list of group dicts in first-appearance order of setup_label:
+        {"setup_label":  str,
+         "ops":          [op dict + "_cut_min" float, ...],  # input order kept
+         "subtotal_min": float,   # sum of the group's ops' cut_min
+         "blocked_count": int}    # ops flagged planning_blocked
+    Pure function (no Streamlit access) so it is unit-testable headless.
+    """
+    rows_by_op_num = {}
+    for row in per_op_rows or []:
+        if isinstance(row, dict) and row.get("op_num") is not None:
+            rows_by_op_num.setdefault(row["op_num"], row)
+
+    groups = []
+    index_by_label = {}
+    for op in operations or []:
+        op = op if isinstance(op, dict) else {}
+        label = str(op.get("setup_label") or "Unknown")
+        if label not in index_by_label:
+            index_by_label[label] = len(groups)
+            groups.append({
+                "setup_label": label,
+                "ops": [],
+                "subtotal_min": 0.0,
+                "blocked_count": 0,
+            })
+        group = groups[index_by_label[label]]
+        row = rows_by_op_num.get(op.get("op_num")) or {}
+        try:
+            cut_min = float(row.get("cut_min") or 0.0)
+        except (TypeError, ValueError):
+            cut_min = 0.0
+        entry = dict(op)
+        entry["_cut_min"] = cut_min
+        group["ops"].append(entry)
+        group["subtotal_min"] += cut_min
+        if op.get("planning_blocked"):
+            group["blocked_count"] += 1
+
+    for group in groups:
+        group["subtotal_min"] = round(group["subtotal_min"], 2)
+    return groups
+
+
 def _bom_row_group_id(row_index, group_ids):
     """Map a selected weldment BOM row to its group_id (rows follow job.groups)."""
     if row_index is None:
@@ -3170,7 +3220,92 @@ def page_operation_plan():
         "Verify feeds, speeds, and toolpaths in your CAM system before running on the machine."
     )
 
-    # ── Setup 1 / Setup 2 split ───────────────────────────────────────────────
+    # ── Strategy by Setup — primary sequenced view ────────────────────────────
+    st.subheader("Strategy by Setup")
+    _per_op_rows = estimate_time_per_operation(operations, mach, mat)
+    _setup_groups = _group_operations_by_setup(operations, _per_op_rows)
+
+    # Row-click -> 3D highlight state. Captured before the 3D panel renders
+    # (the panel sits above the per-setup tables) so the rerun-on-change guard
+    # below the tables can refresh it — mirrors Setup & Feature Review.
+    _prev_strat_hl = st.session_state.get("_strat_3d_highlight_ids") or set()
+    _strat_sel_sets = []
+    _strat_step_ok = bool(st.session_state.get("step_parse_result"))
+    _strat_candidates = st.session_state.get("step_candidates", []) or []
+
+    if _strat_step_ok and _setup_groups:
+        with st.expander(
+            "3D Preview — click an operation row below to highlight its feature",
+            expanded=bool(_prev_strat_hl),
+        ):
+            _render_3d_panel("_strat_3d_")
+
+    if not _setup_groups:
+        st.info("No operations to sequence yet.")
+
+    for _gi, _grp in enumerate(_setup_groups, start=1):
+        _n_grp_ops = len(_grp["ops"])
+        _grp_title = (
+            f"Setup {_gi}: {_grp['setup_label']} — {_n_grp_ops} "
+            f"op{'s' if _n_grp_ops != 1 else ''} · {_grp['subtotal_min']:.1f} min"
+        )
+        if _grp["blocked_count"]:
+            _grp_title += f" · 🔴 {_grp['blocked_count']} blocked"
+        with st.expander(_grp_title, expanded=(_gi == 1)):
+            _seq_rows = [{
+                " ":         "🔴" if _op.get("planning_blocked") else "",
+                "Seq":       f"{_i}/{_n_grp_ops}",
+                "Operation": _op.get("operation_type", "—"),
+                "Feature":   _op.get("feature_name", "—"),
+                "Tool":      f"{_op.get('tool_name', '—')} "
+                             f"(T{_op.get('tool_number', 0)})",
+                "Cut (min)": _op.get("_cut_min", 0.0),
+            } for _i, _op in enumerate(_grp["ops"], start=1)]
+            _strat_row_idx = _selectable_dataframe(
+                pd.DataFrame(_seq_rows),
+                key=f"_strat_setup_table_{_gi}_{_grp['setup_label']}",
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Cut (min)": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+            # Ops carry source_candidate_id / physical_feature_id just like
+            # accepted features, so the feature-row mapper works unchanged.
+            _strat_sel_sets.append(_feature_row_candidate_ids(
+                _strat_row_idx, _grp["ops"], _strat_candidates
+            ))
+            for _op in _grp["ops"]:
+                if _op.get("planning_blocked"):
+                    st.error(
+                        f"🔴 Op {_op.get('op_num', '—')} — "
+                        f"{_op.get('feature_name', '—')}: "
+                        f"{_op.get('tool_warning') or _op.get('notes') or 'Planning blocked — manual review required.'}"
+                    )
+
+    if _setup_groups:
+        _grand_cut_min = round(sum(g["subtotal_min"] for g in _setup_groups), 2)
+        _time_result = st.session_state.get("time_result")
+        if not _time_result or _time_result.get("num_operations") != len(operations):
+            # Stale or missing aggregate — recompute so the caption reconciles.
+            _time_result = estimate_time(
+                operations, mach, mat, st.session_state.features
+            )
+        st.caption(
+            f"Cutting subtotals sum to {_grand_cut_min:.1f} min; total machine "
+            f"time {_time_result['total_machine_time_min']:.1f} min incl. "
+            "setup/rapids/tool changes."
+        )
+
+    # Resolve op-row selections into the 3D highlight (first non-empty wins).
+    _new_strat_hl = _resolve_highlight_ids(*_strat_sel_sets)
+    st.session_state._strat_3d_highlight_ids = _new_strat_hl
+    if _strat_step_ok and _new_strat_hl != _prev_strat_hl:
+        st.rerun()
+
+    st.divider()
+
+    # ── Advanced: flat operations table (legacy view, demoted) ────────────────
     def _is_setup2_op(op):
         return is_secondary_setup_operation(op)
 
@@ -3182,37 +3317,35 @@ def page_operation_plan():
         if operations else []
     )
 
-    st.subheader("Primary Setup Operations")
-    if _setup1_ops and display_cols:
-        _df1 = pd.DataFrame(_setup1_ops)[display_cols]
-        _df1.columns = [c.replace("_", " ").title() for c in _df1.columns]
-        st.dataframe(_df1, use_container_width=True, hide_index=True)
-    else:
-        st.info("No primary setup operations.")
+    with st.expander("Advanced: flat operations table", expanded=False):
+        st.subheader("Primary Setup Operations")
+        if _setup1_ops and display_cols:
+            _df1 = pd.DataFrame(_setup1_ops)[display_cols]
+            _df1.columns = [c.replace("_", " ").title() for c in _df1.columns]
+            st.dataframe(_df1, use_container_width=True, hide_index=True)
+        else:
+            st.info("No primary setup operations.")
 
-    if _has_setup2:
-        st.subheader("Additional Setup Operations")
-        if _setup2_ops and display_cols:
-            _df2 = pd.DataFrame(_setup2_ops)[display_cols]
-            _df2.columns = [c.replace("_", " ").title() for c in _df2.columns]
-            st.dataframe(_df2, use_container_width=True, hide_index=True)
+        if _has_setup2:
+            st.subheader("Additional Setup Operations")
+            if _setup2_ops and display_cols:
+                _df2 = pd.DataFrame(_setup2_ops)[display_cols]
+                _df2.columns = [c.replace("_", " ").title() for c in _df2.columns]
+                st.dataframe(_df2, use_container_width=True, hide_index=True)
 
-    st.divider()
+        st.subheader("Full Operations Table")
+        if operations and display_cols:
+            df = pd.DataFrame(operations)[display_cols]
+            df.columns = [c.replace("_", " ").title() for c in df.columns]
+            st.dataframe(df, use_container_width=True, hide_index=True)
 
-    # ── Full operations table ─────────────────────────────────────────────────
-    st.subheader("Full Operations Table")
-    if operations and display_cols:
-        df = pd.DataFrame(operations)[display_cols]
-        df.columns = [c.replace("_", " ").title() for c in df.columns]
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
-    csv = pd.DataFrame(operations).to_csv(index=False).encode()
-    st.download_button(
-        "Download Operation Plan (CSV)",
-        data=csv,
-        file_name="operation_plan.csv",
-        mime="text/csv",
-    )
+        csv = pd.DataFrame(operations).to_csv(index=False).encode()
+        st.download_button(
+            "Download Operation Plan (CSV)",
+            data=csv,
+            file_name="operation_plan.csv",
+            mime="text/csv",
+        )
 
     st.divider()
     if _machine_feasibility["blocked"] > 0:
