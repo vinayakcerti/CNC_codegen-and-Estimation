@@ -65,6 +65,11 @@ export default function App() {
 
   return (
     <div style={{ display: "flex", height: "100%" }}>
+      {error && (
+        <div className="toast-error" onClick={() => setError(null)}>
+          {error} <span style={{ opacity: 0.7, marginLeft: 8 }}>✕</span>
+        </div>
+      )}
       <div className="rail">
         <button
           className={view === "projects" ? "active" : ""}
@@ -151,8 +156,9 @@ export default function App() {
           </div>
         )}
 
-        <div style={{ flex: 1, display: view === "part" ? "flex" : "none", minHeight: 0 }}>
-          <div style={{ flex: 1, position: "relative", background: "#191c20" }}>
+        {view === "part" && (
+        <div style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0 }}>
+          <div style={{ flex: 1, position: "relative", background: "#191c20", minWidth: 0, overflow: "hidden" }}>
             {!analysis && !loading && (
               <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <div className="upload-zone">
@@ -177,11 +183,6 @@ export default function App() {
             {loading && (
               <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-1)" }}>
                 Analysing part…
-              </div>
-            )}
-            {error && (
-              <div style={{ position: "absolute", top: 12, left: 12, color: "var(--red)", fontSize: 13 }}>
-                {error}
               </div>
             )}
             {analysis && !loading && <PartViewer mesh={analysis.mesh} highlight={highlight} />}
@@ -364,6 +365,7 @@ export default function App() {
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );
