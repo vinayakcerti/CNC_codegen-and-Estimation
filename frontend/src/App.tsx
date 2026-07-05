@@ -18,6 +18,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<"projects" | "part">("projects");
   const [selOp, setSelOp] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<OpGeo | null>(null);
   const [rateHr, setRateHr] = useState(800);
@@ -29,6 +30,7 @@ export default function App() {
   async function runAnalysis(file: File) {
     setLoading(true);
     setError(null);
+    setView("part");
     try {
       const a = await api.analyze(file);
       setAnalysis(a);
@@ -64,8 +66,16 @@ export default function App() {
   return (
     <div style={{ display: "flex", height: "100%" }}>
       <div className="rail">
-        <button className="active" title="Part">◧</button>
-        <button title="Projects">▦</button>
+        <button
+          className={view === "projects" ? "active" : ""}
+          title="Projects"
+          onClick={() => setView("projects")}
+        >▦</button>
+        <button
+          className={view === "part" ? "active" : ""}
+          title="Part workspace"
+          onClick={() => setView("part")}
+        >◧</button>
         <button title="Libraries">▤</button>
         <button title="Team">◈</button>
       </div>
@@ -111,7 +121,37 @@ export default function App() {
           />
         </div>
 
-        <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        {view === "projects" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "28px 36px" }}>
+            <h1 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 18px" }}>Projects</h1>
+            <div className="project-group">
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Samples</div>
+              <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 14 }}>
+                Bundled demo parts — click to analyse
+              </div>
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                <div className="part-card" id="card-sample" onClick={loadSample}>
+                  <div className="thumb">
+                    <span className="body-badge">28 Bodies</span>
+                    <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
+                      <polygon points="12,42 78,24 108,38 42,58" fill="#3a4048" stroke="#565e68" />
+                      <polygon points="12,42 42,58 42,66 12,50" fill="#2e343b" stroke="#565e68" />
+                      <polygon points="42,58 108,38 108,46 42,66" fill="#333940" stroke="#565e68" />
+                    </svg>
+                  </div>
+                  <div className="card-name">3100171001_01 SLIDE BASE-1812</div>
+                  <div className="card-sub">Weldment · uploaded sample</div>
+                </div>
+                <div className="part-card upload" onClick={() => fileRef.current?.click()}>
+                  <div style={{ fontSize: 26, color: "var(--text-2)" }}>+</div>
+                  <div className="card-sub">Upload STEP</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ flex: 1, display: view === "part" ? "flex" : "none", minHeight: 0 }}>
           <div style={{ flex: 1, position: "relative", background: "#191c20" }}>
             {!analysis && !loading && (
               <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
