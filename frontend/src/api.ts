@@ -24,6 +24,35 @@ export interface Candidate {
   [k: string]: unknown;
 }
 
+export interface Material {
+  name: string;
+  density: number;
+  machinability_factor: number;
+  safety_factor: number;
+}
+
+export interface ToolInfo {
+  tool_number: number;
+  tool_name: string;
+  tool_type: string;
+  diameter_mm: number;
+  flute_length_mm: number;
+  max_depth_mm: number;
+}
+
+export interface HoleGroup {
+  diameter_mm: number;
+  count: number;
+  setups: string[];
+}
+
+export interface SetupInfo {
+  label: string;
+  method: string;
+  jaw_mode: string;
+  reason: string;
+}
+
 export interface DfmScore {
   score_pct: number;
   grade: string;
@@ -46,6 +75,8 @@ export interface AnalyzeResult {
   candidates: Candidate[];
   candidate_count: number;
   dfm: DfmScore;
+  hole_groups?: HoleGroup[];
+  setups?: SetupInfo[];
   is_multibody: boolean;
   mesh: Mesh | null;
   material: string;
@@ -110,14 +141,21 @@ export interface StrategyResult {
   totals: { total_machine_time_min: number; cutting_time_min: number; num_operations: number };
 }
 
-async function postFile<T>(path: string, file: File): Promise<T> {
+async function postFile<T>(path: string, file: File, query?: Record<string, string>): Promise<T> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${BASE}${path}`, { method: "POST", body: form });
+  const qs = query ? `?${new URLSearchParams(query).toString()}` : "";
+  const res = await fetch(`${BASE}${path}${qs}`, { method: "POST", body: form });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(detail.detail ?? `Request failed: ${res.status}`);
   }
+  return res.json() as Promise<T>;
+}
+
+async function getJson<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`);
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
   return res.json() as Promise<T>;
 }
 
@@ -133,8 +171,12 @@ async function sampleFile(name: string): Promise<File> {
 
 export const api = {
   health: () => fetch(`${BASE}/api/health`).then((r) => r.json()),
-  analyze: (file: File) => postFile<AnalyzeResult>("/api/analyze", file),
+  materials: () => getJson<{ materials: Material[] }>("/api/materials"),
+  tools: () => getJson<{ tools: ToolInfo[] }>("/api/tools"),
+  analyze: (file: File, material?: string) =>
+    postFile<AnalyzeResult>("/api/analyze", file, material ? { material } : undefined),
   weldment: (file: File) => postFile<WeldmentResult>("/api/weldment", file),
-  strategy: (file: File) => postFile<StrategyResult>("/api/strategy", file),
+  strategy: (file: File, material?: string) =>
+    postFile<StrategyResult>("/api/strategy", file, material ? { material } : undefined),
   sampleFile,
 };

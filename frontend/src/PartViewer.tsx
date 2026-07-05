@@ -15,7 +15,7 @@ export interface Highlight {
   feature_type: string;
 }
 
-function PartMesh({ mesh, dimmed }: { mesh: Mesh; dimmed: boolean }) {
+function PartMesh({ mesh, dimmed, light }: { mesh: Mesh; dimmed: boolean; light: boolean }) {
   const geometry = useMemo(() => {
     const g = new THREE.BufferGeometry();
     const n = mesh.x.length;
@@ -46,7 +46,7 @@ function PartMesh({ mesh, dimmed }: { mesh: Mesh; dimmed: boolean }) {
   return (
     <mesh geometry={geometry}>
       <meshStandardMaterial
-        color="#c9ced6"
+        color={light ? "#a7aeb8" : "#c9ced6"}
         metalness={0.15}
         roughness={0.55}
         transparent
@@ -98,7 +98,16 @@ function HighlightMarker({ hl, meshTopZ, partSize }: { hl: Highlight; meshTopZ: 
   );
 }
 
-export function PartViewer({ mesh, highlight }: { mesh: Mesh | null; highlight?: Highlight | null }) {
+export function PartViewer({
+  mesh,
+  highlight,
+  theme = "dark",
+}: {
+  mesh: Mesh | null;
+  highlight?: Highlight | null;
+  theme?: "dark" | "light";
+}) {
+  const light = theme === "light";
   const { meshTopZ, partSize } = useMemo(() => {
     if (!mesh || !mesh.z.length) return { meshTopZ: 0, partSize: 100 };
     const finite = (a: number[]) => a.slice(0, 20000).filter(Number.isFinite);
@@ -119,19 +128,23 @@ export function PartViewer({ mesh, highlight }: { mesh: Mesh | null; highlight?:
       camera={{ position: [400, 320, 400], fov: 45, near: 1, far: 20000 }}
       style={{ width: "100%", height: "100%" }}
     >
-      <color attach="background" args={["#191c20"]} />
+      <color attach="background" args={[light ? "#eef0f3" : "#191c20"]} />
       <ambientLight intensity={0.85} />
       <directionalLight position={[300, 500, 200]} intensity={1.3} />
       <directionalLight position={[-200, -100, -300]} intensity={0.4} />
       {mesh && (
         <Bounds fit clip observe margin={1.25}>
-          <PartMesh mesh={mesh} dimmed={!!highlight} />
+          <PartMesh mesh={mesh} dimmed={!!highlight} light={light} />
         </Bounds>
       )}
       {mesh && highlight && <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} />}
       <OrbitControls makeDefault enableDamping dampingFactor={0.12} />
       <GizmoHelper alignment="top-right" margin={[64, 64]}>
-        <GizmoViewcube color="#2a2f36" textColor="#a8adb5" strokeColor="#444a52" />
+        <GizmoViewcube
+          color={light ? "#dde1e6" : "#2a2f36"}
+          textColor={light ? "#4a4f57" : "#a8adb5"}
+          strokeColor={light ? "#aab1bb" : "#444a52"}
+        />
       </GizmoHelper>
     </Canvas>
   );

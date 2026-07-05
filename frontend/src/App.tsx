@@ -1,15 +1,64 @@
-import { useState, useRef } from "react";
-import type { ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import { api, SAMPLE_NAME } from "./api";
-import type { AnalyzeResult, StrategyResult, OpGeo } from "./api";
+import type { AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo } from "./api";
 import { PartViewer } from "./PartViewer";
+import { MaterialSelect } from "./MaterialSelect";
+import { BottomPanel } from "./BottomPanel";
+import { lsGet, lsSet } from "./storage";
 
 type Tab = "overview" | "strategy" | "estimate";
+type Theme = "dark" | "light";
+
+const INSPECTOR_MIN = 200;
+const INSPECTOR_MAX = 560;
+const INSPECTOR_DEFAULT = 320;
 
 function gradeClass(grade: string) {
   if (grade === "A") return "green";
   if (grade === "B" || grade === "C") return "amber";
   return "red";
+}
+
+// "Setup 3","Setup 5" → "Setup 3,5" · "Top" → "Setup Top"
+function formatSetups(setups: string[]): string {
+  if (!setups.length) return "—";
+  return "Setup " + setups.map((s) => s.replace(/^setup\s*/i, "")).join(",");
+}
+
+// Consecutive ops in a setup that share operation type + tool collapse
+// into one rollup row (Toolpath-style "Drilling ×22 — Drill 8mm").
+interface OpRollup {
+  key: string;
+  operation: string;
+  tool: string;
+  ops: StrategyOp[];
+  totalMin: number;
+}
+
+function buildRollups(setupLabel: string, ops: StrategyOp[]): OpRollup[] {
+  const out: OpRollup[] = [];
+  for (const op of ops) {
+    const last = out[out.length - 1];
+    if (last && last.operation === op.operation && last.tool === op.tool) {
+      last.ops.push(op);
+      last.totalMin += op.cut_min;
+    } else {
+      out.push({
+        key: `${setupLabel}:${out.length}`,
+        operation: op.operation,
+        tool: op.tool,
+        ops: [op],
+        totalMin: op.cut_min,
+      });
+    }
+  }
+  return out;
+}
+
+function loadInspectorWidth(): number {
+  const v = Number(lsGet("cnc.inspectorWidth"));
+  return Number.isFinite(v) && v >= INSPECTOR_MIN && v <= INSPECTOR_MAX ? v : INSPECTOR_DEFAULT;
 }
 
 export default function App() {
@@ -21,24 +70,97 @@ export default function App() {
   const [view, setView] = useState<"projects" | "part">("projects");
   const [selOp, setSelOp] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<OpGeo | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [rateHr, setRateHr] = useState(800);
   const [setupCharge, setSetupCharge] = useState(500);
   const [matPriceKg, setMatPriceKg] = useState(650);
   const [marginPct, setMarginPct] = useState(20);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  async function runAnalysis(file: File) {
+  // Uploaded part is retained so material changes can re-run analysis
+  const [partFile, setPartFile] = useState<File | null>(null);
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [material, setMaterial] = useState<string>(() => lsGet("cnc.material") ?? "");
+
+  const [theme, setTheme] = useState<Theme>(() => (lsGet("cnc.theme") === "light" ? "light" : "dark"));
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    lsSet("cnc.theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .materials()
+      .then((r) => {
+        if (!alive) return;
+        setMaterials(r.materials);
+        setMaterial((cur) => cur || (r.materials[0]?.name ?? ""));
+      })
+      .catch(() => {
+        /* selector stays empty; analyze falls back to backend default */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Inspector resize / collapse
+  const [inspWidth, setInspWidth] = useState<number>(loadInspectorWidth);
+  const [inspCollapsed, setInspCollapsed] = useState(() => lsGet("cnc.inspectorCollapsed") === "1");
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+
+  function setInspectorCollapsed(c: boolean) {
+    setInspCollapsed(c);
+    lsSet("cnc.inspectorCollapsed", c ? "1" : "0");
+  }
+
+  function onHandleDown(e: ReactPointerEvent<HTMLDivElement>) {
+    dragRef.current = { startX: e.clientX, startW: inspWidth };
+    setDragging(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+  }
+
+  function onHandleMove(e: ReactPointerEvent<HTMLDivElement>) {
+    const d = dragRef.current;
+    if (!d) return;
+    const w = Math.min(INSPECTOR_MAX, Math.max(INSPECTOR_MIN, d.startW + (d.startX - e.clientX)));
+    setInspWidth(w);
+  }
+
+  function onHandleUp(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    setDragging(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* capture may already be released */
+    }
+    document.body.style.userSelect = "";
+    document.body.style.cursor = "";
+    lsSet("cnc.inspectorWidth", String(inspWidth));
+  }
+
+  async function runAnalysis(file: File, opts?: { material?: string; preserveTab?: boolean }) {
+    const mat = opts?.material ?? (material || undefined);
     setLoading(true);
     setError(null);
     setView("part");
+    setPartFile(file);
     try {
-      const a = await api.analyze(file);
+      const a = await api.analyze(file, mat);
       setAnalysis(a);
-      const s = await api.strategy(file);
+      if (a.material) setMaterial(a.material); // sync to what the backend resolved
+      const s = await api.strategy(file, mat);
       setStrategy(s);
-      setTab("overview");
+      if (!opts?.preserveTab) setTab("overview");
       setSelOp(null);
       setHighlight(null);
+      setExpanded({});
     } catch (err) {
       setError(err instanceof Error ? err.message : "Analysis failed");
     } finally {
@@ -46,9 +168,15 @@ export default function App() {
     }
   }
 
+  function changeMaterial(name: string) {
+    setMaterial(name);
+    lsSet("cnc.material", name);
+    if (partFile) void runAnalysis(partFile, { material: name, preserveTab: true });
+  }
+
   function onFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (file) runAnalysis(file);
+    if (file) void runAnalysis(file);
   }
 
   async function loadSample() {
@@ -61,6 +189,47 @@ export default function App() {
       setError(err instanceof Error ? err.message : "Sample failed");
       setLoading(false);
     }
+  }
+
+  const rollupsBySetup = useMemo(
+    () =>
+      (strategy?.setups ?? []).map((su) => ({
+        label: su.setup_label,
+        opCount: su.ops.length,
+        subtotal: su.subtotal_min,
+        rollups: buildRollups(su.setup_label, su.ops),
+      })),
+    [strategy],
+  );
+
+  function toggleRollup(key: string) {
+    setExpanded((e) => ({ ...e, [key]: !e[key] }));
+  }
+
+  function renderOpRow(setupLabel: string, op: StrategyOp, child: boolean) {
+    const id = `${setupLabel}-${op.op_num}`;
+    return (
+      <div
+        key={id}
+        className={`op-row ${child ? "child" : ""} ${selOp === id ? "sel" : ""}`}
+        onClick={() => {
+          if (selOp === id) {
+            setSelOp(null);
+            setHighlight(null);
+          } else {
+            setSelOp(id);
+            setHighlight(op.geo);
+          }
+        }}
+      >
+        <span className="seq">{op.op_num}</span>
+        <div className="main">
+          <div>{child ? op.feature || op.operation : op.operation}</div>
+          {!child && <div className="tool">{op.tool}</div>}
+        </div>
+        <span className="t">{op.cut_min.toFixed(1)}m</span>
+      </div>
+    );
   }
 
   return (
@@ -112,6 +281,13 @@ export default function App() {
             )}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="btn icon"
+              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+            >
+              {theme === "dark" ? "☀" : "☾"}
+            </button>
             <button className="btn" onClick={() => fileRef.current?.click()}>
               Upload STEP
             </button>
@@ -158,210 +334,277 @@ export default function App() {
 
         {view === "part" && (
         <div style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0 }}>
-          <div style={{ flex: 1, position: "relative", background: "#191c20", minWidth: 0, overflow: "hidden" }}>
-            {!analysis && !loading && (
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <div className="upload-zone">
-                  <div style={{ fontSize: 15, color: "var(--text-0)", marginBottom: 8 }}>
-                    Upload a STEP file to begin
-                  </div>
-                  <div style={{ fontSize: 13, marginBottom: 20 }}>
-                    Feature detection, machinability, and machining strategy — no CAD needed.
-                  </div>
-                  <button className="btn primary" onClick={() => fileRef.current?.click()}>
-                    Choose file
-                  </button>
-                  <div style={{ marginTop: 14, fontSize: 12 }}>
-                    or{" "}
-                    <a id="load-sample" onClick={loadSample} style={{ color: "var(--accent)", cursor: "pointer" }}>
-                      load the SLIDE BASE sample
-                    </a>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+            <div style={{ flex: 1, position: "relative", background: "var(--canvas-bg)", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+              {!analysis && !loading && (
+                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <div className="upload-zone">
+                    <div style={{ fontSize: 15, color: "var(--text-0)", marginBottom: 8 }}>
+                      Upload a STEP file to begin
+                    </div>
+                    <div style={{ fontSize: 13, marginBottom: 20 }}>
+                      Feature detection, machinability, and machining strategy — no CAD needed.
+                    </div>
+                    <button className="btn primary" onClick={() => fileRef.current?.click()}>
+                      Choose file
+                    </button>
+                    <div style={{ marginTop: 14, fontSize: 12 }}>
+                      or{" "}
+                      <a id="load-sample" onClick={loadSample} style={{ color: "var(--accent)", cursor: "pointer" }}>
+                        load the SLIDE BASE sample
+                      </a>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
-            {loading && (
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-1)" }}>
-                Analysing part…
-              </div>
-            )}
-            {analysis && !loading && <PartViewer mesh={analysis.mesh} highlight={highlight} />}
-            {analysis && (
-              <div style={{ position: "absolute", bottom: 10, left: 12, fontSize: 11, color: "var(--text-2)" }}>
-                {analysis.dimensions_mm.length} × {analysis.dimensions_mm.width} × {analysis.dimensions_mm.height} mm · drag to orbit
-              </div>
-            )}
+              )}
+              {loading && (
+                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-1)" }}>
+                  Analysing part…
+                </div>
+              )}
+              {analysis && !loading && <PartViewer mesh={analysis.mesh} highlight={highlight} theme={theme} />}
+              {analysis && (
+                <div style={{ position: "absolute", bottom: 10, left: 12, fontSize: 11, color: "var(--text-2)" }}>
+                  {analysis.dimensions_mm.length} × {analysis.dimensions_mm.width} × {analysis.dimensions_mm.height} mm · drag to orbit
+                </div>
+              )}
+            </div>
+            {analysis && <BottomPanel candidates={analysis.candidates} />}
           </div>
 
           {analysis && (
-            <div className="inspector">
-              {tab === "overview" && (
+            <div className="inspector-wrap" style={{ width: inspCollapsed ? 24 : inspWidth }}>
+              {inspCollapsed ? (
+                <button className="insp-strip" title="Expand inspector" onClick={() => setInspectorCollapsed(false)}>
+                  ◂
+                </button>
+              ) : (
                 <>
-                  <div className="metric-grid">
-                    <div className="metric">
-                      <div className="label">Machinability</div>
-                      <div className="value">
-                        <span className={`badge ${gradeClass(analysis.dfm.grade)}`}>
-                          {analysis.dfm.score_pct}% {analysis.dfm.grade}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="metric">
-                      <div className="label">Bodies</div>
-                      <div className="value">{analysis.topology.solids}</div>
-                    </div>
-                  </div>
+                  <div
+                    className={`insp-handle ${dragging ? "dragging" : ""}`}
+                    title="Drag to resize · double-click to collapse"
+                    onPointerDown={onHandleDown}
+                    onPointerMove={onHandleMove}
+                    onPointerUp={onHandleUp}
+                    onPointerCancel={onHandleUp}
+                    onDoubleClick={() => setInspectorCollapsed(true)}
+                  />
+                  <button className="insp-collapse" title="Collapse inspector" onClick={() => setInspectorCollapsed(true)}>
+                    ▸
+                  </button>
+                  <div className="inspector">
+                    {tab === "overview" && (
+                      <>
+                        <MaterialSelect
+                          materials={materials}
+                          value={material}
+                          onChange={changeMaterial}
+                          disabled={loading || materials.length === 0}
+                        />
 
-                  <div className="section-title">General</div>
-                  <div className="row"><span className="k">Machine type</span><span className="v">3 Axis</span></div>
-                  <div className="row"><span className="k">Material</span><span className="v">{analysis.material}</span></div>
-                  <div className="row"><span className="k">Parser</span><span className="v">{analysis.parser}</span></div>
-
-                  <div className="section-title">Stock</div>
-                  <div className="row"><span className="k">Size (mm)</span><span className="v">{analysis.dimensions_mm.length} × {analysis.dimensions_mm.width} × {analysis.dimensions_mm.height}</span></div>
-                  <div className="row"><span className="k">Stock vol</span><span className="v">{analysis.volumes_cm3.stock} cm³</span></div>
-                  <div className="row"><span className="k">Part vol</span><span className="v">{analysis.volumes_cm3.part} cm³</span></div>
-
-                  <div className="section-title">Topology</div>
-                  <div className="row"><span className="k">Faces</span><span className="v">{analysis.topology.faces}</span></div>
-                  <div className="row"><span className="k">Detected features</span><span className="v">{analysis.candidate_count}</span></div>
-
-                  {analysis.dfm.issues.length > 0 && (
-                    <>
-                      <div className="section-title">Machinability issues</div>
-                      {analysis.dfm.issues.slice(0, 8).map((iss, n) => (
-                        <div className="row" key={n}>
-                          <span className="k">{iss.feature}</span>
-                          <span className="v" style={{ color: iss.severity === "blocked" ? "var(--red)" : "var(--amber)" }}>
-                            {iss.severity}
-                          </span>
-                        </div>
-                      ))}
-                    </>
-                  )}
-                </>
-              )}
-
-              {tab === "strategy" && strategy && (
-                <>
-                  <div className="row" style={{ borderBottom: "none" }}>
-                    <span className="k">Total machine time</span>
-                    <span className="v">{strategy.totals.total_machine_time_min?.toFixed(0)} min</span>
-                  </div>
-                  {strategy.setups.map((su) => (
-                    <div key={su.setup_label}>
-                      <div className="section-title">
-                        Setup · {su.setup_label} — {su.ops.length} ops · {su.subtotal_min.toFixed(1)} min
-                      </div>
-                      {su.ops.slice(0, 40).map((op) => {
-                        const id = `${su.setup_label}-${op.op_num}`;
-                        return (
-                          <div
-                            key={id}
-                            className={`op-row ${selOp === id ? "sel" : ""}`}
-                            onClick={() => {
-                              if (selOp === id) {
-                                setSelOp(null);
-                                setHighlight(null);
-                              } else {
-                                setSelOp(id);
-                                setHighlight(op.geo);
-                              }
-                            }}
-                          >
-                            <span className="seq">{op.op_num}</span>
-                            <div className="main">
-                              <div>{op.operation}</div>
-                              <div className="tool">{op.tool}</div>
+                        <div className="metric-grid">
+                          <div className="metric">
+                            <div className="label">Machinability</div>
+                            <div className="value">
+                              <span className={`badge ${gradeClass(analysis.dfm.grade)}`}>
+                                {analysis.dfm.score_pct}% {analysis.dfm.grade}
+                              </span>
                             </div>
-                            <span className="t">{op.cut_min.toFixed(1)}m</span>
                           </div>
-                        );
-                      })}
-                    </div>
-                  ))}
+                          <div className="metric">
+                            <div className="label">Bodies</div>
+                            <div className="value">{analysis.topology.solids}</div>
+                          </div>
+                        </div>
+
+                        <div className="section-title">General</div>
+                        <div className="row"><span className="k">Machine type</span><span className="v">3 Axis</span></div>
+                        <div className="row"><span className="k">Material</span><span className="v" style={{ textAlign: "right" }}>{analysis.material}</span></div>
+                        <div className="row"><span className="k">Parser</span><span className="v">{analysis.parser}</span></div>
+
+                        <div className="section-title">Stock</div>
+                        <div className="stock-dims">
+                          <label className="stock-dim">
+                            L<input className="num-input" readOnly value={analysis.dimensions_mm.length ?? ""} />
+                          </label>
+                          <label className="stock-dim">
+                            W<input className="num-input" readOnly value={analysis.dimensions_mm.width ?? ""} />
+                          </label>
+                          <label className="stock-dim">
+                            H<input className="num-input" readOnly value={analysis.dimensions_mm.height ?? ""} />
+                          </label>
+                        </div>
+                        <div className="row"><span className="k">Stock vol</span><span className="v">{analysis.volumes_cm3.stock} cm³</span></div>
+                        <div className="row"><span className="k">Part vol</span><span className="v">{analysis.volumes_cm3.part} cm³</span></div>
+
+                        {(analysis.setups ?? []).length > 0 && (
+                          <>
+                            <div className="section-title">Setups</div>
+                            {(analysis.setups ?? []).map((s) => (
+                              <div className="setup-row" key={s.label} title={s.reason}>
+                                <div className="setup-line">
+                                  <span className="k">{s.label}</span>
+                                  <span className="v">{s.method}</span>
+                                </div>
+                                <div className="setup-sub">{s.jaw_mode}</div>
+                              </div>
+                            ))}
+                          </>
+                        )}
+
+                        {(analysis.hole_groups ?? []).length > 0 && (
+                          <>
+                            <div className="section-title">Holes</div>
+                            {(analysis.hole_groups ?? []).map((g) => (
+                              <div className="hole-row" key={g.diameter_mm}>
+                                <span className="hole-main">
+                                  {g.count}× Ø{g.diameter_mm.toFixed(2)}mm
+                                </span>
+                                <span className="chip">No thread</span>
+                                <span className="hole-setups" title={formatSetups(g.setups)}>
+                                  {formatSetups(g.setups)}
+                                </span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+
+                        <div className="section-title">Topology</div>
+                        <div className="row"><span className="k">Faces</span><span className="v">{analysis.topology.faces}</span></div>
+                        <div className="row"><span className="k">Detected features</span><span className="v">{analysis.candidate_count}</span></div>
+
+                        {analysis.dfm.issues.length > 0 && (
+                          <>
+                            <div className="section-title">Machinability issues</div>
+                            {analysis.dfm.issues.slice(0, 8).map((iss, n) => (
+                              <div className="row" key={n}>
+                                <span className="k">{iss.feature}</span>
+                                <span className="v" style={{ color: iss.severity === "blocked" ? "var(--red)" : "var(--amber)" }}>
+                                  {iss.severity}
+                                </span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </>
+                    )}
+
+                    {tab === "strategy" && strategy && (
+                      <>
+                        <div className="row" style={{ borderBottom: "none" }}>
+                          <span className="k">Total machine time</span>
+                          <span className="v">{strategy.totals.total_machine_time_min?.toFixed(0)} min</span>
+                        </div>
+                        {rollupsBySetup.map((su) => (
+                          <div key={su.label}>
+                            <div className="section-title">
+                              Setup · {su.label} — {su.opCount} ops · {su.subtotal.toFixed(1)} min
+                            </div>
+                            {su.rollups.map((r) => {
+                              if (r.ops.length === 1) return renderOpRow(su.label, r.ops[0], false);
+                              const isOpen = !!expanded[r.key];
+                              return (
+                                <div key={r.key}>
+                                  <div className="op-row rollup" onClick={() => toggleRollup(r.key)}>
+                                    <span className="seq">{isOpen ? "▾" : "▸"}</span>
+                                    <div className="main">
+                                      <div>{r.operation} ×{r.ops.length}</div>
+                                      <div className="tool">{r.tool}</div>
+                                    </div>
+                                    <span className="t">{r.totalMin.toFixed(1)}m</span>
+                                  </div>
+                                  {isOpen && r.ops.map((op) => renderOpRow(su.label, op, true))}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </>
+                    )}
+
+                    {tab === "estimate" && strategy && (() => {
+                      const machineMin = strategy.totals.total_machine_time_min ?? 0;
+                      const machining = (machineMin / 60) * rateHr;
+                      const density = materials.find((m) => m.name === analysis.material)?.density ?? 2.7;
+                      const massKg = ((analysis.volumes_cm3.part ?? 0) * density) / 1000;
+                      const material_ = massKg * matPriceKg;
+                      const setupsCost = strategy.setups.length * setupCharge;
+                      const subtotal = machining + material_ + setupsCost;
+                      const margin = subtotal * (marginPct / 100);
+                      const total = subtotal + margin;
+                      const inr = (v: number) =>
+                        "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+                      return (
+                        <>
+                          <div className="section-title">Estimate settings</div>
+                          <div className="row">
+                            <span className="k">Machining rate (₹/hr)</span>
+                            <input
+                              className="num-input" type="number" value={rateHr}
+                              onChange={(e) => setRateHr(+e.target.value)}
+                            />
+                          </div>
+                          <div className="row">
+                            <span className="k">Setup charge (₹)</span>
+                            <input
+                              className="num-input" type="number" value={setupCharge}
+                              onChange={(e) => setSetupCharge(+e.target.value)}
+                            />
+                          </div>
+                          <div className="row">
+                            <span className="k">Material (₹/kg)</span>
+                            <input
+                              className="num-input" type="number" value={matPriceKg}
+                              onChange={(e) => setMatPriceKg(+e.target.value)}
+                            />
+                          </div>
+                          <div className="row">
+                            <span className="k">Margin (%)</span>
+                            <input
+                              className="num-input" type="number" value={marginPct}
+                              onChange={(e) => setMarginPct(+e.target.value)}
+                            />
+                          </div>
+
+                          <div className="section-title">Machining — {machineMin.toFixed(0)} min</div>
+                          {strategy.setups.map((su) => (
+                            <div className="row" key={su.setup_label}>
+                              <span className="k">Setup · {su.setup_label} ({su.subtotal_min.toFixed(0)}m)</span>
+                              <span className="v">{inr((su.subtotal_min / 60) * rateHr)}</span>
+                            </div>
+                          ))}
+                          <div className="row">
+                            <span className="k">Machine time total</span>
+                            <span className="v">{inr(machining)}</span>
+                          </div>
+
+                          <div className="section-title">Costs</div>
+                          <div className="row">
+                            <span className="k">Material ({massKg.toFixed(1)} kg)</span>
+                            <span className="v">{inr(material_)}</span>
+                          </div>
+                          <div className="row">
+                            <span className="k">Setup charges × {strategy.setups.length}</span>
+                            <span className="v">{inr(setupsCost)}</span>
+                          </div>
+                          <div className="row">
+                            <span className="k">Margin ({marginPct}%)</span>
+                            <span className="v">{inr(margin)}</span>
+                          </div>
+
+                          <div className="total-card">
+                            <div className="label">Grand total (per part)</div>
+                            <div className="big">{inr(total)}</div>
+                            <div className="sub">
+                              {machineMin.toFixed(0)} min machine time · {strategy.setups.length} setups
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </>
               )}
-
-              {tab === "estimate" && strategy && (() => {
-                const machineMin = strategy.totals.total_machine_time_min ?? 0;
-                const machining = (machineMin / 60) * rateHr;
-                const massKg = ((analysis.volumes_cm3.part ?? 0) * 2.7) / 1000;
-                const material = massKg * matPriceKg;
-                const setupsCost = strategy.setups.length * setupCharge;
-                const subtotal = machining + material + setupsCost;
-                const margin = subtotal * (marginPct / 100);
-                const total = subtotal + margin;
-                const inr = (v: number) =>
-                  "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
-                return (
-                  <>
-                    <div className="section-title">Estimate settings</div>
-                    <div className="row">
-                      <span className="k">Machining rate (₹/hr)</span>
-                      <input
-                        className="num-input" type="number" value={rateHr}
-                        onChange={(e) => setRateHr(+e.target.value)}
-                      />
-                    </div>
-                    <div className="row">
-                      <span className="k">Setup charge (₹)</span>
-                      <input
-                        className="num-input" type="number" value={setupCharge}
-                        onChange={(e) => setSetupCharge(+e.target.value)}
-                      />
-                    </div>
-                    <div className="row">
-                      <span className="k">Material (₹/kg)</span>
-                      <input
-                        className="num-input" type="number" value={matPriceKg}
-                        onChange={(e) => setMatPriceKg(+e.target.value)}
-                      />
-                    </div>
-                    <div className="row">
-                      <span className="k">Margin (%)</span>
-                      <input
-                        className="num-input" type="number" value={marginPct}
-                        onChange={(e) => setMarginPct(+e.target.value)}
-                      />
-                    </div>
-
-                    <div className="section-title">Machining — {machineMin.toFixed(0)} min</div>
-                    {strategy.setups.map((su) => (
-                      <div className="row" key={su.setup_label}>
-                        <span className="k">Setup · {su.setup_label} ({su.subtotal_min.toFixed(0)}m)</span>
-                        <span className="v">{inr((su.subtotal_min / 60) * rateHr)}</span>
-                      </div>
-                    ))}
-                    <div className="row">
-                      <span className="k">Machine time total</span>
-                      <span className="v">{inr(machining)}</span>
-                    </div>
-
-                    <div className="section-title">Costs</div>
-                    <div className="row">
-                      <span className="k">Material ({massKg.toFixed(1)} kg Al)</span>
-                      <span className="v">{inr(material)}</span>
-                    </div>
-                    <div className="row">
-                      <span className="k">Setup charges × {strategy.setups.length}</span>
-                      <span className="v">{inr(setupsCost)}</span>
-                    </div>
-                    <div className="row">
-                      <span className="k">Margin ({marginPct}%)</span>
-                      <span className="v">{inr(margin)}</span>
-                    </div>
-
-                    <div className="total-card">
-                      <div className="label">Grand total (per part)</div>
-                      <div className="big">{inr(total)}</div>
-                      <div className="sub">
-                        {machineMin.toFixed(0)} min machine time · {strategy.setups.length} setups
-                      </div>
-                    </div>
-                  </>
-                );
-              })()}
             </div>
           )}
         </div>
