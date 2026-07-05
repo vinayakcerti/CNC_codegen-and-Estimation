@@ -25,6 +25,11 @@ function PartMesh({ mesh, dimmed }: { mesh: Mesh; dimmed: boolean }) {
       pos[i * 3 + 1] = mesh.y[i];
       pos[i * 3 + 2] = mesh.z[i];
     }
+    // Sanitize: OCC tessellation occasionally emits NaN vertices on
+    // complex weldments — they break bounding-sphere computation.
+    for (let i = 0; i < pos.length; i++) {
+      if (!Number.isFinite(pos[i])) pos[i] = 0;
+    }
     g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     const tri = mesh.i.length;
     const idx = new Uint32Array(tri * 3);
@@ -52,20 +57,22 @@ function PartMesh({ mesh, dimmed }: { mesh: Mesh; dimmed: boolean }) {
 }
 
 function HighlightMarker({ hl, meshTopZ, partSize }: { hl: Highlight; meshTopZ: number; partSize: number }) {
-  const x = hl.x ?? 0;
-  const y = hl.y ?? 0;
-  const z = hl.z ?? meshTopZ;
-  const r = Math.max(hl.diameter / 2, hl.width / 2, 5);
-  const isArea = hl.length > 0 && hl.width > 0 && !hl.diameter;
-  const depth = Math.max(hl.depth, 2);
+  const num = (v: number | null | undefined, fallback: number) =>
+    Number.isFinite(v as number) ? (v as number) : fallback;
+  const x = num(hl.x, 0);
+  const y = num(hl.y, 0);
+  const z = num(hl.z, meshTopZ);
+  const r = Math.max(num(hl.diameter, 0) / 2, num(hl.width, 0) / 2, 5);
+  const isArea = num(hl.length, 0) > 0 && num(hl.width, 0) > 0 && !num(hl.diameter, 0);
+  const depth = Math.max(num(hl.depth, 0), 2);
   // Locator ring scales with the part so small features stay findable
-  const ringR = Math.max(r + 3, partSize * 0.02);
+  const ringR = Math.max(r + 3, num(partSize, 100) * 0.02);
 
   return (
     <group position={[x, y, z]} renderOrder={10}>
       {isArea ? (
         <mesh renderOrder={10}>
-          <boxGeometry args={[hl.length, hl.width, depth]} />
+          <boxGeometry args={[num(hl.length, 10), num(hl.width, 10), depth]} />
           <meshStandardMaterial
             color="#4a9eff" emissive="#4a9eff" emissiveIntensity={0.6}
             transparent opacity={0.45} depthWrite={false} depthTest={false}
@@ -94,13 +101,16 @@ function HighlightMarker({ hl, meshTopZ, partSize }: { hl: Highlight; meshTopZ: 
 export function PartViewer({ mesh, highlight }: { mesh: Mesh | null; highlight?: Highlight | null }) {
   const { meshTopZ, partSize } = useMemo(() => {
     if (!mesh || !mesh.z.length) return { meshTopZ: 0, partSize: 100 };
-    const zs = mesh.z.slice(0, 20000);
-    const xs = mesh.x.slice(0, 20000);
-    const ys = mesh.y.slice(0, 20000);
+    const finite = (a: number[]) => a.slice(0, 20000).filter(Number.isFinite);
+    const zs = finite(mesh.z);
+    const xs = finite(mesh.x);
+    const ys = finite(mesh.y);
+    if (!zs.length) return { meshTopZ: 0, partSize: 100 };
     const span = (a: number[]) => Math.max(...a) - Math.min(...a);
+    const size = Math.max(span(xs), span(ys), span(zs));
     return {
       meshTopZ: Math.max(...zs),
-      partSize: Math.max(span(xs), span(ys), span(zs)),
+      partSize: Number.isFinite(size) && size > 0 ? size : 100,
     };
   }, [mesh]);
 
