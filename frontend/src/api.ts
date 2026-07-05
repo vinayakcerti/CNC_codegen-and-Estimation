@@ -78,6 +78,17 @@ export interface WeldmentResult {
   warnings: string[];
 }
 
+export interface OpGeo {
+  x: number | null;
+  y: number | null;
+  z: number | null;
+  diameter: number;
+  length: number;
+  width: number;
+  depth: number;
+  feature_type: string;
+}
+
 export interface StrategyOp {
   op_num: number;
   operation: string;
@@ -89,6 +100,7 @@ export interface StrategyOp {
   path_mm: number;
   cut_min: number;
   blocked: boolean;
+  geo: OpGeo | null;
 }
 
 export interface StrategyResult {

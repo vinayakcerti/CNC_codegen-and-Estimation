@@ -208,10 +208,13 @@ async def strategy(file: UploadFile = File(...)):
 
     tools, material, machine = _default_context()
     candidates = parse.get("candidate_features", [])
-    features = [
-        {
+    features = []
+    geo_by_name: dict = {}
+    for i, c in enumerate(candidates):
+        name = c.get("feature_name") or f"Feature {i + 1}"
+        features.append({
             "feature_type": c.get("feature_type", ""),
-            "feature_name": c.get("feature_name") or f"Feature {i + 1}",
+            "feature_name": name,
             "diameter": c.get("diameter") or 0,
             "length": c.get("length") or 0,
             "width": c.get("width") or 0,
@@ -219,17 +222,31 @@ async def strategy(file: UploadFile = File(...)):
             "x_pos": c.get("x_pos", 0) or 0,
             "y_pos": c.get("y_pos", 0) or 0,
             "setup_label": c.get("setup") or c.get("setup_label") or "Top",
+        })
+        # Raw-CAD-frame geometry for 3D highlighting (same frame as the mesh).
+        cad = c.get("cad_position") or {}
+        geo_by_name[name] = {
+            "x": cad.get("x", c.get("x_pos")),
+            "y": cad.get("y", c.get("y_pos")),
+            "z": cad.get("z"),
+            "diameter": c.get("diameter") or 0,
+            "length": c.get("length") or 0,
+            "width": c.get("width") or 0,
+            "depth": c.get("depth") or 0,
+            "feature_type": c.get("feature_type", ""),
         }
-        for i, c in enumerate(candidates)
-    ]
     ops = plan_operations(features, tools, material, machine)
     per_op = estimate_time_per_operation(ops, machine, material)
     totals = estimate_time(ops, machine, material, features)
+
+    def _base_feature(name: str) -> str:
+        return name.replace(" (Rough)", "").replace(" (Finish)", "")
 
     # Group per-op rows by setup, preserving first-appearance order
     setups: list = []
     index: dict = {}
     for row in per_op:
+        row["geo"] = geo_by_name.get(_base_feature(row.get("feature", "")))
         label = row["setup"]
         if label not in index:
             index[label] = {"setup_label": label, "ops": [], "subtotal_min": 0.0}

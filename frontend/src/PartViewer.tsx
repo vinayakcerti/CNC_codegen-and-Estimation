@@ -4,7 +4,18 @@ import { OrbitControls, Bounds, GizmoHelper, GizmoViewcube } from "@react-three/
 import * as THREE from "three";
 import type { Mesh } from "./api";
 
-function PartMesh({ mesh }: { mesh: Mesh }) {
+export interface Highlight {
+  x: number | null;
+  y: number | null;
+  z: number | null;
+  diameter: number;
+  length: number;
+  width: number;
+  depth: number;
+  feature_type: string;
+}
+
+function PartMesh({ mesh, dimmed }: { mesh: Mesh; dimmed: boolean }) {
   const geometry = useMemo(() => {
     const g = new THREE.BufferGeometry();
     const n = mesh.x.length;
@@ -24,18 +35,75 @@ function PartMesh({ mesh }: { mesh: Mesh }) {
     }
     g.setIndex(new THREE.BufferAttribute(idx, 1));
     g.computeVertexNormals();
-    g.center();
     return g;
   }, [mesh]);
 
   return (
     <mesh geometry={geometry}>
-      <meshStandardMaterial color="#c9ced6" metalness={0.15} roughness={0.55} />
+      <meshStandardMaterial
+        color="#c9ced6"
+        metalness={0.15}
+        roughness={0.55}
+        transparent
+        opacity={dimmed ? 0.4 : 1}
+      />
     </mesh>
   );
 }
 
-export function PartViewer({ mesh }: { mesh: Mesh | null }) {
+function HighlightMarker({ hl, meshTopZ, partSize }: { hl: Highlight; meshTopZ: number; partSize: number }) {
+  const x = hl.x ?? 0;
+  const y = hl.y ?? 0;
+  const z = hl.z ?? meshTopZ;
+  const r = Math.max(hl.diameter / 2, hl.width / 2, 5);
+  const isArea = hl.length > 0 && hl.width > 0 && !hl.diameter;
+  const depth = Math.max(hl.depth, 2);
+  // Locator ring scales with the part so small features stay findable
+  const ringR = Math.max(r + 3, partSize * 0.02);
+
+  return (
+    <group position={[x, y, z]} renderOrder={10}>
+      {isArea ? (
+        <mesh renderOrder={10}>
+          <boxGeometry args={[hl.length, hl.width, depth]} />
+          <meshStandardMaterial
+            color="#4a9eff" emissive="#4a9eff" emissiveIntensity={0.6}
+            transparent opacity={0.45} depthWrite={false} depthTest={false}
+          />
+        </mesh>
+      ) : (
+        <mesh rotation={[Math.PI / 2, 0, 0]} renderOrder={10}>
+          <cylinderGeometry args={[r, r, depth + 6, 32]} />
+          <meshStandardMaterial
+            color="#4a9eff" emissive="#4a9eff" emissiveIntensity={0.6}
+            transparent opacity={0.6} depthWrite={false} depthTest={false}
+          />
+        </mesh>
+      )}
+      <mesh renderOrder={11}>
+        <ringGeometry args={[ringR, ringR * 1.18, 48]} />
+        <meshBasicMaterial
+          color="#4a9eff" side={THREE.DoubleSide}
+          transparent opacity={0.95} depthWrite={false} depthTest={false}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+export function PartViewer({ mesh, highlight }: { mesh: Mesh | null; highlight?: Highlight | null }) {
+  const { meshTopZ, partSize } = useMemo(() => {
+    if (!mesh || !mesh.z.length) return { meshTopZ: 0, partSize: 100 };
+    const zs = mesh.z.slice(0, 20000);
+    const xs = mesh.x.slice(0, 20000);
+    const ys = mesh.y.slice(0, 20000);
+    const span = (a: number[]) => Math.max(...a) - Math.min(...a);
+    return {
+      meshTopZ: Math.max(...zs),
+      partSize: Math.max(span(xs), span(ys), span(zs)),
+    };
+  }, [mesh]);
+
   return (
     <Canvas
       camera={{ position: [400, 320, 400], fov: 45, near: 1, far: 20000 }}
@@ -47,9 +115,10 @@ export function PartViewer({ mesh }: { mesh: Mesh | null }) {
       <directionalLight position={[-200, -100, -300]} intensity={0.4} />
       {mesh && (
         <Bounds fit clip observe margin={1.25}>
-          <PartMesh mesh={mesh} />
+          <PartMesh mesh={mesh} dimmed={!!highlight} />
         </Bounds>
       )}
+      {mesh && highlight && <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} />}
       <OrbitControls makeDefault enableDamping dampingFactor={0.12} />
       <GizmoHelper alignment="top-right" margin={[64, 64]}>
         <GizmoViewcube color="#2a2f36" textColor="#a8adb5" strokeColor="#444a52" />

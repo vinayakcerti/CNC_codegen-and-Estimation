@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import type { ChangeEvent } from "react";
 import { api, SAMPLE_NAME } from "./api";
-import type { AnalyzeResult, StrategyResult } from "./api";
+import type { AnalyzeResult, StrategyResult, OpGeo } from "./api";
 import { PartViewer } from "./PartViewer";
 
 type Tab = "overview" | "strategy" | "estimate";
@@ -19,6 +19,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selOp, setSelOp] = useState<string | null>(null);
+  const [highlight, setHighlight] = useState<OpGeo | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function runAnalysis(file: File) {
@@ -30,6 +31,8 @@ export default function App() {
       const s = await api.strategy(file);
       setStrategy(s);
       setTab("overview");
+      setSelOp(null);
+      setHighlight(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Analysis failed");
     } finally {
@@ -75,7 +78,13 @@ export default function App() {
                   <button
                     key={t}
                     className={`tab ${tab === t ? "active" : ""}`}
-                    onClick={() => setTab(t)}
+                    onClick={() => {
+                      setTab(t);
+                      if (t !== "strategy") {
+                        setSelOp(null);
+                        setHighlight(null);
+                      }
+                    }}
                   >
                     {t[0].toUpperCase() + t.slice(1)}
                   </button>
@@ -131,7 +140,7 @@ export default function App() {
                 {error}
               </div>
             )}
-            {analysis && !loading && <PartViewer mesh={analysis.mesh} />}
+            {analysis && !loading && <PartViewer mesh={analysis.mesh} highlight={highlight} />}
             {analysis && (
               <div style={{ position: "absolute", bottom: 10, left: 12, fontSize: 11, color: "var(--text-2)" }}>
                 {analysis.dimensions_mm.length} × {analysis.dimensions_mm.width} × {analysis.dimensions_mm.height} mm · drag to orbit
@@ -205,7 +214,15 @@ export default function App() {
                           <div
                             key={id}
                             className={`op-row ${selOp === id ? "sel" : ""}`}
-                            onClick={() => setSelOp(id)}
+                            onClick={() => {
+                              if (selOp === id) {
+                                setSelOp(null);
+                                setHighlight(null);
+                              } else {
+                                setSelOp(id);
+                                setHighlight(op.geo);
+                              }
+                            }}
                           >
                             <span className="seq">{op.op_num}</span>
                             <div className="main">
