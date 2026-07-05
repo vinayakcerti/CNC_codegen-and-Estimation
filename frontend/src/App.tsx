@@ -526,7 +526,9 @@ export default function App() {
                       const machineMin = strategy.totals.total_machine_time_min ?? 0;
                       const machining = (machineMin / 60) * rateHr;
                       const density = materials.find((m) => m.name === analysis.material)?.density ?? 2.7;
-                      const massKg = ((analysis.volumes_cm3.part ?? 0) * density) / 1000;
+                      // Material is bought as STOCK, not as the finished part —
+                      // quote the stock block mass (competitor does the same).
+                      const massKg = ((analysis.volumes_cm3.stock ?? 0) * density) / 1000;
                       const material_ = massKg * matPriceKg;
                       const setupsCost = strategy.setups.length * setupCharge;
                       const subtotal = machining + material_ + setupsCost;
@@ -580,7 +582,7 @@ export default function App() {
 
                           <div className="section-title">Costs</div>
                           <div className="row">
-                            <span className="k">Material ({massKg.toFixed(1)} kg)</span>
+                            <span className="k">Material (stock {massKg.toFixed(1)} kg)</span>
                             <span className="v">{inr(material_)}</span>
                           </div>
                           <div className="row">
