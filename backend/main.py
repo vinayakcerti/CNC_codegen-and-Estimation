@@ -32,6 +32,7 @@ from modules.data_store import (
     get_default_tools, get_default_materials, get_default_machines,
 )
 from modules.weldment.weldment_analyzer import analyze_weldment
+from modules.workholding import recommend_workholding
 
 app = FastAPI(title="CNC Plan & Process Pro API", version="0.1.0")
 
@@ -75,12 +76,37 @@ def _tessellate(file_bytes: bytes):
                 pass
 
 
-def _default_context():
-    return (
-        get_default_tools(),
-        get_default_materials()[0],
-        get_default_machines()[0],
-    )
+def _default_context(material_name: str | None = None):
+    materials = get_default_materials()
+    material = materials[0]
+    if material_name:
+        for m in materials:
+            if m.get("name", "").lower() == material_name.lower():
+                material = m
+                break
+    return (get_default_tools(), material, get_default_machines()[0])
+
+
+def _hole_groups(candidates):
+    """Group detected hole candidates by diameter — Toolpath-style
+    '7x Ø5mm · Setup 3,5,6' rows for the Overview inspector."""
+    groups: dict = {}
+    for c in candidates:
+        ft = (c.get("feature_type") or "").lower()
+        dia = c.get("diameter") or 0
+        if "hole" not in ft or not dia:
+            continue
+        key = round(float(dia), 2)
+        g = groups.setdefault(key, {"diameter_mm": key, "count": 0, "setups": set()})
+        g["count"] += 1
+        setup = c.get("setup") or c.get("setup_label")
+        if setup:
+            g["setups"].add(str(setup))
+    out = []
+    for g in sorted(groups.values(), key=lambda x: x["diameter_mm"]):
+        g["setups"] = sorted(g["setups"])
+        out.append(g)
+    return out
 
 
 _SAMPLES_DIR = os.path.join(_REPO_ROOT, "test_samples")
@@ -108,8 +134,42 @@ def health():
     }
 
 
+@app.get("/api/materials")
+def materials():
+    """Material list for the cut-config selector."""
+    return {
+        "materials": [
+            {
+                "name": m.get("name"),
+                "density": m.get("density"),
+                "machinability_factor": m.get("machinability_factor"),
+                "safety_factor": m.get("safety_factor"),
+            }
+            for m in get_default_materials()
+        ]
+    }
+
+
+@app.get("/api/tools")
+def tools_list():
+    """Tool library for the Tool Table panel."""
+    return {
+        "tools": [
+            {
+                "tool_number": t.get("tool_number"),
+                "tool_name": t.get("tool_name"),
+                "tool_type": t.get("tool_type"),
+                "diameter_mm": t.get("diameter_mm"),
+                "flute_length_mm": t.get("flute_length_mm"),
+                "max_depth_mm": t.get("max_depth_mm"),
+            }
+            for t in get_default_tools()
+        ]
+    }
+
+
 @app.post("/api/analyze")
-async def analyze(file: UploadFile = File(...)):
+async def analyze(file: UploadFile = File(...), material: str | None = None):
     """Single entry point: parse a STEP file and return the full overview
     (dimensions, topology, detected features, machinability, mesh, and a
     weldment flag). Everything the Overview screen needs, in one call."""
@@ -121,9 +181,9 @@ async def analyze(file: UploadFile = File(...)):
     if not parse.get("success"):
         raise HTTPException(status_code=400, detail=parse.get("message", "Parse failed."))
 
-    tools, material, machine = _default_context()
+    tools, mat, machine = _default_context(material)
     candidates = parse.get("candidate_features", [])
-    dfm = compute_dfm_score(candidates, tools, material, machine)
+    dfm = compute_dfm_score(candidates, tools, mat, machine)
     mesh = _tessellate(data)
     solids = parse.get("solids_count") or 1
 
@@ -149,9 +209,27 @@ async def analyze(file: UploadFile = File(...)):
         "candidates": candidates,
         "candidate_count": len(candidates),
         "dfm": dfm,
+        "hole_groups": _hole_groups(candidates),
+        "setups": [
+            {
+                "label": lbl,
+                **recommend_workholding(
+                    {
+                        "length": parse.get("length_mm"),
+                        "width": parse.get("width_mm"),
+                        "height": parse.get("height_mm"),
+                    },
+                    lbl,
+                ),
+            }
+            for lbl in sorted({
+                (c.get("setup") or c.get("setup_label") or "Top")
+                for c in candidates
+            })
+        ],
         "is_multibody": solids > 1,
         "mesh": mesh,
-        "material": material.get("name"),
+        "material": mat.get("name"),
         "machine": machine.get("name"),
     }
 
@@ -198,7 +276,7 @@ async def weldment(file: UploadFile = File(...)):
 
 
 @app.post("/api/strategy")
-async def strategy(file: UploadFile = File(...)):
+async def strategy(file: UploadFile = File(...), material: str | None = None):
     """Operation plan grouped by setup with per-op tool + cycle time —
     the Strategy screen's data."""
     data = await file.read()
@@ -206,7 +284,7 @@ async def strategy(file: UploadFile = File(...)):
     if not parse.get("success"):
         raise HTTPException(status_code=400, detail=parse.get("message", "Parse failed."))
 
-    tools, material, machine = _default_context()
+    tools, mat, machine = _default_context(material)
     candidates = parse.get("candidate_features", [])
     features = []
     geo_by_name: dict = {}
@@ -235,9 +313,9 @@ async def strategy(file: UploadFile = File(...)):
             "depth": c.get("depth") or 0,
             "feature_type": c.get("feature_type", ""),
         }
-    ops = plan_operations(features, tools, material, machine)
-    per_op = estimate_time_per_operation(ops, machine, material)
-    totals = estimate_time(ops, machine, material, features)
+    ops = plan_operations(features, tools, mat, machine)
+    per_op = estimate_time_per_operation(ops, machine, mat)
+    totals = estimate_time(ops, machine, mat, features)
 
     def _base_feature(name: str) -> str:
         return name.replace(" (Rough)", "").replace(" (Finish)", "")
@@ -259,4 +337,5 @@ async def strategy(file: UploadFile = File(...)):
         "filename": file.filename,
         "setups": setups,
         "totals": totals,
+        "material": mat.get("name"),
     }
