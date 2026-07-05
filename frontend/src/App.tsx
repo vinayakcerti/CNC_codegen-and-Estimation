@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import { api, SAMPLE_NAME } from "./api";
-import type { AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo } from "./api";
+import type { AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo, WeldmentResult, WeldmentGroup } from "./api";
 import { PartViewer } from "./PartViewer";
 import { MaterialSelect } from "./MaterialSelect";
 import { BottomPanel } from "./BottomPanel";
@@ -24,6 +24,32 @@ function gradeClass(grade: string) {
 function formatSetups(setups: string[]): string {
   if (!setups.length) return "—";
   return "Setup " + setups.map((s) => s.replace(/^setup\s*/i, "")).join(",");
+}
+
+// ---- Per-body scope helpers (multibody weldments) ----
+// Backend classifications are lowercase ("plate") — display as "Plate".
+function titleCase(s: string) {
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+// 13.0 → "13", 37.2 → "37.2"
+function fmtNum(v: number) {
+  return Number(v.toFixed(1)).toString();
+}
+
+function groupDims(g: WeldmentGroup) {
+  return `${fmtNum(g.dims_mm.length)} × ${fmtNum(g.dims_mm.width)} × ${fmtNum(g.dims_mm.height)}`;
+}
+
+// body_indices are 0-based from the splitter; shop-floor labels are 1-based.
+function bodyLabel(g: WeldmentGroup) {
+  const nums = g.body_indices.map((i) => i + 1);
+  const shown = nums.slice(0, 4).join(",");
+  return `${nums.length === 1 ? "Body" : "Bodies"} ${shown}${nums.length > 4 ? "…" : ""}`;
+}
+
+function scopeLabel(g: WeldmentGroup) {
+  return `${titleCase(g.classification)} ×${g.quantity} (${bodyLabel(g)})`;
 }
 
 // Consecutive ops in a setup that share operation type + tool collapse
@@ -81,6 +107,53 @@ export default function App() {
   const [partFile, setPartFile] = useState<File | null>(null);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [material, setMaterial] = useState<string>(() => lsGet("cnc.material") ?? "");
+
+  // Per-body scope for multibody weldments. selectedGroupId null = full assembly.
+  // Session-only by design — scope resets on every new analysis.
+  const [wmResult, setWmResult] = useState<WeldmentResult | null>(null);
+  const [wmLoading, setWmLoading] = useState(false);
+  const [wmError, setWmError] = useState<string | null>(null);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  // File the weldment cache/fetch belongs to — guards stale async results
+  // and skips refetching when the same file is re-analysed (material change).
+  const wmFileRef = useRef<File | null>(null);
+
+  const selectedGroup = useMemo(
+    () =>
+      wmResult && selectedGroupId
+        ? wmResult.groups.find((g) => g.group_id === selectedGroupId) ?? null
+        : null,
+    [wmResult, selectedGroupId],
+  );
+
+  async function fetchWeldment(file: File) {
+    setWmLoading(true);
+    setWmError(null);
+    try {
+      const r = await api.weldment(file);
+      if (wmFileRef.current !== file) return; // superseded by a newer file
+      setWmResult(r);
+      setWmLoading(false);
+    } catch (err) {
+      if (wmFileRef.current !== file) return;
+      wmFileRef.current = null; // allow retry
+      setWmError(err instanceof Error ? err.message : "Body analysis failed");
+      setWmLoading(false);
+    }
+  }
+
+  function retryWeldment() {
+    if (!partFile) return;
+    wmFileRef.current = partFile;
+    void fetchWeldment(partFile);
+  }
+
+  function selectScope(groupId: string | null) {
+    setSelectedGroupId(groupId);
+    // Op highlights are assembly-space — they don't survive a scope change.
+    setSelOp(null);
+    setHighlight(null);
+  }
 
   const [theme, setTheme] = useState<Theme>(() => (lsGet("cnc.theme") === "light" ? "light" : "dark"));
   useEffect(() => {
@@ -151,9 +224,23 @@ export default function App() {
     setError(null);
     setView("part");
     setPartFile(file);
+    setSelectedGroupId(null); // scope resets on any new analysis
+    if (wmFileRef.current !== file) {
+      // Different part — drop the cached weldment breakdown.
+      wmFileRef.current = null;
+      setWmResult(null);
+      setWmError(null);
+      setWmLoading(false);
+    }
     try {
       const a = await api.analyze(file, mat);
       setAnalysis(a);
+      // Body breakdown loads in parallel — never blocks the main analyze flow.
+      // Weldment output is material-independent, so a cached result is kept.
+      if (a.is_multibody && wmFileRef.current !== file) {
+        wmFileRef.current = file;
+        void fetchWeldment(file);
+      }
       if (a.material) setMaterial(a.material); // sync to what the backend resolved
       const s = await api.strategy(file, mat);
       setStrategy(s);
@@ -204,6 +291,63 @@ export default function App() {
 
   function toggleRollup(key: string) {
     setExpanded((e) => ({ ...e, [key]: !e[key] }));
+  }
+
+  // Bodies list (multibody only): "Full assembly" row + one row per group.
+  // Rendered in both scoped and unscoped Overview layouts.
+  function renderBodiesSection() {
+    if (!analysis?.is_multibody) return null;
+    return (
+      <>
+        <div className="section-title">
+          Bodies{wmResult ? ` — ${wmResult.total_bodies} in ${wmResult.groups.length} groups` : ""}
+        </div>
+        {wmLoading && (
+          <div style={{ fontSize: 12, color: "var(--text-2)", padding: "6px 0" }}>Analysing bodies…</div>
+        )}
+        {wmError && (
+          <div className="row" style={{ borderBottom: "none" }}>
+            <span className="k" style={{ color: "var(--red)" }}>{wmError}</span>
+            <button className="btn" style={{ padding: "3px 10px", fontSize: 11 }} onClick={retryWeldment}>
+              Retry
+            </button>
+          </div>
+        )}
+        {wmResult && (
+          <>
+            <div
+              className={`body-row ${!selectedGroupId ? "sel" : ""}`}
+              onClick={() => selectScope(null)}
+              title="Show the whole weldment"
+            >
+              <div className="main">
+                <div className="name">Full assembly</div>
+                <div className="dims">
+                  {wmResult.total_bodies} bodies · {wmResult.groups.length} groups
+                </div>
+              </div>
+              <span className="t">{fmtNum(wmResult.total_machining_time_min)} min</span>
+            </div>
+            {wmResult.groups.map((g) => (
+              <div
+                key={g.group_id}
+                className={`body-row ${selectedGroupId === g.group_id ? "sel" : ""}`}
+                onClick={() => selectScope(g.group_id)}
+                title={`${scopeLabel(g)} — click to isolate in 3D`}
+              >
+                <div className="main">
+                  <div className="name">
+                    {titleCase(g.classification)} ×{g.quantity}
+                  </div>
+                  <div className="dims">{groupDims(g)} mm</div>
+                </div>
+                <span className="t">{fmtNum(g.machining_min_per_pc)} min/pc</span>
+              </div>
+            ))}
+          </>
+        )}
+      </>
+    );
   }
 
   function renderOpRow(setupLabel: string, op: StrategyOp, child: boolean) {
@@ -278,6 +422,21 @@ export default function App() {
                   </button>
                 ))}
               </div>
+            )}
+            {analysis?.is_multibody && (
+              <span
+                className={`scope-chip ${selectedGroup ? "scoped" : ""}`}
+                title={selectedGroup ? `Scoped to ${scopeLabel(selectedGroup)} — click ✕ to reset` : "Analysis covers the whole assembly"}
+              >
+                <span className="scope-label">
+                  Scope: {selectedGroup ? scopeLabel(selectedGroup) : "Full assembly"}
+                </span>
+                {selectedGroup && (
+                  <button className="scope-x" title="Reset to full assembly" onClick={() => selectScope(null)}>
+                    ✕
+                  </button>
+                )}
+              </span>
             )}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -362,10 +521,27 @@ export default function App() {
                   Analysing part…
                 </div>
               )}
-              {analysis && !loading && <PartViewer mesh={analysis.mesh} highlight={highlight} theme={theme} />}
+              {analysis && !loading && (
+                <PartViewer
+                  // Remount on scope change so Bounds re-fits the camera to the
+                  // isolated body (PartViewer itself needs no changes).
+                  key={selectedGroupId ?? "assembly"}
+                  mesh={selectedGroup ? selectedGroup.mesh : analysis.mesh}
+                  // Op markers are assembly-space — only valid in full-assembly scope.
+                  highlight={selectedGroup ? null : highlight}
+                  theme={theme}
+                />
+              )}
+              {analysis && !loading && selectedGroup && !selectedGroup.mesh && (
+                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-2)", fontSize: 13, pointerEvents: "none" }}>
+                  No preview mesh available for this body group
+                </div>
+              )}
               {analysis && (
                 <div style={{ position: "absolute", bottom: 10, left: 12, fontSize: 11, color: "var(--text-2)" }}>
-                  {analysis.dimensions_mm.length} × {analysis.dimensions_mm.width} × {analysis.dimensions_mm.height} mm · drag to orbit
+                  {selectedGroup
+                    ? `${scopeLabel(selectedGroup)} · ${groupDims(selectedGroup)} mm · drag to orbit`
+                    : `${analysis.dimensions_mm.length} × ${analysis.dimensions_mm.width} × ${analysis.dimensions_mm.height} mm · drag to orbit`}
                 </div>
               )}
             </div>
@@ -402,88 +578,141 @@ export default function App() {
                           disabled={loading || materials.length === 0}
                         />
 
-                        <div className="metric-grid">
-                          <div className="metric">
-                            <div className="label">Machinability</div>
-                            <div className="value">
-                              <span className={`badge ${gradeClass(analysis.dfm.grade)}`}>
-                                {analysis.dfm.score_pct}% {analysis.dfm.grade}
-                              </span>
+                        {/* Assembly-level metrics hide under a body scope — honest
+                            labeling: the DFM score is whole-assembly only. */}
+                        {!selectedGroup && (
+                          <div className="metric-grid">
+                            <div className="metric">
+                              <div className="label">Machinability</div>
+                              <div className="value">
+                                <span className={`badge ${gradeClass(analysis.dfm.grade)}`}>
+                                  {analysis.dfm.score_pct}% {analysis.dfm.grade}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="metric">
+                              <div className="label">Bodies</div>
+                              <div className="value">{analysis.topology.solids}</div>
                             </div>
                           </div>
-                          <div className="metric">
-                            <div className="label">Bodies</div>
-                            <div className="value">{analysis.topology.solids}</div>
-                          </div>
-                        </div>
+                        )}
 
-                        <div className="section-title">General</div>
-                        <div className="row"><span className="k">Machine type</span><span className="v">3 Axis</span></div>
-                        <div className="row"><span className="k">Material</span><span className="v" style={{ textAlign: "right" }}>{analysis.material}</span></div>
-                        <div className="row"><span className="k">Parser</span><span className="v">{analysis.parser}</span></div>
+                        {renderBodiesSection()}
 
-                        <div className="section-title">Stock</div>
-                        <div className="stock-dims">
-                          <label className="stock-dim">
-                            L<input className="num-input" readOnly value={analysis.dimensions_mm.length ?? ""} />
-                          </label>
-                          <label className="stock-dim">
-                            W<input className="num-input" readOnly value={analysis.dimensions_mm.width ?? ""} />
-                          </label>
-                          <label className="stock-dim">
-                            H<input className="num-input" readOnly value={analysis.dimensions_mm.height ?? ""} />
-                          </label>
-                        </div>
-                        <div className="row"><span className="k">Stock vol</span><span className="v">{analysis.volumes_cm3.stock} cm³</span></div>
-                        <div className="row"><span className="k">Part vol</span><span className="v">{analysis.volumes_cm3.part} cm³</span></div>
-
-                        {(analysis.setups ?? []).length > 0 && (
+                        {selectedGroup && (
                           <>
-                            <div className="section-title">Setups</div>
-                            {(analysis.setups ?? []).map((s) => (
-                              <div className="setup-row" key={s.label} title={s.reason}>
+                            <div className="section-title">
+                              Scoped body — {titleCase(selectedGroup.classification)} ×{selectedGroup.quantity}
+                            </div>
+                            <div className="row"><span className="k">Bodies</span><span className="v">{bodyLabel(selectedGroup)}</span></div>
+                            <div className="row"><span className="k">Dimensions</span><span className="v">{groupDims(selectedGroup)} mm</span></div>
+                            <div className="row"><span className="k">Volume</span><span className="v">{fmtNum(selectedGroup.volume_cm3)} cm³</span></div>
+                            <div className="row"><span className="k">Faces</span><span className="v">{selectedGroup.faces}</span></div>
+                            <div className="row"><span className="k">Machining</span><span className="v">{fmtNum(selectedGroup.machining_min_per_pc)} min/pc</span></div>
+
+                            <div className="section-title">Features</div>
+                            {selectedGroup.features.length === 0 && (
+                              <div style={{ fontSize: 12, color: "var(--text-2)", padding: "6px 0" }}>
+                                No machined features detected on this body
+                              </div>
+                            )}
+                            {selectedGroup.features.map((f, n) => (
+                              <div className="setup-row" key={n} title={f.note}>
                                 <div className="setup-line">
-                                  <span className="k">{s.label}</span>
-                                  <span className="v">{s.method}</span>
+                                  <span className="k">{f.feature_type} ×{f.count}</span>
                                 </div>
-                                <div className="setup-sub">{s.jaw_mode}</div>
+                                {f.note && <div className="setup-sub" style={{ textAlign: "left" }}>{f.note}</div>}
                               </div>
                             ))}
+
+                            {selectedGroup.operations.length > 0 && (
+                              <>
+                                <div className="section-title">Operations</div>
+                                {selectedGroup.operations.map((o, n) => (
+                                  <div className="setup-row" key={n} title={o.note}>
+                                    <div className="setup-line">
+                                      <span className="k">{o.operation}</span>
+                                      <span className="v">{o.tool_type}</span>
+                                    </div>
+                                    {o.note && <div className="setup-sub" style={{ textAlign: "left" }}>{o.note}</div>}
+                                  </div>
+                                ))}
+                              </>
+                            )}
                           </>
                         )}
 
-                        {(analysis.hole_groups ?? []).length > 0 && (
+                        {!selectedGroup && (
                           <>
-                            <div className="section-title">Holes</div>
-                            {(analysis.hole_groups ?? []).map((g) => (
-                              <div className="hole-row" key={g.diameter_mm}>
-                                <span className="hole-main">
-                                  {g.count}× Ø{g.diameter_mm.toFixed(2)}mm
-                                </span>
-                                <span className="chip">No thread</span>
-                                <span className="hole-setups" title={formatSetups(g.setups)}>
-                                  {formatSetups(g.setups)}
-                                </span>
-                              </div>
-                            ))}
-                          </>
-                        )}
+                            <div className="section-title">General</div>
+                            <div className="row"><span className="k">Machine type</span><span className="v">3 Axis</span></div>
+                            <div className="row"><span className="k">Material</span><span className="v" style={{ textAlign: "right" }}>{analysis.material}</span></div>
+                            <div className="row"><span className="k">Parser</span><span className="v">{analysis.parser}</span></div>
 
-                        <div className="section-title">Topology</div>
-                        <div className="row"><span className="k">Faces</span><span className="v">{analysis.topology.faces}</span></div>
-                        <div className="row"><span className="k">Detected features</span><span className="v">{analysis.candidate_count}</span></div>
+                            <div className="section-title">Stock</div>
+                            <div className="stock-dims">
+                              <label className="stock-dim">
+                                L<input className="num-input" readOnly value={analysis.dimensions_mm.length ?? ""} />
+                              </label>
+                              <label className="stock-dim">
+                                W<input className="num-input" readOnly value={analysis.dimensions_mm.width ?? ""} />
+                              </label>
+                              <label className="stock-dim">
+                                H<input className="num-input" readOnly value={analysis.dimensions_mm.height ?? ""} />
+                              </label>
+                            </div>
+                            <div className="row"><span className="k">Stock vol</span><span className="v">{analysis.volumes_cm3.stock} cm³</span></div>
+                            <div className="row"><span className="k">Part vol</span><span className="v">{analysis.volumes_cm3.part} cm³</span></div>
 
-                        {analysis.dfm.issues.length > 0 && (
-                          <>
-                            <div className="section-title">Machinability issues</div>
-                            {analysis.dfm.issues.slice(0, 8).map((iss, n) => (
-                              <div className="row" key={n}>
-                                <span className="k">{iss.feature}</span>
-                                <span className="v" style={{ color: iss.severity === "blocked" ? "var(--red)" : "var(--amber)" }}>
-                                  {iss.severity}
-                                </span>
-                              </div>
-                            ))}
+                            {(analysis.setups ?? []).length > 0 && (
+                              <>
+                                <div className="section-title">Setups</div>
+                                {(analysis.setups ?? []).map((s) => (
+                                  <div className="setup-row" key={s.label} title={s.reason}>
+                                    <div className="setup-line">
+                                      <span className="k">{s.label}</span>
+                                      <span className="v">{s.method}</span>
+                                    </div>
+                                    <div className="setup-sub">{s.jaw_mode}</div>
+                                  </div>
+                                ))}
+                              </>
+                            )}
+
+                            {(analysis.hole_groups ?? []).length > 0 && (
+                              <>
+                                <div className="section-title">Holes</div>
+                                {(analysis.hole_groups ?? []).map((g) => (
+                                  <div className="hole-row" key={g.diameter_mm}>
+                                    <span className="hole-main">
+                                      {g.count}× Ø{g.diameter_mm.toFixed(2)}mm
+                                    </span>
+                                    <span className="chip">No thread</span>
+                                    <span className="hole-setups" title={formatSetups(g.setups)}>
+                                      {formatSetups(g.setups)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </>
+                            )}
+
+                            <div className="section-title">Topology</div>
+                            <div className="row"><span className="k">Faces</span><span className="v">{analysis.topology.faces}</span></div>
+                            <div className="row"><span className="k">Detected features</span><span className="v">{analysis.candidate_count}</span></div>
+
+                            {analysis.dfm.issues.length > 0 && (
+                              <>
+                                <div className="section-title">Machinability issues</div>
+                                {analysis.dfm.issues.slice(0, 8).map((iss, n) => (
+                                  <div className="row" key={n}>
+                                    <span className="k">{iss.feature}</span>
+                                    <span className="v" style={{ color: iss.severity === "blocked" ? "var(--red)" : "var(--amber)" }}>
+                                      {iss.severity}
+                                    </span>
+                                  </div>
+                                ))}
+                              </>
+                            )}
                           </>
                         )}
                       </>
@@ -491,6 +720,11 @@ export default function App() {
 
                     {tab === "strategy" && strategy && (
                       <>
+                        {selectedGroup && (
+                          <div className="scope-note">
+                            Strategy is whole-assembly; body-scoped planning coming.
+                          </div>
+                        )}
                         <div className="row" style={{ borderBottom: "none" }}>
                           <span className="k">Total machine time</span>
                           <span className="v">{strategy.totals.total_machine_time_min?.toFixed(0)} min</span>
@@ -538,6 +772,11 @@ export default function App() {
                         "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
                       return (
                         <>
+                          {selectedGroup && (
+                            <div className="scope-note">
+                              Estimate is whole-assembly; body-scoped planning coming.
+                            </div>
+                          )}
                           <div className="section-title">Estimate settings</div>
                           <div className="row">
                             <span className="k">Machining rate (₹/hr)</span>
