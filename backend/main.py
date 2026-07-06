@@ -20,9 +20,13 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+import json
+
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+
+from modules.machine_capability import normalize_machine_capabilities
 
 from modules.step_parser import parse_step_auto
 from modules.dfm_score import compute_dfm_score
@@ -48,7 +52,9 @@ app.add_middleware(
 
 
 def _tessellate(file_bytes: bytes):
-    """Tessellate the whole part for the 3D viewer (x/y/z/i/j/k)."""
+    """Tessellate the whole part for the 3D viewer (x/y/z/i/j/k) and collect
+    per-face areas (index-aligned with the parser's face records) for the
+    machinable-surface-area metric. Returns (mesh|None, face_areas)."""
     tmp_path = None
     try:
         import cadquery as cq
@@ -56,9 +62,13 @@ def _tessellate(file_bytes: bytes):
             tmp.write(file_bytes)
             tmp_path = tmp.name
         shape = cq.importers.importStep(tmp_path).val()
+        try:
+            face_areas = [f.Area() for f in shape.Faces()]
+        except Exception:
+            face_areas = []
         verts, tris = shape.tessellate(0.5)
         if not verts:
-            return None
+            return None, face_areas
         return {
             "x": [round(v.x, 3) for v in verts],
             "y": [round(v.y, 3) for v in verts],
@@ -66,15 +76,37 @@ def _tessellate(file_bytes: bytes):
             "i": [t[0] for t in tris],
             "j": [t[1] for t in tris],
             "k": [t[2] for t in tris],
-        }
+        }, face_areas
     except Exception:
-        return None
+        return None, []
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+
+def _machinable_surface_pct(candidates, dfm, face_areas) -> float | None:
+    """Machinable surface area % — total face area minus faces belonging to
+    features whose planning is blocked (their 'blocked' issues in dfm)."""
+    total = sum(face_areas)
+    if total <= 0:
+        return None
+    blocked_names = {
+        i.get("feature") for i in dfm.get("issues", [])
+        if i.get("severity") == "blocked"
+    }
+    blocked_area = 0.0
+    counted: set = set()
+    for c in candidates:
+        if (c.get("feature_name") or "") not in blocked_names:
+            continue
+        for fi in c.get("face_indices") or []:
+            if isinstance(fi, int) and 0 <= fi < len(face_areas) and fi not in counted:
+                counted.add(fi)
+                blocked_area += face_areas[fi]
+    return round(max(0.0, min(100.0, 100.0 * (1 - blocked_area / total))), 1)
 
 
 def _body_bbox(file_bytes: bytes, body_index: int) -> dict | None:
@@ -101,7 +133,47 @@ def _body_bbox(file_bytes: bytes, body_index: int) -> dict | None:
                 pass
 
 
-def _default_context(material_name: str | None = None):
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_backend_json(name: str) -> list:
+    try:
+        with open(os.path.join(_BACKEND_DIR, name), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _machines_library() -> list:
+    """Curated market machines (India / Middle East / global) + app defaults."""
+    lib = [normalize_machine_capabilities(m) for m in _load_backend_json("machines_library.json")]
+    defaults = get_default_machines()
+    names = {m.get("name") for m in lib}
+    return lib + [m for m in defaults if m.get("name") not in names]
+
+
+def _extended_tools() -> list:
+    """API planning tool set: engine defaults + the extended metric library.
+
+    Engine defaults stay untouched for Streamlit/tests; the API plans with
+    the richer set so tool matches (drills, taps, reamers) are realistic.
+    """
+    from modules.tool_feasibility import normalize_tool_profile
+    base = get_default_tools()
+    seen = {(t.get("tool_type"), t.get("diameter_mm")) for t in base}
+    extra = [
+        normalize_tool_profile(t)
+        for t in _load_backend_json("tools_extended.json")
+        if (t.get("tool_type"), t.get("diameter_mm")) not in seen
+    ]
+    return base + extra
+
+
+def _default_context(
+    material_name: str | None = None,
+    machine_name: str | None = None,
+    machine_json: str | None = None,
+):
     materials = get_default_materials()
     material = materials[0]
     if material_name:
@@ -109,7 +181,18 @@ def _default_context(material_name: str | None = None):
             if m.get("name", "").lower() == material_name.lower():
                 material = m
                 break
-    return (get_default_tools(), material, get_default_machines()[0])
+    machine = get_default_machines()[0]
+    if machine_json:
+        try:
+            machine = normalize_machine_capabilities(json.loads(machine_json))
+        except Exception:
+            pass
+    elif machine_name:
+        for m in _machines_library():
+            if m.get("name", "").lower() == machine_name.lower():
+                machine = m
+                break
+    return (_extended_tools(), material, machine)
 
 
 def _hole_groups(candidates):
@@ -157,6 +240,12 @@ def health():
         "material": material.get("name"),
         "machine": machine.get("name"),
     }
+
+
+@app.get("/api/machines")
+def machines():
+    """Machine library for the machine selector (India/ME market + defaults)."""
+    return {"machines": _machines_library()}
 
 
 @app.get("/api/materials")
@@ -222,15 +311,24 @@ def tools_list():
                 "flute_length_mm": t.get("flute_length_mm"),
                 "max_depth_mm": t.get("max_depth_mm"),
                 **_tool_display(t),
-                "source_library": "Default Shop Library (Metric)",
+                "source_library": (
+                    "Default Shop Library (Metric)"
+                    if (t.get("tool_number") or 0) < 100
+                    else "Extended Metric Library"
+                ),
             }
-            for t in get_default_tools()
+            for t in _extended_tools()
         ]
     }
 
 
 @app.post("/api/analyze")
-async def analyze(file: UploadFile = File(...), material: str | None = None):
+async def analyze(
+    file: UploadFile = File(...),
+    material: str | None = None,
+    machine: str | None = None,
+    machine_json: str | None = Form(default=None),
+):
     """Single entry point: parse a STEP file and return the full overview
     (dimensions, topology, detected features, machinability, mesh, and a
     weldment flag). Everything the Overview screen needs, in one call."""
@@ -242,11 +340,28 @@ async def analyze(file: UploadFile = File(...), material: str | None = None):
     if not parse.get("success"):
         raise HTTPException(status_code=400, detail=parse.get("message", "Parse failed."))
 
-    tools, mat, machine = _default_context(material)
+    tools, mat, mach = _default_context(material, machine, machine_json)
     candidates = parse.get("candidate_features", [])
-    dfm = compute_dfm_score(candidates, tools, mat, machine)
-    mesh = _tessellate(data)
+    dfm = compute_dfm_score(candidates, tools, mat, mach)
+    mesh, face_areas = _tessellate(data)
+    msa_pct = _machinable_surface_pct(candidates, dfm, face_areas)
     solids = parse.get("solids_count") or 1
+
+    # Stock sizing: automatic preset = part envelope + per-side allowance
+    _L = parse.get("length_mm") or 0
+    _W = parse.get("width_mm") or 0
+    _H = parse.get("height_mm") or 0
+    _allow = 5.0
+    stock_block = {
+        "mode": "Automatic",
+        "preset": "Default Stock (+5 mm/side)",
+        "allowance_mm": _allow,
+        "size_mm": {
+            "length": round(_L + 2 * _allow, 2),
+            "width": round(_W + 2 * _allow, 2),
+            "height": round(_H + 2 * _allow, 2),
+        },
+    }
 
     return {
         "success": True,
@@ -270,6 +385,8 @@ async def analyze(file: UploadFile = File(...), material: str | None = None):
         "candidates": candidates,
         "candidate_count": len(candidates),
         "dfm": dfm,
+        "machinable_surface_pct": msa_pct,
+        "stock": stock_block,
         "hole_groups": _hole_groups(candidates),
         "setups": [
             {
@@ -291,7 +408,7 @@ async def analyze(file: UploadFile = File(...), material: str | None = None):
         "is_multibody": solids > 1,
         "mesh": mesh,
         "material": mat.get("name"),
-        "machine": machine.get("name"),
+        "machine": mach.get("name"),
     }
 
 
@@ -341,6 +458,8 @@ async def strategy(
     file: UploadFile = File(...),
     material: str | None = None,
     body_index: int | None = None,
+    machine: str | None = None,
+    machine_json: str | None = Form(default=None),
 ):
     """Operation plan grouped by setup with per-op tool + cycle time —
     the Strategy screen's data. With body_index, the plan is scoped to
@@ -350,7 +469,7 @@ async def strategy(
     if not parse.get("success"):
         raise HTTPException(status_code=400, detail=parse.get("message", "Parse failed."))
 
-    tools, mat, machine = _default_context(material)
+    tools, mat, mach = _default_context(material, machine, machine_json)
     candidates = parse.get("candidate_features", [])
 
     scoped_to = None
@@ -387,9 +506,9 @@ async def strategy(
             "depth": c.get("depth") or 0,
             "feature_type": c.get("feature_type", ""),
         }
-    ops = plan_operations(features, tools, mat, machine)
-    per_op = estimate_time_per_operation(ops, machine, mat)
-    totals = estimate_time(ops, machine, mat, features)
+    ops = plan_operations(features, tools, mat, mach)
+    per_op = estimate_time_per_operation(ops, mach, mat)
+    totals = estimate_time(ops, mach, mat, features)
 
     def _base_feature(name: str) -> str:
         return name.replace(" (Rough)", "").replace(" (Finish)", "")
@@ -420,6 +539,7 @@ async def strategy(
         "setups": setups,
         "totals": totals,
         "material": mat.get("name"),
+        "machine": mach.get("name"),
         "scoped_body_index": scoped_to,
         "scoped_candidate_count": len(candidates) if scoped_to is not None else None,
     }
