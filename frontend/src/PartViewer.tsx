@@ -82,7 +82,107 @@ function ApproachCone({ approach, partSize }: { approach: Approach; partSize: nu
   );
 }
 
-function PartMesh({ mesh, dimmed, light }: { mesh: Mesh; dimmed: boolean; light: boolean }) {
+// ---- Workholding scene v1 (grid floor + vise jaws + flip indicator) ----
+// Rendered only while a setup is active, and OUTSIDE the <Bounds> wrapper
+// so fixture visuals never affect the camera fit.
+interface Bbox {
+  mins: Vec3;
+  maxs: Vec3;
+}
+
+// Flip arrow: torus arc + arrowhead cone at the arc's end, tangent to it.
+const FLIP_ARC = Math.PI * 1.4;
+const FLIP_HEAD_QUAT = new THREE.Quaternion().setFromUnitVectors(
+  new THREE.Vector3(0, 1, 0),
+  new THREE.Vector3(-Math.sin(FLIP_ARC), Math.cos(FLIP_ARC), 0),
+);
+
+function WorkholdingScene({
+  bbox,
+  partSize,
+  flip,
+  light,
+}: {
+  bbox: Bbox;
+  partSize: number;
+  flip: boolean;
+  light: boolean;
+}) {
+  const [xmin, ymin, zmin] = bbox.mins;
+  const [xmax, ymax, zmax] = bbox.maxs;
+  const cx = (xmin + xmax) / 2;
+  const cy = (ymin + ymax) / 2;
+  const xspan = Math.max(xmax - xmin, 1);
+  const yspan = Math.max(ymax - ymin, 1);
+  const zspan = Math.max(zmax - zmin, 1);
+
+  // Grid floor: large thin plate 2 mm under the part (raw CAD frame, Z-up)
+  const floorSize = partSize * 2.5;
+  const floorT = Math.max(partSize * 0.005, 0.5);
+  const floorZ = zmin - 2 - floorT / 2;
+
+  // Vise: two jaw blocks clamping the shortest horizontal axis, flush to
+  // the part's bbox sides and rising from its base (below the approach cone).
+  const clampX = xspan <= yspan;
+  const jawT = Math.max(partSize * 0.15, 2); // thickness along the clamp axis
+  const jawH = Math.max(zspan * 0.4, 2); // height
+  const jawL = (clampX ? yspan : xspan) * 0.7; // length along the other axis
+  const jawZ = zmin + jawH / 2;
+  const jawArgs: [number, number, number] = clampX ? [jawT, jawL, jawH] : [jawL, jawT, jawH];
+  const jawA: Vec3 = clampX ? [xmin - jawT / 2, cy, jawZ] : [cx, ymin - jawT / 2, jawZ];
+  const jawB: Vec3 = clampX ? [xmax + jawT / 2, cy, jawZ] : [cx, ymax + jawT / 2, jawZ];
+
+  // Flip indicator: amber curved arrow hovering over the top face
+  const r = Math.max(partSize * 0.18, 6);
+  const tube = r * 0.07;
+
+  return (
+    <group>
+      <mesh position={[cx, cy, floorZ]}>
+        <boxGeometry args={[floorSize, floorSize, floorT]} />
+        <meshStandardMaterial color={light ? "#d6dae0" : "#2a2f36"} metalness={0} roughness={0.9} />
+      </mesh>
+      <mesh position={jawA}>
+        <boxGeometry args={jawArgs} />
+        <meshStandardMaterial color="#3d5a80" metalness={0.3} roughness={0.5} />
+      </mesh>
+      <mesh position={jawB}>
+        <boxGeometry args={jawArgs} />
+        <meshStandardMaterial color="#3d5a80" metalness={0.3} roughness={0.5} />
+      </mesh>
+      {flip && (
+        // Local XY arc rotated into a vertical plane; drawn through the part
+        // (depthTest false) but BELOW the approach cone (renderOrder 11 < 12).
+        <group position={[cx, cy, zmax + r * 1.05]} rotation={[Math.PI / 2, 0, 0]}>
+          <mesh renderOrder={11}>
+            <torusGeometry args={[r, tube, 12, 48, FLIP_ARC]} />
+            <meshBasicMaterial color="#e0a63b" transparent opacity={0.95} depthTest={false} depthWrite={false} />
+          </mesh>
+          <mesh
+            position={[r * Math.cos(FLIP_ARC), r * Math.sin(FLIP_ARC), 0]}
+            quaternion={FLIP_HEAD_QUAT}
+            renderOrder={11}
+          >
+            <coneGeometry args={[tube * 2.6, tube * 7, 16]} />
+            <meshBasicMaterial color="#e0a63b" transparent opacity={0.95} depthTest={false} depthWrite={false} />
+          </mesh>
+        </group>
+      )}
+    </group>
+  );
+}
+
+function PartMesh({
+  mesh,
+  dimmed,
+  light,
+  opacity,
+}: {
+  mesh: Mesh;
+  dimmed: boolean;
+  light: boolean;
+  opacity: number;
+}) {
   const geometry = useMemo(() => {
     const g = new THREE.BufferGeometry();
     const n = mesh.x.length;
@@ -117,7 +217,7 @@ function PartMesh({ mesh, dimmed, light }: { mesh: Mesh; dimmed: boolean; light:
         metalness={0.15}
         roughness={0.55}
         transparent
-        opacity={dimmed ? 0.4 : 1}
+        opacity={(dimmed ? 0.4 : 1) * opacity}
       />
     </mesh>
   );
@@ -171,6 +271,8 @@ export function PartViewer({
   theme = "dark",
   cameraDir = null,
   approach = null,
+  opacity = 1,
+  workholding = null,
 }: {
   mesh: Mesh | null;
   highlight?: Highlight | null;
@@ -179,23 +281,45 @@ export function PartViewer({
   cameraDir?: Vec3 | null;
   // Tool-approach cone: origin on the part face, dir pointing into the part
   approach?: Approach | null;
+  // Part opacity (0.2–1); multiplies the dim-on-highlight factor
+  opacity?: number;
+  // Fixture visuals for the active setup; flip = secondary face, re-fixture hint
+  workholding?: { flip: boolean } | null;
 }) {
   const light = theme === "light";
-  const { meshTopZ, partSize, center } = useMemo(() => {
-    const none = { meshTopZ: 0, partSize: 100, center: [0, 0, 0] as Vec3 };
+  const { meshTopZ, partSize, center, bbox } = useMemo(() => {
+    const none = {
+      meshTopZ: 0,
+      partSize: 100,
+      center: [0, 0, 0] as Vec3,
+      bbox: null as Bbox | null,
+    };
     if (!mesh || !mesh.z.length) return none;
-    const finite = (a: number[]) => a.slice(0, 20000).filter(Number.isFinite);
-    const zs = finite(mesh.z);
-    const xs = finite(mesh.x);
-    const ys = finite(mesh.y);
-    if (!zs.length || !xs.length || !ys.length) return none;
-    const span = (a: number[]) => Math.max(...a) - Math.min(...a);
-    const mid = (a: number[]) => (Math.max(...a) + Math.min(...a)) / 2;
-    const size = Math.max(span(xs), span(ys), span(zs));
+    // Loop-based bbox over the full arrays (spread over huge meshes would
+    // overflow the stack; the old 20k-vertex sample under-measured big parts).
+    const mins: Vec3 = [Infinity, Infinity, Infinity];
+    const maxs: Vec3 = [-Infinity, -Infinity, -Infinity];
+    const axes = [mesh.x, mesh.y, mesh.z];
+    for (let a = 0; a < 3; a++) {
+      const arr = axes[a];
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (!Number.isFinite(v)) continue;
+        if (v < mins[a]) mins[a] = v;
+        if (v > maxs[a]) maxs[a] = v;
+      }
+    }
+    if (![...mins, ...maxs].every(Number.isFinite)) return none;
+    const size = Math.max(maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]);
     return {
-      meshTopZ: Math.max(...zs),
-      partSize: Number.isFinite(size) && size > 0 ? size : 100,
-      center: [mid(xs), mid(ys), mid(zs)] as Vec3,
+      meshTopZ: maxs[2],
+      partSize: size > 0 ? size : 100,
+      center: [
+        (mins[0] + maxs[0]) / 2,
+        (mins[1] + maxs[1]) / 2,
+        (mins[2] + maxs[2]) / 2,
+      ] as Vec3,
+      bbox: { mins, maxs } as Bbox,
     };
   }, [mesh]);
 
@@ -210,8 +334,11 @@ export function PartViewer({
       <directionalLight position={[-200, -100, -300]} intensity={0.4} />
       {mesh && (
         <Bounds fit clip observe margin={1.25}>
-          <PartMesh mesh={mesh} dimmed={!!highlight} light={light} />
+          <PartMesh mesh={mesh} dimmed={!!highlight} light={light} opacity={opacity} />
         </Bounds>
+      )}
+      {mesh && workholding && bbox && (
+        <WorkholdingScene bbox={bbox} partSize={partSize} flip={workholding.flip} light={light} />
       )}
       {mesh && highlight && <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} />}
       {mesh && approach && <ApproachCone approach={approach} partSize={partSize} />}

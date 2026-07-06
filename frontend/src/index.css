@@ -160,6 +160,14 @@ body { background: var(--bg-0); color: var(--text-0); }
 .op-row.child { padding-left: 30px; }
 .op-row.child .seq { width: 26px; }
 
+/* Leading status dot on rollup + op rows (red = blocked) */
+.op-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  flex-shrink: 0; align-self: center;
+}
+.op-dot.green { background: var(--green); }
+.op-dot.red { background: var(--red); }
+
 /* ---- Cut config (material) selector ---- */
 .mat-select { position: relative; margin-bottom: 14px; }
 .mat-trigger {
@@ -191,6 +199,24 @@ body { background: var(--bg-0); color: var(--text-0); }
 .mat-item-sub { font-size: 10.5px; color: var(--text-2); margin-top: 1px; }
 .mat-empty { padding: 12px 10px; font-size: 12px; color: var(--text-2); }
 
+/* "+ Add machine" footer + inline custom-machine form (machine dropdown) */
+.mat-add {
+  width: 100%; padding: 8px 10px; text-align: left; font-size: 12.5px;
+  border: none; border-top: 1px solid var(--border);
+  background: var(--bg-2); color: var(--accent); cursor: pointer;
+}
+.mat-add:hover { background: var(--bg-3); }
+.mat-form {
+  border-top: 1px solid var(--border); padding: 10px;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.mat-form-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; font-size: 12px; color: var(--text-1);
+}
+.mat-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.btn:disabled { opacity: 0.55; cursor: default; }
+
 /* ---- Overview: setups / holes / stock ---- */
 .setup-row { padding: 6px 0; border-bottom: 1px solid var(--border); }
 .setup-row.clickable { cursor: pointer; }
@@ -214,13 +240,14 @@ body { background: var(--bg-0); color: var(--text-0); }
   font-size: 10px; padding: 2px 8px; border-radius: 10px; flex-shrink: 0;
   background: var(--bg-3); color: var(--text-1); white-space: nowrap;
 }
-.thread-select {
+.thread-select, .mini-select {
   font-size: 11px; padding: 2px 4px; border-radius: 6px; flex-shrink: 0;
   background: var(--bg-2); color: var(--text-0);
   border: 1px solid var(--border); max-width: 122px; cursor: pointer;
 }
-.thread-select:hover { border-color: var(--border-strong); }
-.thread-select:focus { outline: none; border-color: var(--accent); }
+.thread-select:hover, .mini-select:hover:not(:disabled) { border-color: var(--border-strong); }
+.thread-select:focus, .mini-select:focus { outline: none; border-color: var(--accent); }
+.mini-select:disabled { opacity: 0.65; cursor: default; }
 
 .stock-dims { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .stock-dim { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; font-size: 12px; color: var(--text-2); }
@@ -387,6 +414,18 @@ body { background: var(--bg-0); color: var(--text-0); }
 .ledger-row.grand { background: var(--bg-2); border-top: 1px solid var(--border-strong); }
 .ledger-row.grand .desc { color: var(--text-0); font-weight: 700; }
 .ledger-row.grand .amt { color: var(--orange); font-weight: 700; font-size: 14px; }
+
+/* ---- Viewer overlay: part opacity slider (canvas bottom-right) ---- */
+.viewer-opacity {
+  position: absolute; bottom: 10px; right: 12px; z-index: 5;
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; border-radius: 8px;
+  background: var(--bg-1); border: 1px solid var(--border);
+  font-size: 11px; color: var(--text-2);
+}
+.viewer-opacity input[type="range"] {
+  width: 90px; margin: 0; accent-color: var(--accent);
+}
 
 .toast-error {
   position: fixed; top: 60px; left: 50%; transform: translateX(-50%);

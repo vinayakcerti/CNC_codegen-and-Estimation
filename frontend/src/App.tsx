@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import { api, SAMPLE_NAME } from "./api";
-import type { AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo, WeldmentResult, WeldmentGroup } from "./api";
+import type {
+  AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo,
+  WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts,
+} from "./api";
 import { PartViewer } from "./PartViewer";
 import type { Vec3, Approach } from "./PartViewer";
 import { MaterialSelect } from "./MaterialSelect";
+import { MachineSelect } from "./MachineSelect";
+import type { CustomMachine } from "./MachineSelect";
 import { BottomPanel } from "./BottomPanel";
 import { lsGet, lsSet } from "./storage";
 
@@ -33,6 +38,42 @@ function gradeClass(grade: string) {
   if (grade === "B" || grade === "C") return "amber";
   return "red";
 }
+
+// Machinable-surface badge: >=95 green, >=80 amber, below red
+function msaClass(pct: number) {
+  if (pct >= 95) return "green";
+  if (pct >= 80) return "amber";
+  return "red";
+}
+
+// Setups on these faces mean the part comes off the primary fixture —
+// the viewer shows an amber flip indicator for them.
+const SECONDARY_FACE_RE = /bottom|back|left/i;
+
+function loadViewerOpacity(): number {
+  const v = Number(lsGet("cnc.viewerOpacity"));
+  return Number.isFinite(v) && v >= 0.2 && v <= 1 ? v : 1;
+}
+
+function loadCustomMachines(): CustomMachine[] {
+  try {
+    const raw = lsGet("cnc.customMachines");
+    const arr: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(
+      (m): m is CustomMachine =>
+        !!m && typeof (m as CustomMachine).name === "string" && (m as CustomMachine).name.length > 0,
+    );
+  } catch {
+    return [];
+  }
+}
+
+// Lenient numeric input parse — empty/garbage becomes 0, never NaN
+const numOr0 = (s: string) => {
+  const v = parseFloat(s);
+  return Number.isFinite(v) && v >= 0 ? v : 0;
+};
 
 // "Setup 3","Setup 5" → "Setup 3,5" · "Top" → "Setup Top"
 function formatSetups(setups: string[]): string {
@@ -124,6 +165,21 @@ export default function App() {
   const [materials, setMaterials] = useState<Material[]>([]);
   const [material, setMaterial] = useState<string>(() => lsGet("cnc.material") ?? "");
 
+  // Machine selection: library machines from /api/machines, user-defined
+  // machines from localStorage. Custom machines are sent as machine_json.
+  const [machines, setMachines] = useState<MachineInfo[]>([]);
+  const [customMachines, setCustomMachines] = useState<CustomMachine[]>(loadCustomMachines);
+  const [machineSel, setMachineSel] = useState<string>(() => lsGet("cnc.machine") ?? "");
+
+  // Stock config (Overview → Material section). Manual sizes replace the
+  // stock volume behind the Estimate material line. Per-part session state.
+  const [stockMode, setStockMode] = useState<"auto" | "manual">("auto");
+  const [manualStock, setManualStock] =
+    useState<{ length: number; width: number; height: number } | null>(null);
+
+  // Part opacity in the 3D viewer (0.2–1, persisted)
+  const [viewerOpacity, setViewerOpacity] = useState<number>(loadViewerOpacity);
+
   // Per-body scope for multibody weldments. selectedGroupId null = full assembly.
   // Session-only by design — scope resets on every new analysis.
   const [wmResult, setWmResult] = useState<WeldmentResult | null>(null);
@@ -154,10 +210,24 @@ export default function App() {
   // mesh is also what the isolated 3D view shows.
   const scopedBodyIndex = selectedGroup ? selectedGroup.body_indices[0] : null;
 
+  // Resolve a machine pick into request opts: custom machines travel as
+  // machine_json, library machines as ?machine=<name>. Custom wins on a
+  // name collision (the user explicitly created it).
+  function machineOptsFor(name: string): MachineOpts | undefined {
+    if (!name) return undefined;
+    const custom = customMachines.find((c) => c.name === name);
+    return custom ? { machineJson: JSON.stringify(custom) } : { machineName: name };
+  }
+
   useEffect(() => {
     const token = ++scopedReqRef.current;
     if (tab !== "strategy" || scopedBodyIndex == null || !partFile) return;
-    const key = `${scopedBodyIndex}:${material}`;
+    const machineKey = machineSel
+      ? customMachines.some((c) => c.name === machineSel)
+        ? `custom:${machineSel}`
+        : machineSel
+      : "";
+    const key = `${scopedBodyIndex}:${material}:${machineKey}`;
     const cached = scopedCacheRef.current.get(key);
     if (cached) {
       setScopedStrategy(cached);
@@ -168,7 +238,7 @@ export default function App() {
     setScopedLoading(true);
     setScopedError(null);
     api
-      .strategy(partFile, material || undefined, scopedBodyIndex)
+      .strategy(partFile, material || undefined, scopedBodyIndex, machineOptsFor(machineSel))
       .then((r) => {
         if (scopedReqRef.current !== token) return;
         scopedCacheRef.current.set(key, r);
@@ -180,7 +250,9 @@ export default function App() {
         setScopedError(err instanceof Error ? err.message : "Scoped strategy failed");
         setScopedLoading(false);
       });
-  }, [tab, scopedBodyIndex, material, partFile, scopedRetryNonce]);
+    // machineOptsFor is stable per (machineSel, customMachines), both in deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, scopedBodyIndex, material, partFile, scopedRetryNonce, machineSel, customMachines]);
 
   // Strategy shown on the Strategy tab: scoped plan when a body scope is
   // active (guarded against stale responses), whole-assembly otherwise.
@@ -288,6 +360,14 @@ export default function App() {
       .catch(() => {
         /* selector stays empty; analyze falls back to backend default */
       });
+    api
+      .machines()
+      .then((r) => {
+        if (alive) setMachines(r.machines);
+      })
+      .catch(() => {
+        /* machine dropdown shows custom machines only */
+      });
     return () => {
       alive = false;
     };
@@ -333,8 +413,13 @@ export default function App() {
     lsSet("cnc.inspectorWidth", String(inspWidth));
   }
 
-  async function runAnalysis(file: File, opts?: { material?: string; preserveTab?: boolean }) {
+  async function runAnalysis(
+    file: File,
+    opts?: { material?: string; preserveTab?: boolean; machine?: MachineOpts },
+  ) {
     const mat = opts?.material ?? (material || undefined);
+    const mach = opts?.machine ?? machineOptsFor(machineSel);
+    const isNewFile = partFile !== file; // material/machine re-runs pass the same File
     setLoading(true);
     setError(null);
     setView("part");
@@ -353,8 +438,16 @@ export default function App() {
       scopedCacheRef.current.clear();
     }
     try {
-      const a = await api.analyze(file, mat);
+      const a = await api.analyze(file, mat, mach);
       setAnalysis(a);
+      // Stock config: reset on a new part; survive material/machine re-runs.
+      if (isNewFile) setStockMode("auto");
+      const sz = a.stock?.size_mm;
+      if (sz) {
+        setManualStock((cur) => (isNewFile || !cur ? { ...sz } : cur));
+      } else if (isNewFile) {
+        setManualStock(null);
+      }
       // Body breakdown loads in parallel — never blocks the main analyze flow.
       // Weldment output is material-independent, so a cached result is kept.
       if (a.is_multibody && wmFileRef.current !== file) {
@@ -362,7 +455,8 @@ export default function App() {
         void fetchWeldment(file);
       }
       if (a.material) setMaterial(a.material); // sync to what the backend resolved
-      const s = await api.strategy(file, mat);
+      if (a.machine) setMachineSel(a.machine); // engine default may be unnamed (null)
+      const s = await api.strategy(file, mat, undefined, mach);
       setStrategy(s);
       if (!opts?.preserveTab) setTab("overview");
       setSelOp(null);
@@ -380,6 +474,26 @@ export default function App() {
     setMaterial(name);
     lsSet("cnc.material", name);
     if (partFile) void runAnalysis(partFile, { material: name, preserveTab: true });
+  }
+
+  function changeMachine(name: string) {
+    setMachineSel(name);
+    lsSet("cnc.machine", name);
+    if (partFile) void runAnalysis(partFile, { preserveTab: true, machine: machineOptsFor(name) });
+  }
+
+  // Save a custom machine (localStorage), select it, and re-plan with its
+  // JSON. The next list is computed here because machineOptsFor would still
+  // see the pre-setState customMachines.
+  function addCustomMachine(m: CustomMachine) {
+    const next = [...customMachines.filter((c) => c.name !== m.name), m];
+    setCustomMachines(next);
+    lsSet("cnc.customMachines", JSON.stringify(next));
+    setMachineSel(m.name);
+    lsSet("cnc.machine", m.name);
+    if (partFile) {
+      void runAnalysis(partFile, { preserveTab: true, machine: { machineJson: JSON.stringify(m) } });
+    }
   }
 
   function onFile(e: ChangeEvent<HTMLInputElement>) {
@@ -472,6 +586,75 @@ export default function App() {
     );
   }
 
+  // Setups render in BOTH scoped and unscoped Overview modes — operators
+  // must always see them. The camera-orientation click only applies to the
+  // whole-assembly view, so rows are static while a body scope is active.
+  function renderSetupsSection() {
+    const setups = analysis?.setups ?? [];
+    if (!setups.length) return null;
+    const interactive = !selectedGroup;
+    return (
+      <>
+        <div className="section-title">Setups</div>
+        {setups.map((s) => (
+          <div
+            className={`setup-row ${interactive ? "clickable" : ""} ${
+              interactive && activeSetup === s.label ? "sel" : ""
+            }`}
+            key={s.label}
+            title={interactive ? `${s.reason} — click to view from ${s.label}` : s.reason}
+            onClick={
+              interactive
+                ? () => setActiveSetup((cur) => (cur === s.label ? null : s.label))
+                : undefined
+            }
+          >
+            <div className="setup-line">
+              <span className="k">{s.label}</span>
+              <span className="v">{s.method}</span>
+            </div>
+            <div className="setup-sub">{s.jaw_mode}</div>
+          </div>
+        ))}
+      </>
+    );
+  }
+
+  function renderHolesSection() {
+    const groups = analysis?.hole_groups ?? [];
+    if (!groups.length) return null;
+    return (
+      <>
+        <div className="section-title">Holes</div>
+        {groups.map((g) => {
+          const diaKey = g.diameter_mm.toFixed(2);
+          return (
+            <div className="hole-row" key={g.diameter_mm}>
+              <span className="hole-main">
+                {g.count}× Ø{g.diameter_mm.toFixed(2)}mm
+              </span>
+              <select
+                className="thread-select"
+                title="Thread status (session only)"
+                value={threadByDia[diaKey] ?? "none"}
+                onChange={(e) =>
+                  setThreadByDia((t) => ({ ...t, [diaKey]: e.target.value }))
+                }
+              >
+                <option value="none">No Thread</option>
+                <option value="tapped">Tapped</option>
+                <option value="spec">Threaded (spec)</option>
+              </select>
+              <span className="hole-setups" title={formatSetups(g.setups)}>
+                {formatSetups(g.setups)}
+              </span>
+            </div>
+          );
+        })}
+      </>
+    );
+  }
+
   function renderOpRow(setupLabel: string, op: StrategyOp, child: boolean) {
     const id = `${setupLabel}-${op.op_num}`;
     return (
@@ -488,6 +671,10 @@ export default function App() {
           }
         }}
       >
+        <span
+          className={`op-dot ${op.blocked ? "red" : "green"}`}
+          title={op.blocked ? "Blocked — no capable tool/setup" : "Plannable"}
+        />
         <span className="seq">{op.op_num}</span>
         <div className="main">
           <div>{child ? op.feature || op.operation : op.operation}</div>
@@ -658,6 +845,14 @@ export default function App() {
                   // (the Setups list is a whole-assembly analysis).
                   cameraDir={selectedGroup ? null : setupView.dir}
                   approach={selectedGroup ? null : setupView.approach}
+                  opacity={viewerOpacity}
+                  // Workholding visuals follow the active setup — whole-assembly
+                  // view only, same guard as the orientation/cone above.
+                  workholding={
+                    !selectedGroup && activeSetup
+                      ? { flip: SECONDARY_FACE_RE.test(activeSetup) }
+                      : null
+                  }
                 />
               )}
               {analysis && !loading && selectedGroup && !selectedGroup.mesh && (
@@ -670,6 +865,23 @@ export default function App() {
                   {selectedGroup
                     ? `${scopeLabel(selectedGroup)} · ${groupDims(selectedGroup)} mm · drag to orbit`
                     : `${analysis.dimensions_mm.length} × ${analysis.dimensions_mm.width} × ${analysis.dimensions_mm.height} mm · drag to orbit`}
+                </div>
+              )}
+              {analysis && !loading && (
+                <div className="viewer-opacity" title="Part opacity">
+                  <span>Opacity</span>
+                  <input
+                    type="range"
+                    min={0.2}
+                    max={1}
+                    step={0.05}
+                    value={viewerOpacity}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setViewerOpacity(v);
+                      lsSet("cnc.viewerOpacity", String(v));
+                    }}
+                  />
                 </div>
               )}
             </div>
@@ -705,13 +917,76 @@ export default function App() {
                           onChange={changeMaterial}
                           disabled={loading || materials.length === 0}
                         />
+                        <MachineSelect
+                          machines={machines}
+                          customMachines={customMachines}
+                          value={machineSel}
+                          onChange={changeMachine}
+                          onAddCustom={addCustomMachine}
+                          disabled={loading || (machines.length === 0 && customMachines.length === 0)}
+                        />
+
+                        {/* Stock config — manual sizes replace the stock volume
+                            behind the Estimate material line */}
+                        <div className="row">
+                          <span className="k">Stock mode</span>
+                          <select
+                            className="mini-select"
+                            value={stockMode}
+                            disabled={!analysis.stock}
+                            onChange={(e) =>
+                              setStockMode(e.target.value === "manual" ? "manual" : "auto")
+                            }
+                          >
+                            <option value="auto">Automatic</option>
+                            <option value="manual">Manual</option>
+                          </select>
+                        </div>
+                        <div className="row">
+                          <span className="k">Stock preset</span>
+                          <select
+                            className="mini-select"
+                            disabled
+                            style={{ maxWidth: 170 }}
+                            title={analysis.stock?.preset}
+                          >
+                            <option>{analysis.stock?.preset ?? "—"}</option>
+                          </select>
+                        </div>
+                        {stockMode === "manual" && manualStock ? (
+                          <div className="stock-dims" title="Manual stock size (mm)">
+                            {(["length", "width", "height"] as const).map((k, i) => (
+                              <label className="stock-dim" key={k}>
+                                {"LWH"[i]}
+                                <input
+                                  className="num-input"
+                                  type="number"
+                                  min={0}
+                                  value={manualStock[k]}
+                                  onChange={(e) =>
+                                    setManualStock({ ...manualStock, [k]: numOr0(e.target.value) })
+                                  }
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="row">
+                            <span className="k">Stock size</span>
+                            <span className="v">
+                              {analysis.stock
+                                ? `${fmtNum(analysis.stock.size_mm.length)} × ${fmtNum(analysis.stock.size_mm.width)} × ${fmtNum(analysis.stock.size_mm.height)} mm`
+                                : "—"}
+                            </span>
+                          </div>
+                        )}
 
                         {/* Assembly-level metrics hide under a body scope — honest
                             labeling: the DFM score is whole-assembly only. */}
                         {!selectedGroup && (
                           <div className="metric-grid">
                             <div className="metric">
-                              <div className="label">Machinability</div>
+                              <div className="label">Features plannable</div>
                               <div className="value">
                                 <span className={`badge ${gradeClass(analysis.dfm.grade)}`}>
                                   {analysis.dfm.score_pct}% {analysis.dfm.grade}
@@ -721,6 +996,18 @@ export default function App() {
                             <div className="metric">
                               <div className="label">Bodies</div>
                               <div className="value">{analysis.topology.solids}</div>
+                            </div>
+                            <div className="metric">
+                              <div className="label">Machinable surface</div>
+                              <div className="value">
+                                {analysis.machinable_surface_pct != null ? (
+                                  <span className={`badge ${msaClass(analysis.machinable_surface_pct)}`}>
+                                    {analysis.machinable_surface_pct}%
+                                  </span>
+                                ) : (
+                                  "—"
+                                )}
+                              </div>
                             </div>
                           </div>
                         )}
@@ -767,6 +1054,11 @@ export default function App() {
                                 ))}
                               </>
                             )}
+
+                            {/* Whole-assembly setups stay visible under a body
+                                scope — operators must always see setups. */}
+                            {renderSetupsSection()}
+                            {renderHolesSection()}
                           </>
                         )}
 
@@ -777,7 +1069,9 @@ export default function App() {
                             <div className="row"><span className="k">Material</span><span className="v" style={{ textAlign: "right" }}>{analysis.material}</span></div>
                             <div className="row"><span className="k">Parser</span><span className="v">{analysis.parser}</span></div>
 
-                            <div className="section-title">Stock</div>
+                            {/* Part envelope (was "Stock" pre-stock-block; real
+                                stock config now lives under Cut config above) */}
+                            <div className="section-title">Part envelope</div>
                             <div className="stock-dims">
                               <label className="stock-dim">
                                 L<input className="num-input" readOnly value={analysis.dimensions_mm.length ?? ""} />
@@ -789,61 +1083,10 @@ export default function App() {
                                 H<input className="num-input" readOnly value={analysis.dimensions_mm.height ?? ""} />
                               </label>
                             </div>
-                            <div className="row"><span className="k">Stock vol</span><span className="v">{analysis.volumes_cm3.stock} cm³</span></div>
                             <div className="row"><span className="k">Part vol</span><span className="v">{analysis.volumes_cm3.part} cm³</span></div>
 
-                            {(analysis.setups ?? []).length > 0 && (
-                              <>
-                                <div className="section-title">Setups</div>
-                                {(analysis.setups ?? []).map((s) => (
-                                  <div
-                                    className={`setup-row clickable ${activeSetup === s.label ? "sel" : ""}`}
-                                    key={s.label}
-                                    title={`${s.reason} — click to view from ${s.label}`}
-                                    onClick={() =>
-                                      setActiveSetup((cur) => (cur === s.label ? null : s.label))
-                                    }
-                                  >
-                                    <div className="setup-line">
-                                      <span className="k">{s.label}</span>
-                                      <span className="v">{s.method}</span>
-                                    </div>
-                                    <div className="setup-sub">{s.jaw_mode}</div>
-                                  </div>
-                                ))}
-                              </>
-                            )}
-
-                            {(analysis.hole_groups ?? []).length > 0 && (
-                              <>
-                                <div className="section-title">Holes</div>
-                                {(analysis.hole_groups ?? []).map((g) => {
-                                  const diaKey = g.diameter_mm.toFixed(2);
-                                  return (
-                                    <div className="hole-row" key={g.diameter_mm}>
-                                      <span className="hole-main">
-                                        {g.count}× Ø{g.diameter_mm.toFixed(2)}mm
-                                      </span>
-                                      <select
-                                        className="thread-select"
-                                        title="Thread status (session only)"
-                                        value={threadByDia[diaKey] ?? "none"}
-                                        onChange={(e) =>
-                                          setThreadByDia((t) => ({ ...t, [diaKey]: e.target.value }))
-                                        }
-                                      >
-                                        <option value="none">No Thread</option>
-                                        <option value="tapped">Tapped</option>
-                                        <option value="spec">Threaded (spec)</option>
-                                      </select>
-                                      <span className="hole-setups" title={formatSetups(g.setups)}>
-                                        {formatSetups(g.setups)}
-                                      </span>
-                                    </div>
-                                  );
-                                })}
-                              </>
-                            )}
+                            {renderSetupsSection()}
+                            {renderHolesSection()}
 
                             <div className="section-title">Topology</div>
                             <div className="row"><span className="k">Faces</span><span className="v">{analysis.topology.faces}</span></div>
@@ -916,6 +1159,10 @@ export default function App() {
                                   return (
                                     <div key={r.key}>
                                       <div className="op-row rollup" onClick={() => toggleRollup(r.key)}>
+                                        <span
+                                          className={`op-dot ${r.ops.some((o) => o.blocked) ? "red" : "green"}`}
+                                          title={r.ops.some((o) => o.blocked) ? "Contains blocked ops" : "Plannable"}
+                                        />
                                         <span className="seq">{isOpen ? "▾" : "▸"}</span>
                                         <div className="main">
                                           <div>{r.operation} ×{r.ops.length}</div>
@@ -939,8 +1186,14 @@ export default function App() {
                       const machining = (machineMin / 60) * rateHr;
                       const density = materials.find((m) => m.name === analysis.material)?.density ?? 2.7;
                       // Material is bought as STOCK, not as the finished part —
-                      // quote the stock block mass (competitor does the same).
-                      const massKg = ((analysis.volumes_cm3.stock ?? 0) * density) / 1000;
+                      // mass comes from the stock block (Overview → Stock rows),
+                      // so Manual stock sizes flow straight into this line.
+                      const stockSize =
+                        stockMode === "manual" && manualStock ? manualStock : analysis.stock?.size_mm;
+                      const stockVolCm3 = stockSize
+                        ? (stockSize.length * stockSize.width * stockSize.height) / 1000
+                        : (analysis.volumes_cm3.stock ?? 0); // legacy fallback: no stock block
+                      const massKg = (stockVolCm3 * density) / 1000;
                       const material_ = massKg * matPriceKg;
                       const setupsCost = strategy.setups.length * setupCharge;
                       const partTotal = material_ + machining; // block 1: material + machining
@@ -954,9 +1207,12 @@ export default function App() {
                         return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min`;
                       };
                       const d = analysis.dimensions_mm;
-                      const stockDims = `${d.length} × ${d.width} × ${d.height} mm`;
+                      const stockDims = stockSize
+                        ? `${fmtNum(stockSize.length)} × ${fmtNum(stockSize.width)} × ${fmtNum(stockSize.height)} mm`
+                        : `${d.length} × ${d.width} × ${d.height} mm`;
+                      const stockTag = stockSize && stockMode === "manual" ? " (manual)" : "";
                       const materialLine =
-                        `${analysis.material} ${stockDims} — ${massKg.toFixed(1)} kg @ ₹${matPriceKg}/kg`;
+                        `${analysis.material} stock ${stockDims}${stockTag} — ${massKg.toFixed(1)} kg @ ₹${matPriceKg}/kg`;
                       return (
                         <>
                           {selectedGroup && (

@@ -31,6 +31,46 @@ export interface Material {
   safety_factor: number;
 }
 
+// Machine record from /api/machines. Curated library machines carry
+// name/maker/axes; the engine's built-in defaults use machine_name /
+// axis_count instead — consumers should go through a display helper.
+export interface MachineInfo {
+  name?: string;
+  machine_name?: string;
+  maker?: string;
+  type?: string;
+  machine_type?: string;
+  axes?: number;
+  axis_count?: number;
+  travel_x_mm?: number | null;
+  travel_y_mm?: number | null;
+  travel_z_mm?: number | null;
+  max_spindle_rpm?: number;
+  spindle_power_kw?: number;
+  tool_capacity?: number;
+  controller?: string;
+  rapid_feed_rate?: number;
+  tool_change_time_s?: number;
+  setup_time_min?: number;
+  region?: string;
+  [k: string]: unknown;
+}
+
+// How a machine selection rides along on analyze/strategy: a library
+// machine by name (?machine=) or a custom machine serialized into the
+// machine_json multipart form field.
+export interface MachineOpts {
+  machineName?: string;
+  machineJson?: string;
+}
+
+export interface StockBlock {
+  mode: string;
+  preset: string;
+  allowance_mm: number;
+  size_mm: { length: number; width: number; height: number };
+}
+
 export interface ToolInfo {
   tool_number: number;
   tool_name: string;
@@ -80,12 +120,17 @@ export interface AnalyzeResult {
   candidates: Candidate[];
   candidate_count: number;
   dfm: DfmScore;
+  // % of surface area not tied to blocked features (null = no face areas)
+  machinable_surface_pct?: number | null;
+  // Automatic stock sizing block (part envelope + per-side allowance)
+  stock?: StockBlock;
   hole_groups?: HoleGroup[];
   setups?: SetupInfo[];
   is_multibody: boolean;
   mesh: Mesh | null;
   material: string;
-  machine: string;
+  // Resolved machine name — null when the engine default has no name
+  machine?: string | null;
 }
 
 export interface WeldmentGroup {
@@ -147,15 +192,22 @@ export interface StrategyResult {
   setups: { setup_label: string; ops: StrategyOp[]; subtotal_min: number }[];
   totals: { total_machine_time_min: number; cutting_time_min: number; num_operations: number };
   material?: string;
+  machine?: string | null;
   // Set when the plan was scoped to one solid via ?body_index=
   scoped_body_index?: number | null;
   scoped_candidate_count?: number | null;
 }
 
-async function postFile<T>(path: string, file: File, query?: Record<string, string>): Promise<T> {
+async function postFile<T>(
+  path: string,
+  file: File,
+  query?: Record<string, string>,
+  formFields?: Record<string, string>,
+): Promise<T> {
   const form = new FormData();
   form.append("file", file);
-  const qs = query ? `?${new URLSearchParams(query).toString()}` : "";
+  for (const [k, v] of Object.entries(formFields ?? {})) form.append(k, v);
+  const qs = query && Object.keys(query).length ? `?${new URLSearchParams(query).toString()}` : "";
   const res = await fetch(`${BASE}${path}${qs}`, { method: "POST", body: form });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
@@ -183,18 +235,30 @@ async function sampleFile(name: string): Promise<File> {
 export const api = {
   health: () => fetch(`${BASE}/api/health`).then((r) => r.json()),
   materials: () => getJson<{ materials: Material[] }>("/api/materials"),
+  machines: () => getJson<{ machines: MachineInfo[] }>("/api/machines"),
   tools: () => getJson<{ tools: ToolInfo[] }>("/api/tools"),
-  analyze: (file: File, material?: string) =>
-    postFile<AnalyzeResult>("/api/analyze", file, material ? { material } : undefined),
+  analyze: (file: File, material?: string, machine?: MachineOpts) => {
+    const query: Record<string, string> = {};
+    if (material) query.material = material;
+    if (machine?.machineName) query.machine = machine.machineName;
+    return postFile<AnalyzeResult>(
+      "/api/analyze",
+      file,
+      query,
+      machine?.machineJson ? { machine_json: machine.machineJson } : undefined,
+    );
+  },
   weldment: (file: File) => postFile<WeldmentResult>("/api/weldment", file),
-  strategy: (file: File, material?: string, bodyIndex?: number) => {
+  strategy: (file: File, material?: string, bodyIndex?: number, machine?: MachineOpts) => {
     const query: Record<string, string> = {};
     if (material) query.material = material;
     if (bodyIndex !== undefined) query.body_index = String(bodyIndex);
+    if (machine?.machineName) query.machine = machine.machineName;
     return postFile<StrategyResult>(
       "/api/strategy",
       file,
-      Object.keys(query).length ? query : undefined,
+      query,
+      machine?.machineJson ? { machine_json: machine.machineJson } : undefined,
     );
   },
   sampleFile,
