@@ -148,6 +148,14 @@ export interface AnalyzeResult {
   dfm: DfmScore;
   // % of surface area not tied to blocked features (null = no face areas)
   machinable_surface_pct?: number | null;
+  // Present on multibody parts when the validated per-body surface walk
+  // succeeded (replaces the billet-path blocked-feature formula).
+  machinable_surface_detail?: {
+    pct: number;
+    method: string;
+    exclusions: string[];
+    per_body: { body_index: number; pct: number }[];
+  } | null;
   // Automatic stock sizing block (part envelope + per-side allowance)
   stock?: StockBlock;
   hole_groups?: HoleGroup[];
@@ -204,6 +212,9 @@ export interface HoleGeometry {
   countersink: boolean | null;
   axis_dir: number[] | null;
   entry_dir: number[] | null;
+  // Likely metric tap inferred from the pilot diameter (e.g. "M5");
+  // an inference, not detected thread data.
+  thread_likely?: string | null;
 }
 
 export interface SlotGeometry {
@@ -229,12 +240,14 @@ export interface Workholding {
 }
 
 // Hole census for the strategy header chip. threaded stays 0 until
-// thread detection ships.
+// thread detection ships; likely_* are tap-drill-table inferences.
 export interface HoleStats {
   total: number;
   threaded: number;
   through: number;
   blind: number;
+  likely_threaded?: number;
+  likely_taps?: string[];
 }
 
 // Validated typed feature counts for one body (scoped strategy plans and

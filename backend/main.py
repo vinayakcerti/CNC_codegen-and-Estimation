@@ -109,6 +109,105 @@ def _machinable_surface_pct(candidates, dfm, face_areas) -> float | None:
     return round(max(0.0, min(100.0, 100.0 * (1 - blocked_area / total))), 1)
 
 
+_MIN_DRILL_DIA = 3.0    # smallest drill in the extended library
+_MIN_SLOT_WIDTH = 4.0   # smallest endmill that can enter a slot
+
+
+def _validated_msa(file_bytes: bytes) -> dict | None:
+    """Assembly-level machinable-surface % from VALIDATED per-body geometry.
+
+    The billet-path formula punishes weldments for phantom blocked features
+    (SLIDE BASE read 42.8%). This walks every solid once and classifies each
+    face: planar/cone/torus and classifier-typed hole/slot faces are
+    3-axis-machinable; hole faces under the minimum drill, slot faces under
+    the minimum endmill, and freeform (BSPLINE etc.) faces are excluded and
+    listed. Returns {"pct", "method", "exclusions", "per_body"} or None.
+    """
+    tmp_path = None
+    try:
+        import cadquery as cq
+        from modules.weldment.slot_hole_classifier import classify_cylindrical_faces
+        with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        solids = cq.importers.importStep(tmp_path).val().Solids()
+        total_area = 0.0
+        blocked_area = 0.0
+        exclusions: list = []
+        per_body: list = []
+        for bi, solid in enumerate(solids):
+            faces = solid.Faces()
+            bb = solid.BoundingBox()
+            cls = classify_cylindrical_faces(faces, bbox={
+                "xmin": bb.xmin, "xmax": bb.xmax, "ymin": bb.ymin,
+                "ymax": bb.ymax, "zmin": bb.zmin, "zmax": bb.zmax,
+            })
+            cats = cls.get("face_categories", {}) if cls.get("available") else {}
+            b_total = b_blocked = 0.0
+            b_notes: list = []
+            for fi, face in enumerate(faces):
+                try:
+                    area = face.Area()
+                except Exception:
+                    continue
+                b_total += area
+                try:
+                    gt = face.geomType()
+                except Exception:
+                    gt = "OTHER"
+                if gt in ("PLANE", "CONE", "TORUS"):
+                    continue  # machinable by facing/drill-tip/fillet tooling
+                if gt == "CYLINDER":
+                    cat = cats.get(fi)
+                    try:
+                        from modules.weldment.slot_hole_classifier import _cyl_data
+                        rad = (_cyl_data(face) or {}).get("radius") or 0.0
+                    except Exception:
+                        rad = 0.0
+                    dia = 2.0 * rad
+                    if cat == "hole" and 0 < dia < _MIN_DRILL_DIA:
+                        b_blocked += area
+                        b_notes.append(f"Ø{dia:.1f} hole below Ø{_MIN_DRILL_DIA:g} min drill")
+                    elif cat == "slot" and 0 < dia < _MIN_SLOT_WIDTH:
+                        b_blocked += area
+                        b_notes.append(f"{dia:.1f} mm slot below {_MIN_SLOT_WIDTH:g} mm min endmill")
+                    continue  # typed or large cylinders are machinable
+                # Freeform and everything else: excluded from 3-axis MSA
+                b_blocked += area
+                b_notes.append(f"{gt.lower()} face")
+            total_area += b_total
+            blocked_area += b_blocked
+            if b_total > 0:
+                per_body.append({
+                    "body_index": bi,
+                    "pct": round(100.0 * (1 - b_blocked / b_total), 1),
+                })
+            if b_notes:
+                from collections import Counter
+                counted = Counter(b_notes)
+                exclusions.append(
+                    f"Body {bi + 1}: "
+                    + ", ".join(f"{n}× {k}" if n > 1 else k
+                                for k, n in counted.most_common(4))
+                )
+        if total_area <= 0:
+            return None
+        return {
+            "pct": round(100.0 * (1 - blocked_area / total_area), 1),
+            "method": "validated_classifier",
+            "exclusions": exclusions[:12],
+            "per_body": per_body,
+        }
+    except Exception:
+        return None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 def _body_bbox(file_bytes: bytes, body_index: int, classify: bool = False):
     """Bounding box of one solid (cheap, no tessellation). With classify=True
     also returns the exact cylinder classification (holes/slots) for it."""
@@ -137,6 +236,27 @@ def _body_bbox(file_bytes: bytes, body_index: int, classify: bool = False):
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+
+# ISO metric coarse tap-drill sizes. A hole whose pilot diameter sits on
+# one of these (±0.12 mm) is LIKELY a tapped hole — an inference, not
+# thread detection (STEP carries no thread data). Display-only for now.
+_TAP_DRILL = [
+    (2.5, "M3"), (3.3, "M4"), (4.2, "M5"), (5.0, "M6"), (6.8, "M8"),
+    (8.5, "M10"), (10.2, "M12"), (12.0, "M14"), (14.0, "M16"),
+    (15.5, "M18"), (17.5, "M20"),
+]
+
+
+def _thread_likely(diameter_mm, cbore_diameter_mm=None) -> str | None:
+    """Likely metric tap for a pilot diameter, or None. Counterbored holes
+    are fastener clearance holes, never tapped."""
+    if not diameter_mm or cbore_diameter_mm:
+        return None
+    for drill, tap in _TAP_DRILL:
+        if abs(diameter_mm - drill) <= 0.12:
+            return tap
+    return None
 
 
 def _setup_from_dir(direction, signed: bool = False) -> str:
@@ -197,6 +317,9 @@ def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
                 "countersink": h.get("countersink"),
                 "axis_dir": list(h.get("dir") or ()) or None,
                 "entry_dir": list(h.get("entry_dir") or ()) or None,
+                "thread_likely": _thread_likely(
+                    h["diameter_mm"], h.get("cbore_diameter_mm")
+                ),
             },
         })
     for i, s in enumerate(cls.get("slots", []), start=1):
@@ -534,6 +657,15 @@ async def analyze(
     msa_pct = _machinable_surface_pct(candidates, dfm, face_areas)
     solids = parse.get("solids_count") or 1
 
+    # Multibody parts: the billet-path MSA counts phantom blocked features
+    # on fabricated assemblies. Replace with the validated per-body surface
+    # walk; keep the billet number as fallback when the walk fails.
+    msa_detail = None
+    if solids > 1:
+        msa_detail = _validated_msa(data)
+        if msa_detail:
+            msa_pct = msa_detail["pct"]
+
     # Stock sizing: automatic preset = part envelope + per-side allowance
     _L = parse.get("length_mm") or 0
     _W = parse.get("width_mm") or 0
@@ -573,6 +705,7 @@ async def analyze(
         "candidate_count": len(candidates),
         "dfm": dfm,
         "machinable_surface_pct": msa_pct,
+        "machinable_surface_detail": msa_detail,
         "stock": stock_block,
         "hole_groups": _hole_groups(candidates),
         "setups": [
@@ -796,8 +929,15 @@ async def strategy(
         n_holes = sum(1 for f in exact_features if f.get("feature_type") == "Hole")
         n_thru = sum(1 for f in exact_features
                      if (f.get("_geometry") or {}).get("through"))
+        _likely = [
+            (f.get("_geometry") or {}).get("thread_likely")
+            for f in exact_features if f.get("feature_type") == "Hole"
+        ]
+        _likely = [t for t in _likely if t]
         hole_stats = {"total": n_holes, "threaded": 0,
-                      "through": n_thru, "blind": n_holes - n_thru}
+                      "through": n_thru, "blind": n_holes - n_thru,
+                      "likely_threaded": len(_likely),
+                      "likely_taps": sorted(set(_likely))}
         planned_names = {
             op.get("feature_name") for op in ops
             if not op.get("planning_blocked")

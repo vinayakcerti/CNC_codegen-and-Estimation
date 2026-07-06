@@ -366,6 +366,12 @@ function GeometrySection({ g }: { g: FeatureGeometry }) {
               <span className="v">{fmtNum(g.tip_angle_deg)}°</span>
             </div>
           )}
+          {g.thread_likely && (
+            <div className="op-panel-row" title="Inferred from the pilot diameter (tap-drill table) — not thread data from the CAD file">
+              <span className="k">Thread</span>
+              <span className="v">likely {g.thread_likely}</span>
+            </div>
+          )}
           {g.countersink && (
             <div className="op-panel-chips">
               <span className="chip">Countersink</span>
@@ -1654,9 +1660,17 @@ export default function App() {
                           <div className="metric-grid">
                             <div className="metric">
                               <div className="label">Features plannable</div>
-                              <div className="value">
+                              <div
+                                className="value"
+                                title={
+                                  analysis.is_multibody
+                                    ? "Whole-assembly grade from the raw detector — noisy on weldments. Scope to a body (Bodies list) for the validated per-body figure."
+                                    : "Share of detected features whose operations plan cleanly with the current tools + machine"
+                                }
+                              >
                                 <span className={`badge ${gradeClass(analysis.dfm.grade)}`}>
                                   {analysis.dfm.score_pct}% {analysis.dfm.grade}
+                                  {analysis.is_multibody ? " (assembly)" : ""}
                                 </span>
                               </div>
                             </div>
@@ -1666,7 +1680,18 @@ export default function App() {
                             </div>
                             <div className="metric">
                               <div className="label">Machinable surface</div>
-                              <div className="value">
+                              <div
+                                className="value"
+                                title={
+                                  analysis.machinable_surface_detail
+                                    ? "Validated per-body surface walk" +
+                                      (analysis.machinable_surface_detail.exclusions.length
+                                        ? "\nExcluded:\n" +
+                                          analysis.machinable_surface_detail.exclusions.join("\n")
+                                        : " — no exclusions")
+                                    : "Face-area share of features whose planning is blocked"
+                                }
+                              >
                                 {analysis.machinable_surface_pct != null ? (
                                   <span className={`badge ${msaClass(analysis.machinable_surface_pct)}`}>
                                     {analysis.machinable_surface_pct}%
@@ -1832,6 +1857,8 @@ export default function App() {
                                       title="Hole census from validated geometry — threaded stays 0 until thread detection ships"
                                     >
                                       {stratForView.hole_stats.threaded} of {stratForView.hole_stats.total} holes threaded
+                                      {(stratForView.hole_stats.likely_threaded ?? 0) > 0 &&
+                                        ` (${stratForView.hole_stats.likely_threaded} likely ${(stratForView.hole_stats.likely_taps ?? []).join("/")})`}
                                     </span>
                                     <span className="chip-sub">
                                       {stratForView.hole_stats.through} thru · {stratForView.hole_stats.blind} blind
