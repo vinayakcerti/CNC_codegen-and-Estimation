@@ -139,7 +139,7 @@ def classify_cylindrical_faces(faces: list, bbox: dict | None = None) -> dict:
     """
     if not _OCC_OK:
         return {"face_categories": {}, "hole_count": 0, "slot_count": 0,
-                "slots": [], "available": False}
+                "slots": [], "holes": [], "available": False}
 
     # 1. Collect cylindrical faces with exact geometry
     cyl = {}
@@ -161,7 +161,7 @@ def classify_cylindrical_faces(faces: list, bbox: dict | None = None) -> dict:
 
     if not cyl:
         return {"face_categories": {}, "hole_count": 0, "slot_count": 0,
-                "slots": [], "available": True}
+                "slots": [], "holes": [], "available": True}
 
     # 2. Group faces that lie on the SAME axis line with the same radius —
     #    a bore split into halves by a CAD seam is still one hole.
@@ -256,8 +256,14 @@ def classify_cylindrical_faces(faces: list, bbox: dict | None = None) -> dict:
         used.add(i)
         used.add(j)
         r = cap_groups[i]["radius"]
+        _mid = tuple(
+            (cap_groups[i]["loc"][k] + cap_groups[j]["loc"][k]) / 2 for k in range(3)
+        )
         slots.append({"length_mm": round(dist + 2 * r, 2),
-                      "width_mm": round(2 * r, 2), "open": False})
+                      "width_mm": round(2 * r, 2), "open": False,
+                      "x": round(_mid[0], 2), "y": round(_mid[1], 2),
+                      "z": round(_mid[2], 2),
+                      "depth_mm": round(max(cap_groups[i]["span"], cap_groups[j]["span"]), 2)})
         for fi in cap_groups[i]["members"] + cap_groups[j]["members"]:
             face_categories[fi] = "slot"
 
@@ -277,7 +283,10 @@ def classify_cylindrical_faces(faces: list, bbox: dict | None = None) -> dict:
                 used.add(i)
                 r = g["radius"]
                 slots.append({"length_mm": round(t + r, 2),
-                              "width_mm": round(2 * r, 2), "open": True})
+                              "width_mm": round(2 * r, 2), "open": True,
+                              "x": round(g["loc"][0], 2), "y": round(g["loc"][1], 2),
+                              "z": round(g["loc"][2], 2),
+                              "depth_mm": round(g["span"], 2)})
                 for fi in g["members"]:
                     face_categories[fi] = "slot"
 
@@ -293,23 +302,47 @@ def classify_cylindrical_faces(faces: list, bbox: dict | None = None) -> dict:
 
     # Count DISTINCT hole positions: merge groups on the same axis line even
     # when radii differ — a counterbored/countersunk hole is one hole, not two.
+    # Each axis line carries drilling data: largest radius (counterbore OD),
+    # smallest radius (through/pilot dia), max axial span (depth) and axis dir.
     axis_lines = []
     for g in hole_like:
-        merged = False
+        merged = None
         for al in axis_lines:
             dot = abs(g["dir"][0] * al["dir"][0] + g["dir"][1] * al["dir"][1]
                       + g["dir"][2] * al["dir"][2])
             if dot >= _AXIS_PARALLEL_DOT and _perp_axis_distance(al, g) <= _SAME_AXIS_DIST_MM:
-                merged = True
+                merged = al
                 break
-        if not merged:
-            axis_lines.append(g)
+        if merged is None:
+            axis_lines.append({
+                "loc": g["loc"], "dir": g["dir"],
+                "radii": [g["radius"]], "span": g["span"],
+            })
+        else:
+            merged["radii"].append(g["radius"])
+            merged["span"] = max(merged["span"], g["span"])
     leftover_axes = len(axis_lines)
+    holes_detail = [
+        {
+            "x": round(al["loc"][0], 2), "y": round(al["loc"][1], 2),
+            "z": round(al["loc"][2], 2),
+            "dir": tuple(round(v, 4) for v in al["dir"]),
+            "diameter_mm": round(2 * min(al["radii"]), 2),
+            "cbore_diameter_mm": (
+                round(2 * max(al["radii"]), 2) if len(set(
+                    round(r, 2) for r in al["radii"]
+                )) > 1 else None
+            ),
+            "depth_mm": round(al["span"], 2),
+        }
+        for al in axis_lines
+    ]
 
     return {
         "face_categories": face_categories,
         "hole_count": leftover_axes,
         "slot_count": len(slots),
         "slots": slots,
+        "holes": holes_detail,
         "available": True,
     }

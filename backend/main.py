@@ -109,28 +109,105 @@ def _machinable_surface_pct(candidates, dfm, face_areas) -> float | None:
     return round(max(0.0, min(100.0, 100.0 * (1 - blocked_area / total))), 1)
 
 
-def _body_bbox(file_bytes: bytes, body_index: int) -> dict | None:
-    """Bounding box of one solid — cheap pass, no tessellation."""
+def _body_bbox(file_bytes: bytes, body_index: int, classify: bool = False):
+    """Bounding box of one solid (cheap, no tessellation). With classify=True
+    also returns the exact cylinder classification (holes/slots) for it."""
     tmp_path = None
     try:
         import cadquery as cq
+        from modules.weldment.slot_hole_classifier import classify_cylindrical_faces
         with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
             tmp.write(file_bytes)
             tmp_path = tmp.name
         solids = cq.importers.importStep(tmp_path).val().Solids()
         if body_index < 0 or body_index >= len(solids):
-            return None
+            return (None, None) if classify else None
         bb = solids[body_index].BoundingBox()
-        return {"xmin": bb.xmin, "xmax": bb.xmax, "ymin": bb.ymin,
+        bbox = {"xmin": bb.xmin, "xmax": bb.xmax, "ymin": bb.ymin,
                 "ymax": bb.ymax, "zmin": bb.zmin, "zmax": bb.zmax}
+        if not classify:
+            return bbox
+        cls = classify_cylindrical_faces(solids[body_index].Faces(), bbox=bbox)
+        return bbox, cls
     except Exception:
-        return None
+        return (None, None) if classify else None
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+
+_DIR_SETUP = [((0, 0, 1), "Top"), ((0, 1, 0), "Front"), ((1, 0, 0), "Right")]
+
+
+def _setup_from_dir(direction) -> str:
+    """Map a hole/slot axis direction to a face-setup label (abs dominant)."""
+    ax = [abs(direction[0]), abs(direction[1]), abs(direction[2])]
+    k = ax.index(max(ax))
+    return ["Right", "Front", "Top"][k]
+
+
+def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
+    """Feature list for planning built from VALIDATED cylinder geometry.
+
+    The billet-path detector on fabricated assemblies emits many phantom
+    slots and misses seam-split holes (audited on SLIDE BASE body 28:
+    42 slot candidates of which 40 false, 2 of 22 holes found). Holes and
+    slots therefore come from the exact classifier; billet candidates are
+    kept only for feature types the classifier does not cover (facing,
+    pockets, steps, chamfers, edge milling).
+    """
+    features = []
+    for i, h in enumerate(cls.get("holes", []), start=1):
+        name = f"Hole Ø{h['diameter_mm']:.2f} mm #{i}"
+        if h.get("cbore_diameter_mm"):
+            name = (
+                f"Hole Ø{h['diameter_mm']:.2f} mm "
+                f"(cbore Ø{h['cbore_diameter_mm']:.2f}) #{i}"
+            )
+        features.append({
+            "feature_type": "Hole",
+            "feature_name": name,
+            "diameter": h["diameter_mm"],
+            "length": 0, "width": 0,
+            "depth": h["depth_mm"],
+            "x_pos": h["x"], "y_pos": h["y"],
+            "setup_label": _setup_from_dir(h.get("dir", (0, 0, 1))),
+            "_exact": {"x": h["x"], "y": h["y"], "z": h["z"]},
+        })
+    for i, s in enumerate(cls.get("slots", []), start=1):
+        features.append({
+            "feature_type": "Slot",
+            "feature_name": (
+                f"Slot {s['length_mm']:.2f}×{s['width_mm']:.2f} mm"
+                f"{' (open)' if s.get('open') else ''} #{i}"
+            ),
+            "diameter": 0,
+            "length": s["length_mm"], "width": s["width_mm"],
+            "depth": s.get("depth_mm") or 0,
+            "x_pos": s.get("x", 0), "y_pos": s.get("y", 0),
+            "setup_label": "Top",
+            "_exact": {"x": s.get("x"), "y": s.get("y"), "z": s.get("z")},
+        })
+    _cyl_types = {"slot", "hole", "large hole / boring"}
+    for c in scoped_candidates:
+        if (c.get("feature_type") or "").lower() in _cyl_types:
+            continue
+        features.append({
+            "feature_type": c.get("feature_type", ""),
+            "feature_name": c.get("feature_name") or "Feature",
+            "diameter": c.get("diameter") or 0,
+            "length": c.get("length") or 0,
+            "width": c.get("width") or 0,
+            "depth": c.get("depth") or 0,
+            "x_pos": c.get("x_pos", 0) or 0,
+            "y_pos": c.get("y_pos", 0) or 0,
+            "setup_label": c.get("setup") or c.get("setup_label") or "Top",
+            "_candidate": c,
+        })
+    return features
 
 
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -547,42 +624,69 @@ async def strategy(
         candidates = _group_candidates_for_planning(candidates)
 
     scoped_to = None
+    feature_source = "billet_candidates"
+    exact_features: list | None = None
     if body_index is not None:
-        bbox = _body_bbox(data, body_index)
+        bbox, body_cls = _body_bbox(data, body_index, classify=True)
         if bbox is None:
             raise HTTPException(status_code=400, detail=f"Body {body_index + 1} not found.")
         candidates = filter_candidates_to_body(candidates, {"bbox": bbox})
         scoped_to = body_index
+        # Holes/slots from VALIDATED cylinder geometry (audited: the billet
+        # detector on weldments plans phantom slots and misses seam-split
+        # holes). basis=raw keeps the old path for comparison.
+        if basis == "grouped" and body_cls and body_cls.get("available"):
+            exact_features = _exact_body_features(body_cls, candidates)
+            feature_source = "exact_classifier"
+
     features = []
     geo_by_name: dict = {}
-    for i, c in enumerate(candidates):
-        name = c.get("feature_name") or f"Feature {i + 1}"
-        features.append({
-            "feature_type": c.get("feature_type", ""),
-            "feature_name": name,
-            "diameter": c.get("diameter") or 0,
-            "length": c.get("length") or 0,
-            "width": c.get("width") or 0,
-            "depth": c.get("depth") or 0,
-            "x_pos": c.get("x_pos", 0) or 0,
-            "y_pos": c.get("y_pos", 0) or 0,
-            "setup_label": c.get("setup") or c.get("setup_label") or "Top",
-        })
-        # Raw-CAD-frame geometry for 3D highlighting (same frame as the mesh).
-        cad = c.get("cad_position") or {}
-        geo_by_name[name] = {
-            "x": cad.get("x", c.get("x_pos")),
-            "y": cad.get("y", c.get("y_pos")),
-            "z": cad.get("z"),
-            "diameter": c.get("diameter") or 0,
-            "length": c.get("length") or 0,
-            "width": c.get("width") or 0,
-            "depth": c.get("depth") or 0,
-            "feature_type": c.get("feature_type", ""),
-            # Lets the UI look up the candidate's exact face meshes
-            # (analyze response carries face_mesh_data per candidate).
-            "candidate_id": c.get("candidate_id"),
-        }
+    if exact_features is not None:
+        for f in exact_features:
+            features.append({k: v for k, v in f.items() if not k.startswith("_")})
+            ex = f.get("_exact") or {}
+            cand = f.get("_candidate") or {}
+            cad = cand.get("cad_position") or {}
+            geo_by_name[f["feature_name"]] = {
+                "x": ex.get("x", cad.get("x", f.get("x_pos"))),
+                "y": ex.get("y", cad.get("y", f.get("y_pos"))),
+                "z": ex.get("z", cad.get("z")),
+                "diameter": f.get("diameter") or 0,
+                "length": f.get("length") or 0,
+                "width": f.get("width") or 0,
+                "depth": f.get("depth") or 0,
+                "feature_type": f.get("feature_type", ""),
+                "candidate_id": cand.get("candidate_id"),
+            }
+    else:
+        for i, c in enumerate(candidates):
+            name = c.get("feature_name") or f"Feature {i + 1}"
+            features.append({
+                "feature_type": c.get("feature_type", ""),
+                "feature_name": name,
+                "diameter": c.get("diameter") or 0,
+                "length": c.get("length") or 0,
+                "width": c.get("width") or 0,
+                "depth": c.get("depth") or 0,
+                "x_pos": c.get("x_pos", 0) or 0,
+                "y_pos": c.get("y_pos", 0) or 0,
+                "setup_label": c.get("setup") or c.get("setup_label") or "Top",
+            })
+            # Raw-CAD-frame geometry for 3D highlighting (same frame as the mesh).
+            cad = c.get("cad_position") or {}
+            geo_by_name[name] = {
+                "x": cad.get("x", c.get("x_pos")),
+                "y": cad.get("y", c.get("y_pos")),
+                "z": cad.get("z"),
+                "diameter": c.get("diameter") or 0,
+                "length": c.get("length") or 0,
+                "width": c.get("width") or 0,
+                "depth": c.get("depth") or 0,
+                "feature_type": c.get("feature_type", ""),
+                # Lets the UI look up the candidate's exact face meshes
+                # (analyze response carries face_mesh_data per candidate).
+                "candidate_id": c.get("candidate_id"),
+            }
     ops = plan_operations(features, tools, mat, mach)
     per_op = estimate_time_per_operation(ops, mach, mat)
     totals = estimate_time(ops, mach, mat, features)
@@ -618,7 +722,8 @@ async def strategy(
         "material": mat.get("name"),
         "machine": mach.get("name"),
         "basis": basis,
-        "planned_candidate_count": len(candidates),
+        "feature_source": feature_source,
+        "planned_candidate_count": len(features),
         "scoped_body_index": scoped_to,
-        "scoped_candidate_count": len(candidates) if scoped_to is not None else None,
+        "scoped_candidate_count": len(features) if scoped_to is not None else None,
     }
