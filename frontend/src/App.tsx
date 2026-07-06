@@ -3,6 +3,7 @@ import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import { api, SAMPLE_NAME } from "./api";
 import type { AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo, WeldmentResult, WeldmentGroup } from "./api";
 import { PartViewer } from "./PartViewer";
+import type { Vec3, Approach } from "./PartViewer";
 import { MaterialSelect } from "./MaterialSelect";
 import { BottomPanel } from "./BottomPanel";
 import { lsGet, lsSet } from "./storage";
@@ -13,6 +14,19 @@ type Theme = "dark" | "light";
 const INSPECTOR_MIN = 200;
 const INSPECTOR_MAX = 560;
 const INSPECTOR_DEFAULT = 320;
+
+// Setup label → direction from part center to the camera (raw-CAD frame,
+// Z-up parts). Also the outward normal of the setup's stock face.
+const SETUP_DIRS: Record<string, Vec3> = {
+  top: [0, 0, 1],
+  bottom: [0, 0, -1],
+  front: [0, -1, 0],
+  back: [0, 1, 0],
+  left: [-1, 0, 0],
+  right: [1, 0, 0],
+};
+// Unknown setup labels fall back to a front-right-top isometric view.
+const ISO_DIR: Vec3 = [0.577, -0.577, 0.577];
 
 function gradeClass(grade: string) {
   if (grade === "A") return "green";
@@ -57,7 +71,8 @@ function scopeLabel(g: WeldmentGroup) {
 interface OpRollup {
   key: string;
   operation: string;
-  tool: string;
+  tool: string; // raw engine tool name — grouping key
+  toolDisplay: string; // catalog-style name for display ("6mm Drill 135°")
   ops: StrategyOp[];
   totalMin: number;
 }
@@ -74,6 +89,7 @@ function buildRollups(setupLabel: string, ops: StrategyOp[]): OpRollup[] {
         key: `${setupLabel}:${out.length}`,
         operation: op.operation,
         tool: op.tool,
+        toolDisplay: op.tool_display || op.tool,
         ops: [op],
         totalMin: op.cut_min,
       });
@@ -126,6 +142,99 @@ export default function App() {
     [wmResult, selectedGroupId],
   );
 
+  // ---- Body-scoped strategy (lazy, cached per body_index+material) ----
+  const [scopedStrategy, setScopedStrategy] = useState<StrategyResult | null>(null);
+  const [scopedLoading, setScopedLoading] = useState(false);
+  const [scopedError, setScopedError] = useState<string | null>(null);
+  const [scopedRetryNonce, setScopedRetryNonce] = useState(0);
+  const scopedCacheRef = useRef<Map<string, StrategyResult>>(new Map());
+  const scopedReqRef = useRef(0); // bumps on every effect run — invalidates stale fetches
+
+  // Representative body of the group — the splitter's first body, whose
+  // mesh is also what the isolated 3D view shows.
+  const scopedBodyIndex = selectedGroup ? selectedGroup.body_indices[0] : null;
+
+  useEffect(() => {
+    const token = ++scopedReqRef.current;
+    if (tab !== "strategy" || scopedBodyIndex == null || !partFile) return;
+    const key = `${scopedBodyIndex}:${material}`;
+    const cached = scopedCacheRef.current.get(key);
+    if (cached) {
+      setScopedStrategy(cached);
+      setScopedLoading(false);
+      setScopedError(null);
+      return;
+    }
+    setScopedLoading(true);
+    setScopedError(null);
+    api
+      .strategy(partFile, material || undefined, scopedBodyIndex)
+      .then((r) => {
+        if (scopedReqRef.current !== token) return;
+        scopedCacheRef.current.set(key, r);
+        setScopedStrategy(r);
+        setScopedLoading(false);
+      })
+      .catch((err) => {
+        if (scopedReqRef.current !== token) return;
+        setScopedError(err instanceof Error ? err.message : "Scoped strategy failed");
+        setScopedLoading(false);
+      });
+  }, [tab, scopedBodyIndex, material, partFile, scopedRetryNonce]);
+
+  // Strategy shown on the Strategy tab: scoped plan when a body scope is
+  // active (guarded against stale responses), whole-assembly otherwise.
+  const stratForView = selectedGroup
+    ? scopedStrategy && scopedStrategy.scoped_body_index === scopedBodyIndex
+      ? scopedStrategy
+      : null
+    : strategy;
+
+  // ---- Setup orientation (Overview → Setups click) ----
+  const [activeSetup, setActiveSetup] = useState<string | null>(null);
+
+  // Full-assembly mesh bounding box (raw-CAD frame) for face centers.
+  const meshBounds = useMemo(() => {
+    const m = analysis?.mesh;
+    if (!m || !m.x.length) return null;
+    const mins = [Infinity, Infinity, Infinity];
+    const maxs = [-Infinity, -Infinity, -Infinity];
+    const axes = [m.x, m.y, m.z];
+    for (let a = 0; a < 3; a++) {
+      const arr = axes[a];
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (!Number.isFinite(v)) continue;
+        if (v < mins[a]) mins[a] = v;
+        if (v > maxs[a]) maxs[a] = v;
+      }
+    }
+    if (![...mins, ...maxs].every(Number.isFinite)) return null;
+    return { mins, maxs };
+  }, [analysis]);
+
+  // Camera direction + approach cone for the active setup. Unknown labels
+  // get an isometric view and no cone (no face to point at).
+  const setupView = useMemo((): { dir: Vec3 | null; approach: Approach | null } => {
+    if (!activeSetup) return { dir: null, approach: null };
+    const d = SETUP_DIRS[activeSetup.trim().toLowerCase()];
+    if (!d) return { dir: ISO_DIR, approach: null };
+    if (!meshBounds) return { dir: d, approach: null };
+    const { mins, maxs } = meshBounds;
+    const mid = (a: number) => (mins[a] + maxs[a]) / 2;
+    // Center of the bbox face the tool enters through.
+    const origin: Vec3 = [
+      d[0] !== 0 ? (d[0] > 0 ? maxs[0] : mins[0]) : mid(0),
+      d[1] !== 0 ? (d[1] > 0 ? maxs[1] : mins[1]) : mid(1),
+      d[2] !== 0 ? (d[2] > 0 ? maxs[2] : mins[2]) : mid(2),
+    ];
+    // Tool direction = into the part = opposite the face normal.
+    return { dir: d, approach: { origin, dir: [-d[0], -d[1], -d[2]] as Vec3 } };
+  }, [activeSetup, meshBounds]);
+
+  // ---- Thread status per hole diameter (session-only UI state) ----
+  const [threadByDia, setThreadByDia] = useState<Record<string, string>>({});
+
   async function fetchWeldment(file: File) {
     setWmLoading(true);
     setWmError(null);
@@ -150,9 +259,15 @@ export default function App() {
 
   function selectScope(groupId: string | null) {
     setSelectedGroupId(groupId);
-    // Op highlights are assembly-space — they don't survive a scope change.
+    // Op highlights belong to the previous scope's plan — they don't
+    // survive a scope change. Neither do rollup expansions, the setup
+    // orientation, or the currently shown scoped plan.
     setSelOp(null);
     setHighlight(null);
+    setExpanded({});
+    setActiveSetup(null);
+    setScopedStrategy(null);
+    setScopedError(null);
   }
 
   const [theme, setTheme] = useState<Theme>(() => (lsGet("cnc.theme") === "light" ? "light" : "dark"));
@@ -225,12 +340,17 @@ export default function App() {
     setView("part");
     setPartFile(file);
     setSelectedGroupId(null); // scope resets on any new analysis
+    setScopedStrategy(null);
+    setScopedError(null);
+    setActiveSetup(null);
     if (wmFileRef.current !== file) {
-      // Different part — drop the cached weldment breakdown.
+      // Different part — drop the cached weldment breakdown and any
+      // body-scoped strategy plans (body indices are per-file).
       wmFileRef.current = null;
       setWmResult(null);
       setWmError(null);
       setWmLoading(false);
+      scopedCacheRef.current.clear();
     }
     try {
       const a = await api.analyze(file, mat);
@@ -248,6 +368,7 @@ export default function App() {
       setSelOp(null);
       setHighlight(null);
       setExpanded({});
+      setThreadByDia({}); // thread statuses are per-analysis session state
     } catch (err) {
       setError(err instanceof Error ? err.message : "Analysis failed");
     } finally {
@@ -278,15 +399,16 @@ export default function App() {
     }
   }
 
+  // Rollups for whichever plan the Strategy tab is showing (scoped or whole).
   const rollupsBySetup = useMemo(
     () =>
-      (strategy?.setups ?? []).map((su) => ({
+      (stratForView?.setups ?? []).map((su) => ({
         label: su.setup_label,
         opCount: su.ops.length,
         subtotal: su.subtotal_min,
         rollups: buildRollups(su.setup_label, su.ops),
       })),
-    [strategy],
+    [stratForView],
   );
 
   function toggleRollup(key: string) {
@@ -369,7 +491,7 @@ export default function App() {
         <span className="seq">{op.op_num}</span>
         <div className="main">
           <div>{child ? op.feature || op.operation : op.operation}</div>
-          {!child && <div className="tool">{op.tool}</div>}
+          {!child && <div className="tool">{op.tool_display || op.tool}</div>}
         </div>
         <span className="t">{op.cut_min.toFixed(1)}m</span>
       </div>
@@ -527,9 +649,15 @@ export default function App() {
                   // isolated body (PartViewer itself needs no changes).
                   key={selectedGroupId ?? "assembly"}
                   mesh={selectedGroup ? selectedGroup.mesh : analysis.mesh}
-                  // Op markers are assembly-space — only valid in full-assembly scope.
-                  highlight={selectedGroup ? null : highlight}
+                  // Highlights always come from the plan currently on screen —
+                  // scoped plans emit raw-CAD geo, the same frame as body meshes,
+                  // so markers land correctly on the isolated body too.
+                  highlight={highlight}
                   theme={theme}
+                  // Setup orientation applies to the whole-assembly view only
+                  // (the Setups list is a whole-assembly analysis).
+                  cameraDir={selectedGroup ? null : setupView.dir}
+                  approach={selectedGroup ? null : setupView.approach}
                 />
               )}
               {analysis && !loading && selectedGroup && !selectedGroup.mesh && (
@@ -668,7 +796,14 @@ export default function App() {
                               <>
                                 <div className="section-title">Setups</div>
                                 {(analysis.setups ?? []).map((s) => (
-                                  <div className="setup-row" key={s.label} title={s.reason}>
+                                  <div
+                                    className={`setup-row clickable ${activeSetup === s.label ? "sel" : ""}`}
+                                    key={s.label}
+                                    title={`${s.reason} — click to view from ${s.label}`}
+                                    onClick={() =>
+                                      setActiveSetup((cur) => (cur === s.label ? null : s.label))
+                                    }
+                                  >
                                     <div className="setup-line">
                                       <span className="k">{s.label}</span>
                                       <span className="v">{s.method}</span>
@@ -682,17 +817,31 @@ export default function App() {
                             {(analysis.hole_groups ?? []).length > 0 && (
                               <>
                                 <div className="section-title">Holes</div>
-                                {(analysis.hole_groups ?? []).map((g) => (
-                                  <div className="hole-row" key={g.diameter_mm}>
-                                    <span className="hole-main">
-                                      {g.count}× Ø{g.diameter_mm.toFixed(2)}mm
-                                    </span>
-                                    <span className="chip">No thread</span>
-                                    <span className="hole-setups" title={formatSetups(g.setups)}>
-                                      {formatSetups(g.setups)}
-                                    </span>
-                                  </div>
-                                ))}
+                                {(analysis.hole_groups ?? []).map((g) => {
+                                  const diaKey = g.diameter_mm.toFixed(2);
+                                  return (
+                                    <div className="hole-row" key={g.diameter_mm}>
+                                      <span className="hole-main">
+                                        {g.count}× Ø{g.diameter_mm.toFixed(2)}mm
+                                      </span>
+                                      <select
+                                        className="thread-select"
+                                        title="Thread status (session only)"
+                                        value={threadByDia[diaKey] ?? "none"}
+                                        onChange={(e) =>
+                                          setThreadByDia((t) => ({ ...t, [diaKey]: e.target.value }))
+                                        }
+                                      >
+                                        <option value="none">No Thread</option>
+                                        <option value="tapped">Tapped</option>
+                                        <option value="spec">Threaded (spec)</option>
+                                      </select>
+                                      <span className="hole-setups" title={formatSetups(g.setups)}>
+                                        {formatSetups(g.setups)}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
                               </>
                             )}
 
@@ -718,41 +867,70 @@ export default function App() {
                       </>
                     )}
 
-                    {tab === "strategy" && strategy && (
+                    {tab === "strategy" && (
                       <>
                         {selectedGroup && (
-                          <div className="scope-note">
-                            Strategy is whole-assembly; body-scoped planning coming.
+                          <div className="scope-head">
+                            Scoped to {scopeLabel(selectedGroup)}
+                            {stratForView
+                              ? `: ${stratForView.scoped_candidate_count ?? 0} candidates`
+                              : ""}
                           </div>
                         )}
-                        <div className="row" style={{ borderBottom: "none" }}>
-                          <span className="k">Total machine time</span>
-                          <span className="v">{strategy.totals.total_machine_time_min?.toFixed(0)} min</span>
-                        </div>
-                        {rollupsBySetup.map((su) => (
-                          <div key={su.label}>
-                            <div className="section-title">
-                              Setup · {su.label} — {su.opCount} ops · {su.subtotal.toFixed(1)} min
-                            </div>
-                            {su.rollups.map((r) => {
-                              if (r.ops.length === 1) return renderOpRow(su.label, r.ops[0], false);
-                              const isOpen = !!expanded[r.key];
-                              return (
-                                <div key={r.key}>
-                                  <div className="op-row rollup" onClick={() => toggleRollup(r.key)}>
-                                    <span className="seq">{isOpen ? "▾" : "▸"}</span>
-                                    <div className="main">
-                                      <div>{r.operation} ×{r.ops.length}</div>
-                                      <div className="tool">{r.tool}</div>
-                                    </div>
-                                    <span className="t">{r.totalMin.toFixed(1)}m</span>
-                                  </div>
-                                  {isOpen && r.ops.map((op) => renderOpRow(su.label, op, true))}
-                                </div>
-                              );
-                            })}
+                        {selectedGroup && !stratForView && scopedLoading && (
+                          <div style={{ fontSize: 12, color: "var(--text-2)", padding: "6px 0" }}>
+                            Planning scoped strategy…
                           </div>
-                        ))}
+                        )}
+                        {selectedGroup && !stratForView && !scopedLoading && scopedError && (
+                          <div className="row" style={{ borderBottom: "none" }}>
+                            <span className="k" style={{ color: "var(--red)" }}>{scopedError}</span>
+                            <button
+                              className="btn"
+                              style={{ padding: "3px 10px", fontSize: 11 }}
+                              onClick={() => setScopedRetryNonce((n) => n + 1)}
+                            >
+                              Retry
+                            </button>
+                          </div>
+                        )}
+                        {stratForView && (
+                          <>
+                            <div className="row" style={{ borderBottom: "none" }}>
+                              <span className="k">Total machine time</span>
+                              <span className="v">{stratForView.totals.total_machine_time_min?.toFixed(0)} min</span>
+                            </div>
+                            {rollupsBySetup.length === 0 && (
+                              <div style={{ fontSize: 12, color: "var(--text-2)", padding: "6px 0" }}>
+                                No machinable candidates in this scope
+                              </div>
+                            )}
+                            {rollupsBySetup.map((su) => (
+                              <div key={su.label}>
+                                <div className="section-title">
+                                  Setup · {su.label} — {su.opCount} ops · {su.subtotal.toFixed(1)} min
+                                </div>
+                                {su.rollups.map((r) => {
+                                  if (r.ops.length === 1) return renderOpRow(su.label, r.ops[0], false);
+                                  const isOpen = !!expanded[r.key];
+                                  return (
+                                    <div key={r.key}>
+                                      <div className="op-row rollup" onClick={() => toggleRollup(r.key)}>
+                                        <span className="seq">{isOpen ? "▾" : "▸"}</span>
+                                        <div className="main">
+                                          <div>{r.operation} ×{r.ops.length}</div>
+                                          <div className="tool">{r.toolDisplay}</div>
+                                        </div>
+                                        <span className="t">{r.totalMin.toFixed(1)}m</span>
+                                      </div>
+                                      {isOpen && r.ops.map((op) => renderOpRow(su.label, op, true))}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ))}
+                          </>
+                        )}
                       </>
                     )}
 
@@ -765,11 +943,20 @@ export default function App() {
                       const massKg = ((analysis.volumes_cm3.stock ?? 0) * density) / 1000;
                       const material_ = massKg * matPriceKg;
                       const setupsCost = strategy.setups.length * setupCharge;
-                      const subtotal = machining + material_ + setupsCost;
+                      const partTotal = material_ + machining; // block 1: material + machining
+                      const subtotal = partTotal + setupsCost;
                       const margin = subtotal * (marginPct / 100);
                       const total = subtotal + margin;
                       const inr = (v: number) =>
                         "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+                      const fmtMin = (min: number) => {
+                        const m = Math.round(min);
+                        return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min`;
+                      };
+                      const d = analysis.dimensions_mm;
+                      const stockDims = `${d.length} × ${d.width} × ${d.height} mm`;
+                      const materialLine =
+                        `${analysis.material} ${stockDims} — ${massKg.toFixed(1)} kg @ ₹${matPriceKg}/kg`;
                       return (
                         <>
                           {selectedGroup && (
@@ -807,38 +994,57 @@ export default function App() {
                             />
                           </div>
 
-                          <div className="section-title">Machining — {machineMin.toFixed(0)} min</div>
-                          {strategy.setups.map((su) => (
-                            <div className="row" key={su.setup_label}>
-                              <span className="k">Setup · {su.setup_label} ({su.subtotal_min.toFixed(0)}m)</span>
-                              <span className="v">{inr((su.subtotal_min / 60) * rateHr)}</span>
+                          <div className="section-title">Quote ledger</div>
+                          <div className="ledger">
+                            {/* Block 1 — the part: material + machining per setup */}
+                            <div className="ledger-row root">
+                              <span className="desc" title={analysis.filename}>{analysis.filename}</span>
+                              <span className="qty">qty 1</span>
+                              <span className="amt">{inr(partTotal)}</span>
                             </div>
-                          ))}
-                          <div className="row">
-                            <span className="k">Machine time total</span>
-                            <span className="v">{inr(machining)}</span>
-                          </div>
-
-                          <div className="section-title">Costs</div>
-                          <div className="row">
-                            <span className="k">Material (stock {massKg.toFixed(1)} kg)</span>
-                            <span className="v">{inr(material_)}</span>
-                          </div>
-                          <div className="row">
-                            <span className="k">Setup charges × {strategy.setups.length}</span>
-                            <span className="v">{inr(setupsCost)}</span>
-                          </div>
-                          <div className="row">
-                            <span className="k">Margin ({marginPct}%)</span>
-                            <span className="v">{inr(margin)}</span>
-                          </div>
-
-                          <div className="total-card">
-                            <div className="label">Grand total (per part)</div>
-                            <div className="big">{inr(total)}</div>
-                            <div className="sub">
-                              {machineMin.toFixed(0)} min machine time · {strategy.setups.length} setups
+                            <div className="ledger-row child">
+                              <span className="desc" title={materialLine}>{materialLine}</span>
+                              <span className="amt">{inr(material_)}</span>
                             </div>
+                            {strategy.setups.map((su) => {
+                              const line = `Setup · ${su.setup_label} — ${fmtMin(su.subtotal_min)} — ₹${rateHr}/hr`;
+                              return (
+                                <div className="ledger-row child" key={su.setup_label}>
+                                  <span className="desc" title={line}>{line}</span>
+                                  <span className="amt">{inr((su.subtotal_min / 60) * rateHr)}</span>
+                                </div>
+                              );
+                            })}
+
+                            {/* Block 2 — per-setup fixed charges */}
+                            <div className="ledger-row root">
+                              <span className="desc">Setup Charges</span>
+                              <span className="qty">× {strategy.setups.length}</span>
+                              <span className="amt">{inr(setupsCost)}</span>
+                            </div>
+                            {strategy.setups.map((su) => (
+                              <div className="ledger-row child" key={su.setup_label}>
+                                <span className="desc">Setup · {su.setup_label}</span>
+                                <span className="amt">{inr(setupCharge)}</span>
+                              </div>
+                            ))}
+
+                            {/* Footer */}
+                            <div className="ledger-row subtotal">
+                              <span className="desc">Subtotal</span>
+                              <span className="amt">{inr(subtotal)}</span>
+                            </div>
+                            <div className="ledger-row">
+                              <span className="desc">Margin ({marginPct}%)</span>
+                              <span className="amt">{inr(margin)}</span>
+                            </div>
+                            <div className="ledger-row grand">
+                              <span className="desc">Grand Total</span>
+                              <span className="amt">{inr(total)}</span>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 8 }}>
+                            {machineMin.toFixed(0)} min machine time · {strategy.setups.length} setups · per part
                           </div>
                         </>
                       );

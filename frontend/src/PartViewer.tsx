@@ -1,8 +1,15 @@
-import { useMemo } from "react";
-import { Canvas } from "@react-three/fiber";
+import { useEffect, useMemo } from "react";
+import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, Bounds, GizmoHelper, GizmoViewcube } from "@react-three/drei";
 import * as THREE from "three";
 import type { Mesh } from "./api";
+
+export type Vec3 = [number, number, number];
+
+export interface Approach {
+  origin: Vec3;
+  dir: Vec3;
+}
 
 export interface Highlight {
   x: number | null;
@@ -13,6 +20,66 @@ export interface Highlight {
   width: number;
   depth: number;
   feature_type: string;
+}
+
+// Orients the camera to look at `center` from direction `dir` whenever `dir`
+// changes. Works WITH OrbitControls (makeDefault) rather than against it:
+// the controls' target is moved too, so orbiting continues from the new view.
+function CameraRig({ dir, center, dist }: { dir: Vec3 | null; center: Vec3; dist: number }) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as unknown as {
+    target: THREE.Vector3;
+    update: () => void;
+  } | null;
+
+  useEffect(() => {
+    if (!dir) return;
+    const d = new THREE.Vector3(dir[0], dir[1], dir[2]);
+    if (d.lengthSq() < 1e-9) return;
+    d.normalize();
+    // Nudge off the exact camera-up pole (±Y) so OrbitControls' azimuth
+    // stays well-defined for the Front/Back views.
+    if (Math.abs(d.y) > 0.999) {
+      d.x += 0.02;
+      d.z += 0.02;
+      d.normalize();
+    }
+    const c = new THREE.Vector3(center[0], center[1], center[2]);
+    camera.position.copy(c).addScaledVector(d, dist);
+    camera.lookAt(c);
+    if (controls) {
+      controls.target.copy(c);
+      controls.update();
+    }
+  }, [dir, center, dist, camera, controls]);
+
+  return null;
+}
+
+// Toolpath-style approach cone: tip touches the setup's bbox face center,
+// body extends outward opposite the tool direction. Drawn through the part
+// (depthTest false) so it reads even when the face is occluded.
+function ApproachCone({ approach, partSize }: { approach: Approach; partSize: number }) {
+  const { pos, quat, len, rad } = useMemo(() => {
+    const d = new THREE.Vector3(approach.dir[0], approach.dir[1], approach.dir[2]);
+    if (d.lengthSq() < 1e-9) d.set(0, 0, -1);
+    d.normalize();
+    const len = Math.max(partSize * 0.12, 4);
+    const rad = len * 0.35;
+    // ConeGeometry's apex points +Y — rotate it onto the approach direction,
+    // then back the center off so the apex lands exactly on the face center.
+    const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+    const pos = new THREE.Vector3(approach.origin[0], approach.origin[1], approach.origin[2])
+      .addScaledVector(d, -len / 2);
+    return { pos, quat, len, rad };
+  }, [approach, partSize]);
+
+  return (
+    <mesh position={pos} quaternion={quat} renderOrder={12}>
+      <coneGeometry args={[rad, len, 24]} />
+      <meshBasicMaterial color="#e0a63b" transparent opacity={0.9} depthTest={false} depthWrite={false} />
+    </mesh>
+  );
 }
 
 function PartMesh({ mesh, dimmed, light }: { mesh: Mesh; dimmed: boolean; light: boolean }) {
@@ -102,24 +169,33 @@ export function PartViewer({
   mesh,
   highlight,
   theme = "dark",
+  cameraDir = null,
+  approach = null,
 }: {
   mesh: Mesh | null;
   highlight?: Highlight | null;
   theme?: "dark" | "light";
+  // Direction from part center to camera — set to re-orient the view (setup click)
+  cameraDir?: Vec3 | null;
+  // Tool-approach cone: origin on the part face, dir pointing into the part
+  approach?: Approach | null;
 }) {
   const light = theme === "light";
-  const { meshTopZ, partSize } = useMemo(() => {
-    if (!mesh || !mesh.z.length) return { meshTopZ: 0, partSize: 100 };
+  const { meshTopZ, partSize, center } = useMemo(() => {
+    const none = { meshTopZ: 0, partSize: 100, center: [0, 0, 0] as Vec3 };
+    if (!mesh || !mesh.z.length) return none;
     const finite = (a: number[]) => a.slice(0, 20000).filter(Number.isFinite);
     const zs = finite(mesh.z);
     const xs = finite(mesh.x);
     const ys = finite(mesh.y);
-    if (!zs.length) return { meshTopZ: 0, partSize: 100 };
+    if (!zs.length || !xs.length || !ys.length) return none;
     const span = (a: number[]) => Math.max(...a) - Math.min(...a);
+    const mid = (a: number[]) => (Math.max(...a) + Math.min(...a)) / 2;
     const size = Math.max(span(xs), span(ys), span(zs));
     return {
       meshTopZ: Math.max(...zs),
       partSize: Number.isFinite(size) && size > 0 ? size : 100,
+      center: [mid(xs), mid(ys), mid(zs)] as Vec3,
     };
   }, [mesh]);
 
@@ -138,6 +214,8 @@ export function PartViewer({
         </Bounds>
       )}
       {mesh && highlight && <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} />}
+      {mesh && approach && <ApproachCone approach={approach} partSize={partSize} />}
+      <CameraRig dir={cameraDir} center={center} dist={Math.max(partSize * 1.8, 50)} />
       <OrbitControls makeDefault enableDamping dampingFactor={0.12} />
       <GizmoHelper alignment="top-right" margin={[64, 64]}>
         <GizmoViewcube

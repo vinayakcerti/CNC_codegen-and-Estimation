@@ -193,6 +193,9 @@ body { background: var(--bg-0); color: var(--text-0); }
 
 /* ---- Overview: setups / holes / stock ---- */
 .setup-row { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.setup-row.clickable { cursor: pointer; }
+.setup-row.clickable:hover { background: var(--bg-2); }
+.setup-row.sel { background: var(--accent-bg); }
 .setup-line { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
 .setup-line .k { color: var(--text-1); flex-shrink: 0; }
 .setup-line .v { color: var(--text-0); text-align: right; }
@@ -211,6 +214,13 @@ body { background: var(--bg-0); color: var(--text-0); }
   font-size: 10px; padding: 2px 8px; border-radius: 10px; flex-shrink: 0;
   background: var(--bg-3); color: var(--text-1); white-space: nowrap;
 }
+.thread-select {
+  font-size: 11px; padding: 2px 4px; border-radius: 6px; flex-shrink: 0;
+  background: var(--bg-2); color: var(--text-0);
+  border: 1px solid var(--border); max-width: 122px; cursor: pointer;
+}
+.thread-select:hover { border-color: var(--border-strong); }
+.thread-select:focus { outline: none; border-color: var(--accent); }
 
 .stock-dims { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .stock-dim { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; font-size: 12px; color: var(--text-2); }
@@ -233,10 +243,16 @@ body { background: var(--bg-0); color: var(--text-0); }
 
 /* ---- Bottom panel (Tool Table / Feature Table) ---- */
 .bottom-panel {
-  flex-shrink: 0; background: var(--bg-1); border-top: 1px solid var(--border);
+  position: relative; flex-shrink: 0; background: var(--bg-1);
+  border-top: 1px solid var(--border);
   display: flex; flex-direction: column; min-height: 0;
 }
-.bottom-panel.open { height: 220px; }
+.bottom-panel.open { height: 220px; } /* fallback — inline style carries the drag height */
+.bp-handle {
+  position: absolute; top: -2px; left: 0; right: 0; height: 5px;
+  cursor: row-resize; z-index: 6; touch-action: none;
+}
+.bp-handle:hover, .bp-handle.dragging { background: var(--accent); opacity: 0.4; }
 .bp-header {
   height: 30px; flex-shrink: 0; position: relative;
   display: flex; align-items: center; justify-content: center;
@@ -337,6 +353,40 @@ body { background: var(--bg-0); color: var(--text-0); }
   border-radius: 6px; background: var(--amber-bg); color: var(--amber);
   margin-bottom: 10px;
 }
+.scope-head {
+  font-size: 11.5px; line-height: 1.4; padding: 6px 10px;
+  border-radius: 6px; background: var(--accent-bg); color: var(--accent);
+  margin-bottom: 10px;
+}
+
+/* ---- Estimate ledger (invoice tree) ---- */
+.ledger {
+  border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; font-size: 12.5px; margin-top: 4px;
+}
+.ledger-row {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 7px 10px; border-bottom: 1px solid var(--border);
+}
+.ledger-row:last-child { border-bottom: none; }
+.ledger-row .desc {
+  flex: 1; min-width: 0; color: var(--text-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ledger-row .qty { color: var(--text-2); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+.ledger-row .amt {
+  min-width: 68px; text-align: right; color: var(--text-0);
+  font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0;
+}
+.ledger-row.root { background: var(--bg-2); }
+.ledger-row.root .desc { color: var(--text-0); font-weight: 600; }
+.ledger-row.child { padding-left: 26px; }
+.ledger-row.child .desc { font-size: 12px; }
+.ledger-row.subtotal { border-top: 1px solid var(--border-strong); }
+.ledger-row.subtotal .desc, .ledger-row.subtotal .amt { font-weight: 500; }
+.ledger-row.grand { background: var(--bg-2); border-top: 1px solid var(--border-strong); }
+.ledger-row.grand .desc { color: var(--text-0); font-weight: 700; }
+.ledger-row.grand .amt { color: var(--orange); font-weight: 700; font-size: 14px; }
 
 .toast-error {
   position: fixed; top: 60px; left: 50%; transform: translateX(-50%);

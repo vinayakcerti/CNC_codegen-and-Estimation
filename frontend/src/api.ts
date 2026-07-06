@@ -38,6 +38,11 @@ export interface ToolInfo {
   diameter_mm: number;
   flute_length_mm: number;
   max_depth_mm: number;
+  // Catalog-style presentation fields (backend derives from the tool record)
+  display_name: string;
+  flutes: number | null;
+  tip_angle: number | null;
+  source_library: string;
 }
 
 export interface HoleGroup {
@@ -132,6 +137,8 @@ export interface StrategyOp {
   cut_min: number;
   blocked: boolean;
   geo: OpGeo | null;
+  // Catalog-style tool name ("6mm Drill 135°") — presentation only
+  tool_display?: string;
 }
 
 export interface StrategyResult {
@@ -139,6 +146,10 @@ export interface StrategyResult {
   filename: string;
   setups: { setup_label: string; ops: StrategyOp[]; subtotal_min: number }[];
   totals: { total_machine_time_min: number; cutting_time_min: number; num_operations: number };
+  material?: string;
+  // Set when the plan was scoped to one solid via ?body_index=
+  scoped_body_index?: number | null;
+  scoped_candidate_count?: number | null;
 }
 
 async function postFile<T>(path: string, file: File, query?: Record<string, string>): Promise<T> {
@@ -176,7 +187,15 @@ export const api = {
   analyze: (file: File, material?: string) =>
     postFile<AnalyzeResult>("/api/analyze", file, material ? { material } : undefined),
   weldment: (file: File) => postFile<WeldmentResult>("/api/weldment", file),
-  strategy: (file: File, material?: string) =>
-    postFile<StrategyResult>("/api/strategy", file, material ? { material } : undefined),
+  strategy: (file: File, material?: string, bodyIndex?: number) => {
+    const query: Record<string, string> = {};
+    if (material) query.material = material;
+    if (bodyIndex !== undefined) query.body_index = String(bodyIndex);
+    return postFile<StrategyResult>(
+      "/api/strategy",
+      file,
+      Object.keys(query).length ? query : undefined,
+    );
+  },
   sampleFile,
 };
