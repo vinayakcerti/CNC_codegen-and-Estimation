@@ -789,7 +789,10 @@ async def strategy(
                      if (f.get("_geometry") or {}).get("through"))
         hole_stats = {"total": n_holes, "threaded": 0,
                       "through": n_thru, "blind": n_holes - n_thru}
-        planned_names = {op.get("feature") for op in ops}
+        planned_names = {
+            op.get("feature_name") for op in ops
+            if not op.get("planning_blocked")
+        }
         plannable = sum(
             1 for f in exact_features
             if any(f["feature_name"] in (pn or "") for pn in planned_names)
