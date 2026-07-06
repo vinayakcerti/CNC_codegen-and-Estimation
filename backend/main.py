@@ -613,6 +613,7 @@ async def weldment(file: UploadFile = File(...)):
 
     def _group_json(g):
         rep = g.representative
+        raw = bodies_raw.get(rep.body_index) or {}
         return {
             "group_id": g.group_id,
             "classification": g.classification,
@@ -624,7 +625,15 @@ async def weldment(file: UploadFile = File(...)):
             "machining_min_per_pc": rep.machining_time_min,
             "features": rep.features,
             "operations": rep.operations,
-            "mesh": (bodies_raw.get(rep.body_index) or {}).get("mesh_data"),
+            "mesh": raw.get("mesh_data"),
+            # Feature-typed content per body (tester A1 v1): validated
+            # classifier counts for the representative body.
+            "feature_counts": {
+                "holes": raw.get("hole_count", 0),
+                "slots": raw.get("slot_count", 0),
+                "fillet_faces": raw.get("fillet_faces", 0),
+                "chamfer_faces": raw.get("chamfer_faces", 0),
+            } if raw.get("cyl_classifier_available") else None,
         }
 
     return {

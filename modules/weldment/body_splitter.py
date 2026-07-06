@@ -145,6 +145,9 @@ def split_step_bodies(file_bytes: bytes) -> dict:
                     "hole_count": cyl_classification.get("hole_count", 0),
                     "slot_count": cyl_classification.get("slot_count", 0),
                     "slots": cyl_classification.get("slots", []),
+                    "holes": cyl_classification.get("holes", []),
+                    "fillet_faces": cyl_classification.get("fillet_faces", 0),
+                    "chamfer_faces": cyl_classification.get("chamfer_faces", 0),
                     "cyl_classifier_available": cyl_classification.get("available", False),
                     "bbox": {
                         "xmin": round(bb.xmin, 3), "xmax": round(bb.xmax, 3),
