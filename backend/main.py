@@ -738,7 +738,10 @@ async def strategy(
     totals = estimate_time(ops, mach, mat, features)
 
     def _base_feature(name: str) -> str:
-        return name.replace(" (Rough)", "").replace(" (Finish)", "")
+        for suf in (" (Rough)", " (Finish)", " - wall finish",
+                    " - floor finish", " - rough bore", " - finish bore"):
+            name = name.replace(suf, "")
+        return name
 
     # Catalog-style tool display per tool number (presentation only)
     tool_disp = {
