@@ -90,12 +90,19 @@ def estimate_time(operations, machine, material, features):
 
     operator_effort_min = setup_min + (total_machine_time_min * 0.3)
 
+    # Report the total as the sum of the ROUNDED components so the
+    # displayed breakdown always reconciles (raw total is still used for
+    # the effort factors above).
+    _r_cut = round(cutting_time_min, 2)
+    _r_rapid = round(rapid_time_min, 2)
+    _r_tc = round(tc_time_min, 2)
+    _r_setup = round(setup_min, 2)
     return {
-        "cutting_time_min": round(cutting_time_min, 2),
-        "rapid_time_min": round(rapid_time_min, 2),
-        "tool_change_time_min": round(tc_time_min, 2),
-        "setup_time_min": round(setup_min, 2),
-        "total_machine_time_min": round(total_machine_time_min, 2),
+        "cutting_time_min": _r_cut,
+        "rapid_time_min": _r_rapid,
+        "tool_change_time_min": _r_tc,
+        "setup_time_min": _r_setup,
+        "total_machine_time_min": round(_r_setup + _r_cut + _r_rapid + _r_tc, 2),
         "operator_effort_min": round(operator_effort_min, 2),
         "num_tool_changes": num_tool_changes,
         "num_operations": num_operations,

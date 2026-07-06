@@ -139,14 +139,19 @@ def _body_bbox(file_bytes: bytes, body_index: int, classify: bool = False):
                 pass
 
 
-_DIR_SETUP = [((0, 0, 1), "Top"), ((0, 1, 0), "Front"), ((1, 0, 0), "Right")]
+def _setup_from_dir(direction, signed: bool = False) -> str:
+    """Map a hole/slot axis direction to a face-setup label.
 
-
-def _setup_from_dir(direction) -> str:
-    """Map a hole/slot axis direction to a face-setup label (abs dominant)."""
+    signed=True names the actual entry face (six-way: Top/Bottom,
+    Front/Back, Right/Left) — the direction is the OUTWARD normal of the
+    face the tool enters from. signed=False keeps the legacy abs-dominant
+    three-way labels."""
     ax = [abs(direction[0]), abs(direction[1]), abs(direction[2])]
     k = ax.index(max(ax))
-    return ["Right", "Front", "Top"][k]
+    if not signed:
+        return ["Right", "Front", "Top"][k]
+    pos = direction[k] >= 0
+    return [("Right", "Left"), ("Front", "Back"), ("Top", "Bottom")][k][0 if pos else 1]
 
 
 def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
@@ -167,6 +172,10 @@ def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
                 f"Hole Ø{h['diameter_mm']:.2f} mm "
                 f"(cbore Ø{h['cbore_diameter_mm']:.2f}) #{i}"
             )
+        # Route by the SIGNED entry direction (which face the tool enters
+        # from), not the unsigned axis — a +Y hole and a -Y hole need
+        # opposite setups.
+        entry = h.get("entry_dir") or h.get("dir", (0, 0, 1))
         features.append({
             "feature_type": "Hole",
             "feature_name": name,
@@ -174,10 +183,27 @@ def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
             "length": 0, "width": 0,
             "depth": h["depth_mm"],
             "x_pos": h["x"], "y_pos": h["y"],
-            "setup_label": _setup_from_dir(h.get("dir", (0, 0, 1))),
+            "setup_label": _setup_from_dir(entry, signed=True),
             "_exact": {"x": h["x"], "y": h["y"], "z": h["z"]},
+            "_geometry": {
+                "kind": "hole",
+                "diameter_mm": h["diameter_mm"],
+                "cbore_diameter_mm": h.get("cbore_diameter_mm"),
+                "depth_mm": h["depth_mm"],
+                "ld_ratio": h.get("ld_ratio"),
+                "through": h.get("through"),
+                "depth_below_top_mm": h.get("depth_below_top_mm"),
+                "tip_angle_deg": h.get("tip_angle_deg"),
+                "countersink": h.get("countersink"),
+                "axis_dir": list(h.get("dir") or ()) or None,
+                "entry_dir": list(h.get("entry_dir") or ()) or None,
+            },
         })
     for i, s in enumerate(cls.get("slots", []), start=1):
+        # A3 fix: a slot's setup comes from the face its cutter enters
+        # (cap-axis entry side), never a hardcoded label. Open slots keep
+        # their opening direction for accessibility display.
+        entry = s.get("entry_dir") or s.get("axis_dir") or (0, 0, 1)
         features.append({
             "feature_type": "Slot",
             "feature_name": (
@@ -188,8 +214,22 @@ def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
             "length": s["length_mm"], "width": s["width_mm"],
             "depth": s.get("depth_mm") or 0,
             "x_pos": s.get("x", 0), "y_pos": s.get("y", 0),
-            "setup_label": "Top",
+            "setup_label": _setup_from_dir(entry, signed=True),
             "_exact": {"x": s.get("x"), "y": s.get("y"), "z": s.get("z")},
+            "_geometry": {
+                "kind": "slot",
+                "open": bool(s.get("open")),
+                "length_mm": s["length_mm"],
+                "width_mm": s["width_mm"],
+                "depth_mm": s.get("depth_mm"),
+                "axis_dir": list(s.get("axis_dir") or ()) or None,
+                "open_dir": list(s.get("open_dir") or ()) or None,
+                "entry_dir": list(s.get("entry_dir") or ()) or None,
+                "opens_toward": (
+                    _setup_from_dir(s["open_dir"], signed=True)
+                    if s.get("open_dir") else None
+                ),
+            },
         })
     _cyl_types = {"slot", "hole", "large hole / boring"}
     for c in scoped_candidates:
@@ -626,6 +666,8 @@ async def strategy(
     scoped_to = None
     feature_source = "billet_candidates"
     exact_features: list | None = None
+    bbox = None
+    body_cls = None
     if body_index is not None:
         bbox, body_cls = _body_bbox(data, body_index, classify=True)
         if bbox is None:
@@ -657,6 +699,10 @@ async def strategy(
                 "depth": f.get("depth") or 0,
                 "feature_type": f.get("feature_type", ""),
                 "candidate_id": cand.get("candidate_id"),
+                # Validated geometry for the op panel's Geometry section:
+                # L/D, through/blind, depth below top, drill-tip cone,
+                # counterbore, slot opening direction.
+                "geometry": f.get("_geometry"),
             }
     else:
         for i, c in enumerate(candidates):
@@ -701,7 +747,18 @@ async def strategy(
     }
     op_tool_num = {op.get("op_num"): op.get("tool_number") for op in ops}
 
-    # Group per-op rows by setup, preserving first-appearance order
+    # Group per-op rows by setup, preserving first-appearance order.
+    # Each setup carries its own workholding recommendation (C3) sized
+    # from the scoped body (or whole part) envelope.
+    wh_stock = None
+    if body_index is not None and bbox:
+        wh_stock = {"length": bbox["xmax"] - bbox["xmin"],
+                    "width": bbox["ymax"] - bbox["ymin"],
+                    "height": bbox["zmax"] - bbox["zmin"]}
+    elif parse.get("length_mm"):
+        wh_stock = {"length": parse.get("length_mm") or 0,
+                    "width": parse.get("width_mm") or 0,
+                    "height": parse.get("height_mm") or 0}
     setups: list = []
     index: dict = {}
     for row in per_op:
@@ -709,10 +766,33 @@ async def strategy(
         row["tool_display"] = tool_disp.get(op_tool_num.get(row.get("op_num"))) or row.get("tool")
         label = row["setup"]
         if label not in index:
-            index[label] = {"setup_label": label, "ops": [], "subtotal_min": 0.0}
+            index[label] = {"setup_label": label, "ops": [], "subtotal_min": 0.0,
+                            "workholding": (
+                                recommend_workholding(wh_stock, label)
+                                if wh_stock else None
+                            )}
             setups.append(index[label])
         index[label]["ops"].append(row)
         index[label]["subtotal_min"] = round(index[label]["subtotal_min"] + row["cut_min"], 2)
+
+    # Hole stats for the threaded chip ("0 of N holes threaded" until
+    # thread detection ships) + validated-geometry MSA when scoped: the
+    # phantom-blocked-feature penalty does not apply to exact features.
+    hole_stats = None
+    msa_scoped = None
+    if exact_features is not None:
+        n_holes = sum(1 for f in exact_features if f.get("feature_type") == "Hole")
+        n_thru = sum(1 for f in exact_features
+                     if (f.get("_geometry") or {}).get("through"))
+        hole_stats = {"total": n_holes, "threaded": 0,
+                      "through": n_thru, "blind": n_holes - n_thru}
+        planned_names = {op.get("feature") for op in ops}
+        plannable = sum(
+            1 for f in exact_features
+            if any(f["feature_name"] in (pn or "") for pn in planned_names)
+        )
+        if exact_features:
+            msa_scoped = round(100.0 * plannable / len(exact_features), 1)
 
     return {
         "success": True,
@@ -726,4 +806,16 @@ async def strategy(
         "planned_candidate_count": len(features),
         "scoped_body_index": scoped_to,
         "scoped_candidate_count": len(features) if scoped_to is not None else None,
+        "hole_stats": hole_stats,
+        "features_plannable_pct": msa_scoped,
+        "body_feature_counts": (
+            {
+                "holes": body_cls.get("hole_count", 0),
+                "slots": body_cls.get("slot_count", 0),
+                "fillet_faces": body_cls.get("fillet_faces", 0),
+                "chamfer_faces": body_cls.get("chamfer_faces", 0),
+            }
+            if body_index is not None and body_cls and body_cls.get("available")
+            else None
+        ),
     }

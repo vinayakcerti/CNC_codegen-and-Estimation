@@ -17,11 +17,17 @@ OPERATION_RULES = {
     ],
     "Pocket": [
         {"op": "Rough End Mill", "notes": "Rough pocket clearance"},
-        {"op": "Finish End Mill", "notes": "Finish pocket walls and floor"},
+        {"op": "Finish End Mill", "notes": "Finish pocket walls",
+         "feature_name_suffix": " - wall finish"},
+        {"op": "Finish End Mill", "notes": "Finish pocket floor",
+         "feature_name_suffix": " - floor finish"},
     ],
     "Slot": [
         {"op": "Rough End Mill", "notes": "Rough slot using multiple depth/radial passes"},
-        {"op": "Finish End Mill", "notes": "Finish slot walls and floor"},
+        {"op": "Finish End Mill", "notes": "Finish slot walls",
+         "feature_name_suffix": " - wall finish"},
+        {"op": "Finish End Mill", "notes": "Finish slot floor",
+         "feature_name_suffix": " - floor finish"},
     ],
     "Step": [
         {"op": "Rough End Mill", "notes": "Rough step floor and shoulder"},
@@ -59,7 +65,7 @@ def normalize_feature_type(feature_type):
     return _FEATURE_TYPE_ALIASES.get(label.casefold(), label)
 
 
-def estimate_path_length(feature, operation_type, tool=None):
+def estimate_path_length(feature, operation_type, tool=None, variant=""):
     """Estimate cutting path length in mm.
 
     These are planning estimates for time/cost approximation — not CAM toolpaths.
@@ -71,6 +77,8 @@ def estimate_path_length(feature, operation_type, tool=None):
         tool          : selected tool dict (optional); used where tool diameter
                         affects the number of passes.  Falls back to sensible
                         defaults when None.
+        variant       : rule feature_name_suffix (e.g. " - wall finish") so a
+                        split finish pass is costed for its own geometry.
     """
     ftype    = feature.get("feature_type", "")
     length   = feature.get("length",   0) or 0
@@ -90,6 +98,14 @@ def estimate_path_length(feature, operation_type, tool=None):
 
     # ── Pocket ───────────────────────────────────────────────────────────────
     if ftype == "Pocket":
+        if operation_type == "Finish End Mill" and length > 0 and width > 0:
+            if "wall" in variant:
+                # One climb pass around the pocket perimeter
+                return 2 * (length + width) * qty
+            if "floor" in variant:
+                # One raster pass over the floor at finishing stepover
+                dia = tool_dia if tool_dia > 0 else 12.0
+                return (length * width) / max(dia * 0.6, 1.0) * qty
         if length > 0 and width > 0:
             passes = math.ceil(depth / 3.0)
             path_per_pass = (length * width) / 8.0
@@ -111,7 +127,9 @@ def estimate_path_length(feature, operation_type, tool=None):
             return depth_passes * radial_passes * slot_len * qty
 
         if operation_type == "Finish End Mill":
-            # Two finishing passes — one along each slot wall.
+            if "floor" in variant:
+                return slot_len * qty          # one pass along the slot floor
+            # Wall finish (or unsplit legacy call): one pass per slot wall.
             return 2 * slot_len * qty
 
         # Fallback for any other op type on a slot feature
@@ -207,10 +225,7 @@ def _context_note(ftype, feature_name, diameter, op_type):
                 "Verify tool diameter and corner radius suitability."
             )
         if op_type == "Finish End Mill":
-            return (
-                "Finishing pass cleans pocket walls and floor. "
-                "Verify tool flute length >= pocket depth."
-            )
+            return "Verify tool flute length >= pocket depth."
 
     if ftype == "Slot":
         if op_type == "Rough End Mill":
@@ -220,8 +235,8 @@ def _context_note(ftype, feature_name, diameter, op_type):
             )
         if op_type == "Finish End Mill":
             return (
-                "Finish slot walls and floor. "
-                "Verify tool flute length >= slot depth and corner radius suitability."
+                "Verify tool flute length >= slot depth and corner radius "
+                "suitability."
             )
 
     if ftype == "Step":
@@ -415,6 +430,53 @@ def plan_operations(features, tools, material, machine=None):
             }],
         )
 
+        # Depth-driven templates for holes (planning heuristics, not CAM):
+        #   L/D > 4, dia large enough for a boring bar — drilling alone
+        #              can't hold position/finish at that reach; plan pilot
+        #              drill + rough bore + finish bore in a dedicated bore
+        #              setup (rigid setup, minimal stickout).
+        #   L/D > 4, small dia — no bar fits; keep drilling but flag a
+        #              deep-hole peck cycle.
+        #   L/D < 0.3 blind — a standard 118-deg tip leaves a cone deeper
+        #              than the feature itself; flag flat-bottom tooling.
+        _dia = float(feature.get("diameter", 0) or 0)
+        _dep = float(feature.get("depth", 0) or 0)
+        _ld = (_dep / _dia) if _dia > 0 else 0.0
+        _MIN_BORE_DIA = 12.0   # below this no boring bar fits — peck drill
+        _deep_peck_note = ""
+        if ftype == "Hole" and _ld > 4.0:
+            if _dia >= _MIN_BORE_DIA:
+                rules = [
+                    {"op": "Spot Drill", "notes": "Centre drill before drilling"},
+                    {"op": "Drill",
+                     "notes": f"Pilot drill for deep bore (L/D {_ld:.1f})"},
+                    {"op": "Boring", "feature_name_suffix": " - rough bore",
+                     "setup_suffix": " (Bore)",
+                     "notes": (
+                         f"Rough bore — L/D {_ld:.1f} exceeds 4:1 drilling "
+                         "envelope; rigid bar, minimal stickout"
+                     )},
+                    {"op": "Boring", "feature_name_suffix": " - finish bore",
+                     "setup_suffix": " (Bore)",
+                     "notes": "Finish bore to size and surface callout"},
+                ]
+            else:
+                _deep_peck_note = (
+                    f"Deep hole (L/D {_ld:.1f}) below boring-bar range — "
+                    "use G83 full-retract peck cycle; verify chip "
+                    "evacuation and coolant reach."
+                )
+        _flat_bottom_note = ""
+        if (
+            ftype == "Hole" and _dia > 0 and 0 < _ld < 0.3
+            and feature.get("through") is not True
+        ):
+            _flat_bottom_note = (
+                f"Shallow blind hole (L/D {_ld:.2f}) — full 118-deg drill "
+                "point would exceed feature depth; use flat-bottom drill, "
+                "140-deg stub tip, or end mill plunge."
+            )
+
         for rule in rules:
             op_type = rule["op"]
             op_feature_name = feature["feature_name"] + rule.get("feature_name_suffix", "")
@@ -440,7 +502,10 @@ def plan_operations(features, tools, material, machine=None):
                 if tool:
                     tool = normalize_tool_profile(tool)
                     spindle, feed = get_spindle_and_feed(tool, material)
-                    path_len = estimate_path_length(feature, op_type, tool)
+                    path_len = estimate_path_length(
+                        feature, op_type, tool,
+                        variant=rule.get("feature_name_suffix", ""),
+                    )
                 else:
                     spindle, feed, path_len = 0, 0, 0.0
                 tool_assessment = assess_tool_feasibility(
@@ -473,6 +538,10 @@ def plan_operations(features, tools, material, machine=None):
                     op_type,
                 )
                 note = rule["notes"] + (" | " + extra if extra else "")
+            if _flat_bottom_note and op_type == "Drill":
+                note = note + " | " + _flat_bottom_note
+            if _deep_peck_note and op_type == "Drill":
+                note = note + " | " + _deep_peck_note
             if tool_warning:
                 note = note + " | " + tool_warning
 
@@ -487,7 +556,10 @@ def plan_operations(features, tools, material, machine=None):
                 "allowance_uncertainty": feature.get("allowance_uncertainty", ""),
                 "feature_name": op_feature_name,
                 "feature_type": ftype,
-                "setup_label": feature.get("setup_label", "Unknown"),
+                "setup_label": (
+                    feature.get("setup_label", "Unknown")
+                    + rule.get("setup_suffix", "")
+                ),
                 "requires_simultaneous_5_axis": bool(
                     feature.get("requires_simultaneous_5_axis", False)
                 ),
