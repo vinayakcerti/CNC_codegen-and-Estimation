@@ -3,7 +3,7 @@ import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import { api, SAMPLE_NAME } from "./api";
 import type {
   AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo,
-  WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts,
+  WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts, MaterialOpts, PlanBasis,
 } from "./api";
 import { PartViewer } from "./PartViewer";
 import type { Vec3, Approach } from "./PartViewer";
@@ -67,6 +67,71 @@ function loadCustomMachines(): CustomMachine[] {
   } catch {
     return [];
   }
+}
+
+// User-defined materials (cnc.customMaterials). All three factors must be
+// finite numbers — the selector and the estimate mass math rely on them.
+function loadCustomMaterials(): Material[] {
+  try {
+    const raw = lsGet("cnc.customMaterials");
+    const arr: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((m): m is Material => {
+      const c = m as Material;
+      return (
+        !!c &&
+        typeof c.name === "string" &&
+        c.name.length > 0 &&
+        Number.isFinite(c.density) &&
+        Number.isFinite(c.machinability_factor) &&
+        Number.isFinite(c.safety_factor)
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
+// ---- Operator-controlled estimation (Estimate tab settings) ----
+// Quote preset scales ONLY the machining-time cost lines: textbook
+// two-pass planning (×1.00) down to a competitive shop quote (×0.70).
+type QuotePreset = "conservative" | "standard" | "competitive";
+const PRESET_MULT: Record<QuotePreset, number> = {
+  conservative: 1.0,
+  standard: 0.85,
+  competitive: 0.7,
+};
+
+// Tolerance class scales machining cost — tighter tolerances mean slower
+// feeds, more passes, and in-process inspection.
+type ToleranceClass = "general" | "medium" | "fine" | "precision";
+const TOLERANCE_MULT: Record<ToleranceClass, number> = {
+  general: 1.0,
+  medium: 1.15,
+  fine: 1.35,
+  precision: 1.6,
+};
+
+const COMPLEXITY_MIN = 0.8;
+const COMPLEXITY_MAX = 1.5;
+
+function loadBasis(): PlanBasis {
+  return lsGet("cnc.estBasis") === "raw" ? "raw" : "grouped";
+}
+
+function loadPreset(): QuotePreset {
+  const v = lsGet("cnc.estPreset");
+  return v === "standard" || v === "competitive" ? v : "conservative";
+}
+
+function loadComplexity(): number {
+  const v = Number(lsGet("cnc.estComplexity"));
+  return Number.isFinite(v) && v >= COMPLEXITY_MIN && v <= COMPLEXITY_MAX ? v : 1.0;
+}
+
+function loadTolerance(): ToleranceClass {
+  const v = lsGet("cnc.estTolerance");
+  return v === "medium" || v === "fine" || v === "precision" ? v : "general";
 }
 
 // Lenient numeric input parse — empty/garbage becomes 0, never NaN
@@ -164,6 +229,22 @@ export default function App() {
   const [partFile, setPartFile] = useState<File | null>(null);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [material, setMaterial] = useState<string>(() => lsGet("cnc.material") ?? "");
+  // User-defined materials — travel to the backend as material_json and
+  // their density drives the estimate's stock-mass line.
+  const [customMaterials, setCustomMaterials] = useState<Material[]>(loadCustomMaterials);
+
+  // ---- Operator-controlled estimation settings (all persisted) ----
+  const [estBasis, setEstBasis] = useState<PlanBasis>(loadBasis);
+  // Ref mirrors estBasis synchronously so in-flight runAnalysis strategy
+  // fetches use the latest pick, not a stale closure value.
+  const estBasisRef = useRef<PlanBasis>(estBasis);
+  const [basisLoading, setBasisLoading] = useState(false);
+  // Bumps whenever a newer whole-assembly strategy fetch starts —
+  // invalidates slower in-flight ones (basis switch vs full re-analysis).
+  const stratReqRef = useRef(0);
+  const [estPreset, setEstPreset] = useState<QuotePreset>(loadPreset);
+  const [estComplexity, setEstComplexity] = useState<number>(loadComplexity);
+  const [estTolerance, setEstTolerance] = useState<ToleranceClass>(loadTolerance);
 
   // Machine selection: library machines from /api/machines, user-defined
   // machines from localStorage. Custom machines are sent as machine_json.
@@ -219,6 +300,14 @@ export default function App() {
     return custom ? { machineJson: JSON.stringify(custom) } : { machineName: name };
   }
 
+  // Same resolution for materials: custom picks travel as material_json,
+  // library picks as ?material=<name>. Custom wins on a name collision.
+  function materialOptsFor(name: string): MaterialOpts | undefined {
+    if (!name) return undefined;
+    const custom = customMaterials.find((c) => c.name === name);
+    return custom ? { materialJson: JSON.stringify(custom) } : { materialName: name };
+  }
+
   useEffect(() => {
     const token = ++scopedReqRef.current;
     if (tab !== "strategy" || scopedBodyIndex == null || !partFile) return;
@@ -227,7 +316,12 @@ export default function App() {
         ? `custom:${machineSel}`
         : machineSel
       : "";
-    const key = `${scopedBodyIndex}:${material}:${machineKey}`;
+    const materialKey = material
+      ? customMaterials.some((c) => c.name === material)
+        ? `custom:${material}`
+        : material
+      : "";
+    const key = `${scopedBodyIndex}:${materialKey}:${machineKey}:${estBasis}`;
     const cached = scopedCacheRef.current.get(key);
     if (cached) {
       setScopedStrategy(cached);
@@ -238,7 +332,12 @@ export default function App() {
     setScopedLoading(true);
     setScopedError(null);
     api
-      .strategy(partFile, material || undefined, scopedBodyIndex, machineOptsFor(machineSel))
+      .strategy(partFile, {
+        material: materialOptsFor(material),
+        bodyIndex: scopedBodyIndex,
+        machine: machineOptsFor(machineSel),
+        basis: estBasis,
+      })
       .then((r) => {
         if (scopedReqRef.current !== token) return;
         scopedCacheRef.current.set(key, r);
@@ -250,9 +349,10 @@ export default function App() {
         setScopedError(err instanceof Error ? err.message : "Scoped strategy failed");
         setScopedLoading(false);
       });
-    // machineOptsFor is stable per (machineSel, customMachines), both in deps
+    // machineOptsFor/materialOptsFor are stable per (machineSel,
+    // customMachines, material, customMaterials), all in deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, scopedBodyIndex, material, partFile, scopedRetryNonce, machineSel, customMachines]);
+  }, [tab, scopedBodyIndex, material, partFile, scopedRetryNonce, machineSel, customMachines, customMaterials, estBasis]);
 
   // Strategy shown on the Strategy tab: scoped plan when a body scope is
   // active (guarded against stale responses), whole-assembly otherwise.
@@ -415,9 +515,9 @@ export default function App() {
 
   async function runAnalysis(
     file: File,
-    opts?: { material?: string; preserveTab?: boolean; machine?: MachineOpts },
+    opts?: { material?: MaterialOpts; preserveTab?: boolean; machine?: MachineOpts },
   ) {
-    const mat = opts?.material ?? (material || undefined);
+    const mat = opts?.material ?? materialOptsFor(material);
     const mach = opts?.machine ?? machineOptsFor(machineSel);
     const isNewFile = partFile !== file; // material/machine re-runs pass the same File
     setLoading(true);
@@ -438,7 +538,7 @@ export default function App() {
       scopedCacheRef.current.clear();
     }
     try {
-      const a = await api.analyze(file, mat, mach);
+      const a = await api.analyze(file, { material: mat, machine: mach });
       setAnalysis(a);
       // Stock config: reset on a new part; survive material/machine re-runs.
       if (isNewFile) setStockMode("auto");
@@ -456,8 +556,13 @@ export default function App() {
       }
       if (a.material) setMaterial(a.material); // sync to what the backend resolved
       if (a.machine) setMachineSel(a.machine); // engine default may be unnamed (null)
-      const s = await api.strategy(file, mat, undefined, mach);
-      setStrategy(s);
+      // Ref (not closure state) for basis: the user may flip it while
+      // analyze is in flight. Token guards against a newer basis refetch
+      // landing before this older whole-assembly plan does.
+      const stratToken = ++stratReqRef.current;
+      setBasisLoading(false); // a full re-analysis supersedes any basis refetch
+      const s = await api.strategy(file, { material: mat, machine: mach, basis: estBasisRef.current });
+      if (stratReqRef.current === stratToken) setStrategy(s);
       if (!opts?.preserveTab) setTab("overview");
       setSelOp(null);
       setHighlight(null);
@@ -473,7 +578,76 @@ export default function App() {
   function changeMaterial(name: string) {
     setMaterial(name);
     lsSet("cnc.material", name);
-    if (partFile) void runAnalysis(partFile, { material: name, preserveTab: true });
+    if (partFile) void runAnalysis(partFile, { material: materialOptsFor(name), preserveTab: true });
+  }
+
+  // Save a custom material (localStorage), select it, and re-run with its
+  // JSON. Scoped plans keyed by this name may now be stale (re-saving a
+  // name with new factors changes the plan) — drop them.
+  function addCustomMaterial(m: Material) {
+    const next = [...customMaterials.filter((c) => c.name !== m.name), m];
+    setCustomMaterials(next);
+    lsSet("cnc.customMaterials", JSON.stringify(next));
+    setMaterial(m.name);
+    lsSet("cnc.material", m.name);
+    scopedCacheRef.current.clear();
+    if (partFile) {
+      void runAnalysis(partFile, {
+        preserveTab: true,
+        material: { materialJson: JSON.stringify(m) },
+      });
+    }
+  }
+
+  // Re-fetch the whole-assembly strategy only — basis is a planning knob,
+  // the analyze result (features/DFM/mesh) does not depend on it.
+  async function refetchStrategy(file: File, basis: PlanBasis) {
+    const token = ++stratReqRef.current;
+    setBasisLoading(true);
+    try {
+      const s = await api.strategy(file, {
+        material: materialOptsFor(material),
+        machine: machineOptsFor(machineSel),
+        basis,
+      });
+      if (stratReqRef.current !== token) return;
+      setStrategy(s);
+    } catch (err) {
+      if (stratReqRef.current !== token) return;
+      setError(err instanceof Error ? err.message : "Strategy refresh failed");
+    } finally {
+      if (stratReqRef.current === token) setBasisLoading(false);
+    }
+  }
+
+  function changeBasis(b: PlanBasis) {
+    if (b === estBasis) return;
+    estBasisRef.current = b;
+    setEstBasis(b);
+    lsSet("cnc.estBasis", b);
+    // Op ids / rollup keys belong to the old-basis plan.
+    setSelOp(null);
+    setHighlight(null);
+    setExpanded({});
+    // The scoped effect re-resolves via its cache (basis is in the key);
+    // null out the old-basis scoped plan so it can't linger meanwhile.
+    setScopedStrategy(null);
+    if (partFile) void refetchStrategy(partFile, b);
+  }
+
+  function changePreset(p: QuotePreset) {
+    setEstPreset(p);
+    lsSet("cnc.estPreset", p);
+  }
+
+  function changeComplexity(v: number) {
+    setEstComplexity(v);
+    lsSet("cnc.estComplexity", String(v));
+  }
+
+  function changeTolerance(t: ToleranceClass) {
+    setEstTolerance(t);
+    lsSet("cnc.estTolerance", t);
   }
 
   function changeMachine(name: string) {
@@ -913,9 +1087,11 @@ export default function App() {
                       <>
                         <MaterialSelect
                           materials={materials}
+                          customMaterials={customMaterials}
                           value={material}
                           onChange={changeMaterial}
-                          disabled={loading || materials.length === 0}
+                          onAddCustom={addCustomMaterial}
+                          disabled={loading || (materials.length === 0 && customMaterials.length === 0)}
                         />
                         <MachineSelect
                           machines={machines}
@@ -1139,6 +1315,22 @@ export default function App() {
                         )}
                         {stratForView && (
                           <>
+                            {stratForView.basis && (
+                              <div style={{ margin: "2px 0 6px" }}>
+                                <span
+                                  className="chip"
+                                  title={
+                                    stratForView.basis === "grouped"
+                                      ? "Grouped basis — duplicate detections deduped; one op per physical feature"
+                                      : "Raw basis — every detection planned; most conservative"
+                                  }
+                                >
+                                  {stratForView.basis === "grouped"
+                                    ? `Physical features: ${stratForView.planned_candidate_count ?? "—"}`
+                                    : `Raw detections: ${stratForView.planned_candidate_count ?? "—"}`}
+                                </span>
+                              </div>
+                            )}
                             <div className="row" style={{ borderBottom: "none" }}>
                               <span className="k">Total machine time</span>
                               <span className="v">{stratForView.totals.total_machine_time_min?.toFixed(0)} min</span>
@@ -1183,8 +1375,22 @@ export default function App() {
 
                     {tab === "estimate" && strategy && (() => {
                       const machineMin = strategy.totals.total_machine_time_min ?? 0;
-                      const machining = (machineMin / 60) * rateHr;
-                      const density = materials.find((m) => m.name === analysis.material)?.density ?? 2.7;
+                      // Operator-controlled machining multiplier: quote preset ×
+                      // complexity × tolerance. Applies ONLY to machining-time
+                      // cost lines — never to material or setup charges.
+                      const presetMult = PRESET_MULT[estPreset];
+                      const tolMult = TOLERANCE_MULT[estTolerance];
+                      const complexity = Number.isFinite(estComplexity)
+                        ? Math.min(COMPLEXITY_MAX, Math.max(COMPLEXITY_MIN, estComplexity))
+                        : 1.0;
+                      const machMult = presetMult * complexity * tolMult;
+                      const machining = (machineMin / 60) * rateHr * machMult;
+                      // Custom materials win the density lookup — their density
+                      // drives the stock-mass line.
+                      const density =
+                        customMaterials.find((m) => m.name === analysis.material)?.density ??
+                        materials.find((m) => m.name === analysis.material)?.density ??
+                        2.7;
                       // Material is bought as STOCK, not as the finished part —
                       // mass comes from the stock block (Overview → Stock rows),
                       // so Manual stock sizes flow straight into this line.
@@ -1200,6 +1406,15 @@ export default function App() {
                       const subtotal = partTotal + setupsCost;
                       const margin = subtotal * (marginPct / 100);
                       const total = subtotal + margin;
+                      // Quote range: the same ledger recomputed at the
+                      // competitive (×0.70) and conservative (×1.00) preset
+                      // ends — complexity/tolerance stay as selected.
+                      const totalAtPreset = (pm: number) => {
+                        const mach = (machineMin / 60) * rateHr * pm * complexity * tolMult;
+                        return (material_ + mach + setupsCost) * (1 + marginPct / 100);
+                      };
+                      const rangeLow = totalAtPreset(PRESET_MULT.competitive);
+                      const rangeHigh = totalAtPreset(PRESET_MULT.conservative);
                       const inr = (v: number) =>
                         "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
                       const fmtMin = (min: number) => {
@@ -1249,6 +1464,87 @@ export default function App() {
                               onChange={(e) => setMarginPct(+e.target.value)}
                             />
                           </div>
+                          <div className="row">
+                            <span className="k">Feature basis</span>
+                            <select
+                              className="mini-select"
+                              style={{ maxWidth: 170 }}
+                              value={estBasis}
+                              disabled={basisLoading}
+                              title="What the plan counts: grouped physical features (duplicate detections deduped) or every raw detection"
+                              onChange={(e) => changeBasis(e.target.value === "raw" ? "raw" : "grouped")}
+                            >
+                              <option value="grouped">Grouped — physical features (recommended)</option>
+                              <option value="raw">Raw — every detection (most conservative)</option>
+                            </select>
+                          </div>
+                          {basisLoading && (
+                            <div style={{ fontSize: 11, color: "var(--text-2)", padding: "4px 0" }}>
+                              Re-planning on {estBasis} basis…
+                            </div>
+                          )}
+                          <div className="row">
+                            <span className="k">Quote preset</span>
+                            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <select
+                                className="mini-select"
+                                style={{ maxWidth: 148 }}
+                                value={estPreset}
+                                title="Scales the machining-time cost lines only"
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  changePreset(
+                                    v === "standard" || v === "competitive" ? v : "conservative",
+                                  );
+                                }}
+                              >
+                                <option value="conservative">Conservative — textbook two-pass</option>
+                                <option value="standard">Standard shop</option>
+                                <option value="competitive">Competitive</option>
+                              </select>
+                              <span
+                                style={{ fontSize: 11, color: "var(--text-2)", fontVariantNumeric: "tabular-nums" }}
+                                title="Machining multiplier from this preset"
+                              >
+                                ×{presetMult.toFixed(2)}
+                              </span>
+                            </span>
+                          </div>
+                          <div className="row">
+                            <span className="k">Complexity (0.8–1.5)</span>
+                            <input
+                              className="num-input"
+                              type="number"
+                              min={COMPLEXITY_MIN}
+                              max={COMPLEXITY_MAX}
+                              step={0.05}
+                              value={Number.isFinite(estComplexity) ? estComplexity : ""}
+                              onChange={(e) => changeComplexity(+e.target.value)}
+                            />
+                          </div>
+                          <div className="row">
+                            <span className="k">Tolerance class</span>
+                            <select
+                              className="mini-select"
+                              style={{ maxWidth: 170 }}
+                              value={estTolerance}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                changeTolerance(
+                                  v === "medium" || v === "fine" || v === "precision" ? v : "general",
+                                );
+                              }}
+                            >
+                              <option value="general">General ±0.2 mm (×1.00)</option>
+                              <option value="medium">Medium ±0.1 (×1.15)</option>
+                              <option value="fine">Fine ±0.05 (×1.35)</option>
+                              <option value="precision">Precision (×1.60)</option>
+                            </select>
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 6 }}>
+                            machining ×{machMult.toFixed(2)} = preset {presetMult.toFixed(2)} ×
+                            complexity {complexity.toFixed(2)} × tolerance {tolMult.toFixed(2)}
+                          </div>
 
                           <div className="section-title">Quote ledger</div>
                           <div className="ledger">
@@ -1263,11 +1559,12 @@ export default function App() {
                               <span className="amt">{inr(material_)}</span>
                             </div>
                             {strategy.setups.map((su) => {
-                              const line = `Setup · ${su.setup_label} — ${fmtMin(su.subtotal_min)} — ₹${rateHr}/hr`;
+                              const multTag = machMult !== 1 ? ` × ${machMult.toFixed(2)}` : "";
+                              const line = `Setup · ${su.setup_label} — ${fmtMin(su.subtotal_min)} — ₹${rateHr}/hr${multTag}`;
                               return (
                                 <div className="ledger-row child" key={su.setup_label}>
                                   <span className="desc" title={line}>{line}</span>
-                                  <span className="amt">{inr((su.subtotal_min / 60) * rateHr)}</span>
+                                  <span className="amt">{inr((su.subtotal_min / 60) * rateHr * machMult)}</span>
                                 </div>
                               );
                             })}
@@ -1297,6 +1594,16 @@ export default function App() {
                             <div className="ledger-row grand">
                               <span className="desc">Grand Total</span>
                               <span className="amt">{inr(total)}</span>
+                            </div>
+                            {/* Never quote blind: the competitive→conservative
+                                spread for this part, at the selected
+                                complexity/tolerance */}
+                            <div
+                              className="ledger-row range"
+                              title="Grand total recomputed at the Competitive (×0.70) and Conservative (×1.00) presets — complexity and tolerance as selected"
+                            >
+                              <span className="desc">Range</span>
+                              <span className="amt">{inr(rangeLow)} — {inr(rangeHigh)}</span>
                             </div>
                           </div>
                           <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 8 }}>

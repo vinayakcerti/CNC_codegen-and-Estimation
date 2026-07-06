@@ -64,6 +64,27 @@ export interface MachineOpts {
   machineJson?: string;
 }
 
+// Same split for materials: a library material by name (?material=) or a
+// user-defined material serialized into the material_json form field.
+export interface MaterialOpts {
+  materialName?: string;
+  materialJson?: string;
+}
+
+// Planning basis: "grouped" plans one op per physical feature (duplicate
+// detections deduped), "raw" plans every detection — most conservative.
+export type PlanBasis = "grouped" | "raw";
+
+export interface AnalyzeOpts {
+  material?: MaterialOpts;
+  machine?: MachineOpts;
+}
+
+export interface StrategyOpts extends AnalyzeOpts {
+  bodyIndex?: number;
+  basis?: PlanBasis;
+}
+
 export interface StockBlock {
   mode: string;
   preset: string;
@@ -193,6 +214,10 @@ export interface StrategyResult {
   totals: { total_machine_time_min: number; cutting_time_min: number; num_operations: number };
   material?: string;
   machine?: string | null;
+  // Planning basis the backend used ("grouped" | "raw") and how many
+  // candidates it actually planned on that basis.
+  basis?: string;
+  planned_candidate_count?: number;
   // Set when the plan was scoped to one solid via ?body_index=
   scoped_body_index?: number | null;
   scoped_candidate_count?: number | null;
@@ -232,34 +257,36 @@ async function sampleFile(name: string): Promise<File> {
   return new File([blob], name, { type: "application/octet-stream" });
 }
 
+// Split material/machine picks into query params (library names) and
+// multipart form fields (custom JSON payloads) — shared by analyze/strategy.
+function buildOpts(opts?: AnalyzeOpts): {
+  query: Record<string, string>;
+  form: Record<string, string>;
+} {
+  const query: Record<string, string> = {};
+  const form: Record<string, string> = {};
+  if (opts?.material?.materialName) query.material = opts.material.materialName;
+  if (opts?.material?.materialJson) form.material_json = opts.material.materialJson;
+  if (opts?.machine?.machineName) query.machine = opts.machine.machineName;
+  if (opts?.machine?.machineJson) form.machine_json = opts.machine.machineJson;
+  return { query, form };
+}
+
 export const api = {
   health: () => fetch(`${BASE}/api/health`).then((r) => r.json()),
   materials: () => getJson<{ materials: Material[] }>("/api/materials"),
   machines: () => getJson<{ machines: MachineInfo[] }>("/api/machines"),
   tools: () => getJson<{ tools: ToolInfo[] }>("/api/tools"),
-  analyze: (file: File, material?: string, machine?: MachineOpts) => {
-    const query: Record<string, string> = {};
-    if (material) query.material = material;
-    if (machine?.machineName) query.machine = machine.machineName;
-    return postFile<AnalyzeResult>(
-      "/api/analyze",
-      file,
-      query,
-      machine?.machineJson ? { machine_json: machine.machineJson } : undefined,
-    );
+  analyze: (file: File, opts?: AnalyzeOpts) => {
+    const { query, form } = buildOpts(opts);
+    return postFile<AnalyzeResult>("/api/analyze", file, query, form);
   },
   weldment: (file: File) => postFile<WeldmentResult>("/api/weldment", file),
-  strategy: (file: File, material?: string, bodyIndex?: number, machine?: MachineOpts) => {
-    const query: Record<string, string> = {};
-    if (material) query.material = material;
-    if (bodyIndex !== undefined) query.body_index = String(bodyIndex);
-    if (machine?.machineName) query.machine = machine.machineName;
-    return postFile<StrategyResult>(
-      "/api/strategy",
-      file,
-      query,
-      machine?.machineJson ? { machine_json: machine.machineJson } : undefined,
-    );
+  strategy: (file: File, opts?: StrategyOpts) => {
+    const { query, form } = buildOpts(opts);
+    if (opts?.bodyIndex !== undefined) query.body_index = String(opts.bodyIndex);
+    if (opts?.basis) query.basis = opts.basis;
+    return postFile<StrategyResult>("/api/strategy", file, query, form);
   },
   sampleFile,
 };
