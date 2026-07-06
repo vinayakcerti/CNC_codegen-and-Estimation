@@ -21,6 +21,11 @@ export interface Candidate {
   y_pos?: number;
   confidence?: string;
   setup?: string;
+  // Exact tessellated face geometry (raw-CAD frame, same as the part mesh).
+  // Shape varies by backend version — a list of {vertices,triangles} dicts,
+  // a single {x,y,z,i,j,k} mesh, or a list of those — so it stays `unknown`
+  // and the UI normalizes at runtime (see normalizeFaceMeshes in App).
+  face_mesh_data?: unknown;
   [k: string]: unknown;
 }
 
@@ -189,6 +194,9 @@ export interface OpGeo {
   width: number;
   depth: number;
   feature_type: string;
+  // Links the op back to its analyze-response candidate, whose
+  // face_mesh_data provides the exact-face 3D highlight.
+  candidate_id?: string | null;
 }
 
 export interface StrategyOp {

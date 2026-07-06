@@ -439,3 +439,110 @@ body { background: var(--bg-0); color: var(--text-0); }
   padding: 9px 16px; font-size: 13px; cursor: pointer;
   max-width: 70vw;
 }
+
+/* ---- Op detail panel (Strategy op click — floats over the canvas) ---- */
+.op-panel {
+  position: absolute; top: 12px; left: 12px; z-index: 7; width: 260px;
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  border-radius: 10px; padding: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.op-panel-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+.op-panel-title {
+  font-size: 13px; font-weight: 600; color: var(--text-0);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.op-panel-sub {
+  font-size: 11px; color: var(--text-2); margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.op-panel-x {
+  margin-left: auto; flex-shrink: 0; border: none; background: transparent;
+  color: var(--text-2); cursor: pointer; font-size: 12px; padding: 2px 4px;
+}
+.op-panel-x:hover { color: var(--text-0); }
+.op-panel-sect {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-2); margin: 10px 0 2px;
+}
+.op-panel-row {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; padding: 5px 0; font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.op-panel-row:last-of-type { border-bottom: none; }
+.op-panel-row .k { color: var(--text-1); flex-shrink: 0; }
+.op-panel-row .v {
+  color: var(--text-0); font-variant-numeric: tabular-nums; text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.op-panel-row .num-input { width: 84px; padding: 3px 6px; font-size: 12px; }
+.op-panel-note { font-size: 10.5px; color: var(--text-2); margin-top: 8px; font-style: italic; }
+
+/* ---- Process Route (Route tab): vertical chain of process blocks ---- */
+.route-chain { display: flex; flex-direction: column; }
+.route-connector {
+  width: 2px; height: 12px; background: var(--border-strong);
+  margin-left: 21px; flex-shrink: 0;
+}
+.route-block {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px;
+}
+.rb-head { display: flex; align-items: center; gap: 8px; }
+.rb-num {
+  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
+  background: var(--accent-bg); color: var(--accent);
+  font-size: 11px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+}
+.rb-title { flex: 1; min-width: 0; }
+.rb-name {
+  font-size: 13px; font-weight: 600; color: var(--text-0);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rb-station {
+  font-size: 11px; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rb-cost {
+  flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--text-0);
+  font-variant-numeric: tabular-nums;
+}
+.rb-x {
+  flex-shrink: 0; border: none; background: transparent; color: var(--text-2);
+  cursor: pointer; font-size: 11px; padding: 2px 4px;
+}
+.rb-x:hover { color: var(--red); }
+.rb-line {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; padding: 4px 0 0; font-size: 12px;
+}
+.rb-line .k { color: var(--text-1); }
+.rb-line .v { color: var(--text-0); font-variant-numeric: tabular-nums; }
+.rb-line .num-input { width: 84px; padding: 3px 6px; font-size: 12px; }
+.rb-sub {
+  font-size: 11px; color: var(--text-2); margin-top: 6px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.rb-note {
+  font-size: 11.5px; line-height: 1.4; padding: 5px 8px; margin-top: 6px;
+  border-radius: 6px; background: var(--amber-bg); color: var(--amber);
+}
+.rb-oprow { display: flex; gap: 5px; font-size: 11px; color: var(--text-1); padding: 2px 0 0 2px; }
+.rb-oprow .ph { color: var(--text-2); flex-shrink: 0; }
+.rb-oprow .op { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.route-add { width: 100%; margin-top: 12px; border-style: dashed; }
+.route-form {
+  margin-top: 12px; border: 1px dashed var(--border-strong);
+  border-radius: 10px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.text-input {
+  width: 150px; padding: 4px 8px; border-radius: 6px; font-size: 12px;
+  background: var(--bg-2); color: var(--text-0); border: 1px solid var(--border);
+}
+.text-input:focus { outline: none; border-color: var(--accent); }
+.route-link { margin-top: 10px; font-size: 12px; color: var(--accent); cursor: pointer; }
+.route-link:hover { text-decoration: underline; }
+.route-link b { font-weight: 600; }

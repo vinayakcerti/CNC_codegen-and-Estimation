@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import { api, SAMPLE_NAME } from "./api";
 import type {
-  AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo,
+  AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo, Mesh,
   WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts, MaterialOpts, PlanBasis,
 } from "./api";
 import { PartViewer } from "./PartViewer";
@@ -13,7 +13,7 @@ import type { CustomMachine } from "./MachineSelect";
 import { BottomPanel } from "./BottomPanel";
 import { lsGet, lsSet } from "./storage";
 
-type Tab = "overview" | "strategy" | "estimate";
+type Tab = "overview" | "strategy" | "estimate" | "route";
 type Theme = "dark" | "light";
 
 const INSPECTOR_MIN = 200;
@@ -140,6 +140,99 @@ const numOr0 = (s: string) => {
   return Number.isFinite(v) && v >= 0 ? v : 0;
 };
 
+// Shared money/time formatters (Estimate + Route tabs)
+const inr = (v: number) => "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+const fmtMin = (min: number) => {
+  const m = Math.round(min);
+  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min`;
+};
+
+// ---- Exact-face highlight (Feature A) ----
+// A candidate's face_mesh_data has shipped in three shapes across backend
+// versions: a single plotly-style {x,y,z,i,j,k} mesh, an array of those, or
+// an array of tessellation dicts {vertices:[[x,y,z]...], triangles:[[i,j,k]...]}
+// (the current /api/analyze shape). Normalize all of them to Mesh[] and drop
+// anything malformed — a missing overlay falls back to the marker.
+function normalizeFaceMeshes(raw: unknown): Mesh[] {
+  const asNums = (a: unknown): number[] | null =>
+    Array.isArray(a) && a.every((v) => typeof v === "number") ? (a as number[]) : null;
+
+  const one = (m: unknown): Mesh | null => {
+    if (!m || typeof m !== "object") return null;
+    const o = m as Record<string, unknown>;
+    // Shape 1: plotly-style mesh dict
+    const x = asNums(o.x), y = asNums(o.y), z = asNums(o.z);
+    const i = asNums(o.i), j = asNums(o.j), k = asNums(o.k);
+    if (x && y && z && i && j && k && x.length && i.length) return { x, y, z, i, j, k };
+    // Shape 2: tessellation dict {vertices, triangles}
+    if (Array.isArray(o.vertices) && Array.isArray(o.triangles)) {
+      const mx: number[] = [], my: number[] = [], mz: number[] = [];
+      for (const v of o.vertices) {
+        if (!Array.isArray(v) || v.length < 3) return null;
+        mx.push(Number(v[0])); my.push(Number(v[1])); mz.push(Number(v[2]));
+      }
+      const mi: number[] = [], mj: number[] = [], mk: number[] = [];
+      for (const t of o.triangles) {
+        if (!Array.isArray(t) || t.length < 3) return null;
+        mi.push(Number(t[0])); mj.push(Number(t[1])); mk.push(Number(t[2]));
+      }
+      if (mx.length && mi.length) return { x: mx, y: my, z: mz, i: mi, j: mj, k: mk };
+    }
+    return null;
+  };
+
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const out: Mesh[] = [];
+  for (const m of list) {
+    const n = one(m);
+    if (n) out.push(n);
+  }
+  return out;
+}
+
+// ---- Process Route (Feature B) ----
+// Weldment classifications that belong on a lathe, not the VMC.
+const TURNED_RE = /^(shaft|tube)$/i;
+
+// Operator-added route steps (deburr, anodize, inspection...). Persisted —
+// a shop's post-processes are stable across parts.
+interface CustomRouteStep {
+  id: string;
+  name: string;
+  timeMin: number;
+  rateHr: number;
+  station: string;
+}
+
+function loadCustomRouteSteps(): CustomRouteStep[] {
+  try {
+    const raw = lsGet("cnc.customRouteSteps");
+    const arr: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((s): s is CustomRouteStep => {
+      const c = s as CustomRouteStep;
+      return (
+        !!c &&
+        typeof c.id === "string" &&
+        typeof c.name === "string" &&
+        c.name.length > 0 &&
+        Number.isFinite(c.timeMin) &&
+        c.timeMin >= 0 &&
+        Number.isFinite(c.rateHr) &&
+        c.rateHr >= 0 &&
+        typeof c.station === "string"
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
+function loadWeldRate(): number {
+  const v = Number(lsGet("cnc.routeWeldRate"));
+  return Number.isFinite(v) && v > 0 ? v : 400;
+}
+
 // "Setup 3","Setup 5" → "Setup 3,5" · "Top" → "Setup Top"
 function formatSetups(setups: string[]): string {
   if (!setups.length) return "—";
@@ -209,6 +302,147 @@ function loadInspectorWidth(): number {
   return Number.isFinite(v) && v >= INSPECTOR_MIN && v <= INSPECTOR_MAX ? v : INSPECTOR_DEFAULT;
 }
 
+// Floating op-detail panel over the canvas (Strategy op click). Read-mostly:
+// spindle/feed edits recompute the cut time LOCALLY — the planned time's
+// built-in safety factor (origTime·origFeed/path) is preserved, so
+// newTime = origTime × origFeed / newFeed. Never mutates the plan.
+// Remount per op (key=selOp) so the inputs reset to the op's planned values.
+function OpPanel({ op, onClose }: { op: StrategyOp; onClose: () => void }) {
+  const [spindleStr, setSpindleStr] = useState(String(Math.round(op.spindle_rpm ?? 0)));
+  const [feedStr, setFeedStr] = useState(String(Math.round(op.feed_mm_min ?? 0)));
+  const origFeed = op.feed_mm_min ?? 0;
+  const newFeed = numOr0(feedStr);
+  const edited = newFeed > 0 && origFeed > 0 && Math.abs(newFeed - origFeed) > 1e-9;
+  const cutMin = edited ? op.cut_min * (origFeed / newFeed) : op.cut_min;
+  return (
+    <div className="op-panel">
+      <div className="op-panel-head">
+        <div style={{ minWidth: 0 }}>
+          <div className="op-panel-title" title={op.operation}>{op.operation}</div>
+          <div className="op-panel-sub" title={op.feature}>{op.feature || "—"}</div>
+        </div>
+        <button className="op-panel-x" title="Close (clears the highlight)" onClick={onClose}>
+          ✕
+        </button>
+      </div>
+      <div className="op-panel-row">
+        <span className="k">Tool</span>
+        <span className="v" title={op.tool}>{op.tool_display || op.tool}</span>
+      </div>
+      <div className="op-panel-sect">Cutting parameters</div>
+      <div className="op-panel-row">
+        <span className="k">Spindle (rpm)</span>
+        <input
+          className="num-input"
+          type="number"
+          min={0}
+          value={spindleStr}
+          onChange={(e) => setSpindleStr(e.target.value)}
+        />
+      </div>
+      <div className="op-panel-row">
+        <span className="k">Feed (mm/min)</span>
+        <input
+          className="num-input"
+          type="number"
+          min={0}
+          value={feedStr}
+          onChange={(e) => setFeedStr(e.target.value)}
+        />
+      </div>
+      <div className="op-panel-row">
+        <span className="k">Path (mm)</span>
+        <span className="v">{(op.path_mm ?? 0).toFixed(0)}</span>
+      </div>
+      <div className="op-panel-row">
+        <span className="k">Cut time (min)</span>
+        <span className="v" style={edited ? { color: "var(--accent)" } : undefined}>
+          {cutMin.toFixed(2)}
+        </span>
+      </div>
+      <div className="op-panel-note">Estimates only — does not modify the plan</div>
+    </div>
+  );
+}
+
+// Inline "+ Add process" form on the Route tab. Name and a positive time
+// are required; rate defaults to a generic bench rate.
+function AddProcessForm({
+  onAdd,
+  onCancel,
+}: {
+  onAdd: (s: Omit<CustomRouteStep, "id">) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [timeStr, setTimeStr] = useState("30");
+  const [rateStr, setRateStr] = useState("500");
+  const [station, setStation] = useState("");
+  const valid = name.trim().length > 0 && numOr0(timeStr) > 0;
+  return (
+    <div className="route-form">
+      <div className="mat-form-row">
+        <span>Process name</span>
+        <input
+          className="text-input"
+          placeholder="e.g. Deburr & clean"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </div>
+      <div className="mat-form-row">
+        <span>Time (min)</span>
+        <input
+          className="num-input"
+          type="number"
+          min={0}
+          value={timeStr}
+          onChange={(e) => setTimeStr(e.target.value)}
+        />
+      </div>
+      <div className="mat-form-row">
+        <span>Rate (₹/hr)</span>
+        <input
+          className="num-input"
+          type="number"
+          min={0}
+          value={rateStr}
+          onChange={(e) => setRateStr(e.target.value)}
+        />
+      </div>
+      <div className="mat-form-row">
+        <span>Machine/station</span>
+        <input
+          className="text-input"
+          placeholder="optional"
+          value={station}
+          onChange={(e) => setStation(e.target.value)}
+        />
+      </div>
+      <div className="mat-form-actions">
+        <button className="btn" style={{ padding: "4px 12px", fontSize: 12 }} onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          className="btn primary"
+          style={{ padding: "4px 12px", fontSize: 12 }}
+          disabled={!valid}
+          onClick={() =>
+            onAdd({
+              name: name.trim(),
+              timeMin: numOr0(timeStr),
+              rateHr: numOr0(rateStr),
+              station: station.trim(),
+            })
+          }
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [analysis, setAnalysis] = useState<AnalyzeResult | null>(null);
   const [strategy, setStrategy] = useState<StrategyResult | null>(null);
@@ -245,6 +479,43 @@ export default function App() {
   const [estPreset, setEstPreset] = useState<QuotePreset>(loadPreset);
   const [estComplexity, setEstComplexity] = useState<number>(loadComplexity);
   const [estTolerance, setEstTolerance] = useState<ToleranceClass>(loadTolerance);
+
+  // ---- Process Route state (Route tab) ----
+  // Welding/assembly labour rate — persisted (a shop's rate is stable).
+  const [weldRate, setWeldRate] = useState<number>(loadWeldRate);
+  // Turning placeholder: manual time/rate so turned parts are quotable
+  // before the lathe module lands. Session-only by design.
+  const [turnMin, setTurnMin] = useState(0);
+  const [turnRate, setTurnRate] = useState(600);
+  // Operator-added process blocks (persisted under cnc.customRouteSteps).
+  const [customRouteSteps, setCustomRouteSteps] = useState<CustomRouteStep[]>(loadCustomRouteSteps);
+  const [addingProcess, setAddingProcess] = useState(false);
+
+  function changeWeldRate(v: number) {
+    setWeldRate(v);
+    lsSet("cnc.routeWeldRate", String(v));
+  }
+
+  function addRouteStep(s: Omit<CustomRouteStep, "id">) {
+    const step: CustomRouteStep = {
+      ...s,
+      id: `crs-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    };
+    setCustomRouteSteps((cur) => {
+      const next = [...cur, step];
+      lsSet("cnc.customRouteSteps", JSON.stringify(next));
+      return next;
+    });
+    setAddingProcess(false);
+  }
+
+  function removeRouteStep(id: string) {
+    setCustomRouteSteps((cur) => {
+      const next = cur.filter((c) => c.id !== id);
+      lsSet("cnc.customRouteSteps", JSON.stringify(next));
+      return next;
+    });
+  }
 
   // Machine selection: library machines from /api/machines, user-defined
   // machines from localStorage. Custom machines are sent as machine_json.
@@ -361,6 +632,103 @@ export default function App() {
       ? scopedStrategy
       : null
     : strategy;
+
+  // Selected op resolved from the on-screen plan (selOp id = "<setup>-<num>").
+  // Derived, not stored — it can never outlive a plan/scope/basis change.
+  const selOpData = useMemo((): StrategyOp | null => {
+    if (!selOp || !stratForView) return null;
+    for (const su of stratForView.setups) {
+      for (const op of su.ops) {
+        if (`${su.setup_label}-${op.op_num}` === selOp) return op;
+      }
+    }
+    return null;
+  }, [selOp, stratForView]);
+
+  // Exact face meshes for the selected op via geo.candidate_id → analyze
+  // candidates. Candidates are whole-assembly in the raw-CAD frame — the
+  // same frame as body meshes — so this works under a body scope too.
+  const selFaceMeshes = useMemo((): Mesh[] | null => {
+    const cid = selOpData?.geo?.candidate_id;
+    if (!cid || !analysis) return null;
+    const cand = analysis.candidates.find((c) => c.candidate_id === cid);
+    const meshes = cand ? normalizeFaceMeshes(cand.face_mesh_data) : [];
+    return meshes.length ? meshes : null;
+  }, [selOpData, analysis]);
+
+  // ---- Shared estimate core (Estimate tab ledger + Route tab blocks) ----
+  // One source of truth for the machining multiplier, material mass/cost and
+  // setup charges, so the routed grand total is an exact superset of the
+  // milling-only estimate.
+  const estCore = useMemo(() => {
+    if (!analysis || !strategy) return null;
+    const machineMin = strategy.totals.total_machine_time_min ?? 0;
+    // Operator-controlled machining multiplier: quote preset × complexity ×
+    // tolerance. Applies ONLY to machining-time cost lines — never to
+    // material or setup charges.
+    const presetMult = PRESET_MULT[estPreset];
+    const tolMult = TOLERANCE_MULT[estTolerance];
+    const complexity = Number.isFinite(estComplexity)
+      ? Math.min(COMPLEXITY_MAX, Math.max(COMPLEXITY_MIN, estComplexity))
+      : 1.0;
+    const machMult = presetMult * complexity * tolMult;
+    const machining = (machineMin / 60) * rateHr * machMult;
+    // Custom materials win the density lookup — their density drives the
+    // stock-mass line.
+    const density =
+      customMaterials.find((m) => m.name === analysis.material)?.density ??
+      materials.find((m) => m.name === analysis.material)?.density ??
+      2.7;
+    // Material is bought as STOCK, not as the finished part — mass comes
+    // from the stock block, so Manual stock sizes flow straight in.
+    const stockSize =
+      stockMode === "manual" && manualStock ? manualStock : analysis.stock?.size_mm;
+    const stockVolCm3 = stockSize
+      ? (stockSize.length * stockSize.width * stockSize.height) / 1000
+      : (analysis.volumes_cm3.stock ?? 0); // legacy fallback: no stock block
+    const massKg = (stockVolCm3 * density) / 1000;
+    const materialCost = massKg * matPriceKg;
+    const setupsCost = strategy.setups.length * setupCharge;
+    return {
+      machineMin, presetMult, tolMult, complexity, machMult, machining,
+      stockSize, massKg, materialCost, setupsCost,
+    };
+  }, [
+    analysis, strategy, estPreset, estTolerance, estComplexity,
+    customMaterials, materials, stockMode, manualStock, matPriceKg, setupCharge, rateHr,
+  ]);
+
+  // ---- Route rollup: block times/costs + routed grand total ----
+  // Computed at top level (not in the Route tab) because the Estimate tab
+  // links to the routed total whenever the route has more than one block.
+  const routeCalc = useMemo(() => {
+    if (!estCore) return null;
+    const millingCost = estCore.machining; // identical to the estimate's machining lines
+    const hasWeld = !!wmResult;
+    const weldMin = wmResult?.total_assembly_time_min ?? 0;
+    const weldCost = (weldMin / 60) * weldRate;
+    const turnedCount = (wmResult?.groups ?? [])
+      .filter((g) => TURNED_RE.test(g.classification))
+      .reduce((n, g) => n + g.quantity, 0);
+    const hasTurning = turnedCount > 0;
+    const turnCost = (turnMin / 60) * turnRate;
+    const customMin = customRouteSteps.reduce((s, c) => s + c.timeMin, 0);
+    const customCost = customRouteSteps.reduce((s, c) => s + (c.timeMin / 60) * c.rateHr, 0);
+    const blockCount = 1 + (hasWeld ? 1 : 0) + (hasTurning ? 1 : 0) + customRouteSteps.length;
+    const totalMin =
+      estCore.machineMin + (hasWeld ? weldMin : 0) + (hasTurning ? turnMin : 0) + customMin;
+    const blocksCost =
+      millingCost + (hasWeld ? weldCost : 0) + (hasTurning ? turnCost : 0) + customCost;
+    // Same footer math as the Estimate ledger — material + setups + margin —
+    // with all process blocks in place of the single machining line.
+    const subtotal = blocksCost + estCore.materialCost + estCore.setupsCost;
+    const margin = subtotal * (marginPct / 100);
+    const total = subtotal + margin;
+    return {
+      millingCost, hasWeld, weldMin, weldCost, turnedCount, hasTurning, turnCost,
+      customMin, customCost, blockCount, totalMin, blocksCost, subtotal, margin, total,
+    };
+  }, [estCore, wmResult, weldRate, turnMin, turnRate, customRouteSteps, marginPct]);
 
   // ---- Setup orientation (Overview → Setups click) ----
   const [activeSetup, setActiveSetup] = useState<string | null>(null);
@@ -889,7 +1257,7 @@ export default function App() {
             </span>
             {analysis && (
               <div className="tabs">
-                {(["overview", "strategy", "estimate"] as Tab[]).map((t) => (
+                {(["overview", "strategy", "estimate", "route"] as Tab[]).map((t) => (
                   <button
                     key={t}
                     className={`tab ${tab === t ? "active" : ""}`}
@@ -1014,6 +1382,10 @@ export default function App() {
                   // scoped plans emit raw-CAD geo, the same frame as body meshes,
                   // so markers land correctly on the isolated body too.
                   highlight={highlight}
+                  // Exact faces of the selected op's feature (raw-CAD frame).
+                  // When present, PartViewer drapes them on the surface and
+                  // skips the approximate marker.
+                  faceMeshes={selFaceMeshes}
                   theme={theme}
                   // Setup orientation applies to the whole-assembly view only
                   // (the Setups list is a whole-assembly analysis).
@@ -1057,6 +1429,19 @@ export default function App() {
                     }}
                   />
                 </div>
+              )}
+              {/* Op detail panel — floats over the canvas' left side while a
+                  strategy op is selected. key remounts it per op so the
+                  editable spindle/feed reset to the op's planned values. */}
+              {analysis && !loading && tab === "strategy" && selOpData && (
+                <OpPanel
+                  key={selOp}
+                  op={selOpData}
+                  onClose={() => {
+                    setSelOp(null);
+                    setHighlight(null);
+                  }}
+                />
               )}
             </div>
             {analysis && <BottomPanel candidates={analysis.candidates} />}
@@ -1373,35 +1758,13 @@ export default function App() {
                       </>
                     )}
 
-                    {tab === "estimate" && strategy && (() => {
-                      const machineMin = strategy.totals.total_machine_time_min ?? 0;
-                      // Operator-controlled machining multiplier: quote preset ×
-                      // complexity × tolerance. Applies ONLY to machining-time
-                      // cost lines — never to material or setup charges.
-                      const presetMult = PRESET_MULT[estPreset];
-                      const tolMult = TOLERANCE_MULT[estTolerance];
-                      const complexity = Number.isFinite(estComplexity)
-                        ? Math.min(COMPLEXITY_MAX, Math.max(COMPLEXITY_MIN, estComplexity))
-                        : 1.0;
-                      const machMult = presetMult * complexity * tolMult;
-                      const machining = (machineMin / 60) * rateHr * machMult;
-                      // Custom materials win the density lookup — their density
-                      // drives the stock-mass line.
-                      const density =
-                        customMaterials.find((m) => m.name === analysis.material)?.density ??
-                        materials.find((m) => m.name === analysis.material)?.density ??
-                        2.7;
-                      // Material is bought as STOCK, not as the finished part —
-                      // mass comes from the stock block (Overview → Stock rows),
-                      // so Manual stock sizes flow straight into this line.
-                      const stockSize =
-                        stockMode === "manual" && manualStock ? manualStock : analysis.stock?.size_mm;
-                      const stockVolCm3 = stockSize
-                        ? (stockSize.length * stockSize.width * stockSize.height) / 1000
-                        : (analysis.volumes_cm3.stock ?? 0); // legacy fallback: no stock block
-                      const massKg = (stockVolCm3 * density) / 1000;
-                      const material_ = massKg * matPriceKg;
-                      const setupsCost = strategy.setups.length * setupCharge;
+                    {tab === "estimate" && strategy && estCore && (() => {
+                      // All shared cost math lives in estCore (also feeds the
+                      // Route tab, keeping the routed total a strict superset).
+                      const {
+                        machineMin, presetMult, tolMult, complexity, machMult,
+                        machining, stockSize, massKg, materialCost: material_, setupsCost,
+                      } = estCore;
                       const partTotal = material_ + machining; // block 1: material + machining
                       const subtotal = partTotal + setupsCost;
                       const margin = subtotal * (marginPct / 100);
@@ -1415,12 +1778,6 @@ export default function App() {
                       };
                       const rangeLow = totalAtPreset(PRESET_MULT.competitive);
                       const rangeHigh = totalAtPreset(PRESET_MULT.conservative);
-                      const inr = (v: number) =>
-                        "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
-                      const fmtMin = (min: number) => {
-                        const m = Math.round(min);
-                        return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min`;
-                      };
                       const d = analysis.dimensions_mm;
                       const stockDims = stockSize
                         ? `${fmtNum(stockSize.length)} × ${fmtNum(stockSize.width)} × ${fmtNum(stockSize.height)} mm`
@@ -1608,6 +1965,272 @@ export default function App() {
                           </div>
                           <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 8 }}>
                             {machineMin.toFixed(0)} min machine time · {strategy.setups.length} setups · per part
+                          </div>
+                          {/* This ledger prices the milling only — point at the
+                              full job when the route has more processes. */}
+                          {routeCalc && routeCalc.blockCount > 1 && (
+                            <div
+                              className="route-link"
+                              title="This estimate covers CNC milling only — the Route tab adds welding/assembly, turning, and custom processes"
+                              onClick={() => setTab("route")}
+                            >
+                              Full multi-process quote on the Route tab:{" "}
+                              <b>{inr(routeCalc.total)}</b> →
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+
+                    {/* ---- Process Route: the multi-process/multi-machine job
+                         chain. Milling comes from the strategy, welding &
+                         assembly from the weldment analysis, turning is a
+                         manual-quote placeholder until the lathe module, and
+                         operators append their own steps. ---- */}
+                    {tab === "route" && (!strategy || !estCore || !routeCalc) && (
+                      <div style={{ fontSize: 12, color: "var(--text-2)", padding: "6px 0" }}>
+                        Waiting for the machining strategy…
+                      </div>
+                    )}
+                    {tab === "route" && strategy && estCore && routeCalc && (() => {
+                      let blockNum = 0;
+                      const num = () => ++blockNum;
+                      return (
+                        <>
+                          {selectedGroup && (
+                            <div className="scope-note">
+                              The route always covers the whole job — body scope does not apply here.
+                            </div>
+                          )}
+                          <div className="section-title">Process route</div>
+                          <div className="route-chain">
+                            {/* Block 1 — CNC Milling (auto from the strategy) */}
+                            <div className="route-block">
+                              <div className="rb-head">
+                                <span className="rb-num">{num()}</span>
+                                <div className="rb-title">
+                                  <div className="rb-name">CNC Milling</div>
+                                  <div className="rb-station" title={machineSel || undefined}>
+                                    {machineSel || strategy.machine || "Default machine"}
+                                  </div>
+                                </div>
+                                <span className="rb-cost">{inr(routeCalc.millingCost)}</span>
+                              </div>
+                              <div className="rb-line">
+                                <span className="k">Time</span>
+                                <span className="v">{fmtMin(estCore.machineMin)}</span>
+                              </div>
+                              <div className="rb-line">
+                                <span className="k">Rate</span>
+                                <span
+                                  className="v"
+                                  title={
+                                    estCore.machMult !== 1
+                                      ? "Machining rate × the Estimate tab's preset/complexity/tolerance multiplier"
+                                      : "Machining rate from the Estimate tab"
+                                  }
+                                >
+                                  ₹{rateHr}/hr
+                                  {estCore.machMult !== 1 ? ` × ${estCore.machMult.toFixed(2)}` : ""}
+                                </span>
+                              </div>
+                              <div className="rb-sub">
+                                {strategy.setups.length} setup{strategy.setups.length === 1 ? "" : "s"} · auto from strategy
+                                {strategy.basis && (
+                                  <span
+                                    className="chip"
+                                    title={
+                                      strategy.basis === "grouped"
+                                        ? "Grouped basis — duplicate detections deduped; one op per physical feature"
+                                        : "Raw basis — every detection planned; most conservative"
+                                    }
+                                  >
+                                    {strategy.basis === "grouped"
+                                      ? `Physical features: ${strategy.planned_candidate_count ?? "—"}`
+                                      : `Raw detections: ${strategy.planned_candidate_count ?? "—"}`}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Block 2 — Welding & Assembly (auto, weldments only) */}
+                            {wmResult && (
+                              <>
+                                <div className="route-connector" />
+                                <div className="route-block">
+                                  <div className="rb-head">
+                                    <span className="rb-num">{num()}</span>
+                                    <div className="rb-title">
+                                      <div className="rb-name">Welding &amp; Assembly</div>
+                                      <div className="rb-station">Weld shop</div>
+                                    </div>
+                                    <span className="rb-cost">{inr(routeCalc.weldCost)}</span>
+                                  </div>
+                                  <div className="rb-line">
+                                    <span className="k">Time</span>
+                                    <span className="v">{fmtMin(routeCalc.weldMin)}</span>
+                                  </div>
+                                  <div className="rb-line">
+                                    <span className="k">Rate (₹/hr)</span>
+                                    <input
+                                      className="num-input"
+                                      type="number"
+                                      min={0}
+                                      value={weldRate}
+                                      onChange={(e) => changeWeldRate(numOr0(e.target.value))}
+                                    />
+                                  </div>
+                                  {wmResult.assembly_operations.length > 0 && (
+                                    <div style={{ marginTop: 6 }}>
+                                      {wmResult.assembly_operations.map((o, i) => (
+                                        <div className="rb-oprow" key={i} title={o.note || o.tool_equipment}>
+                                          <span className="ph">{o.phase}</span>
+                                          <span className="op">— {o.operation}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <div className="rb-sub">auto from weldment analysis</div>
+                                </div>
+                              </>
+                            )}
+                            {analysis.is_multibody && !wmResult && wmLoading && (
+                              <>
+                                <div className="route-connector" />
+                                <div className="route-block" style={{ fontSize: 12, color: "var(--text-2)" }}>
+                                  Analysing bodies — the Welding &amp; Assembly block will appear here…
+                                </div>
+                              </>
+                            )}
+
+                            {/* Block 3 — CNC Turning placeholder (shaft/tube bodies
+                                detected; plannable once the lathe module lands) */}
+                            {routeCalc.hasTurning && (
+                              <>
+                                <div className="route-connector" />
+                                <div className="route-block">
+                                  <div className="rb-head">
+                                    <span className="rb-num">{num()}</span>
+                                    <div className="rb-title">
+                                      <div className="rb-name">CNC Turning</div>
+                                      <div className="rb-station">Lathe — manual quote</div>
+                                    </div>
+                                    <span className="rb-cost">{inr(routeCalc.turnCost)}</span>
+                                  </div>
+                                  <div className="rb-note">
+                                    Detected {routeCalc.turnedCount} turned part
+                                    {routeCalc.turnedCount === 1 ? "" : "s"} — turning planning coming
+                                    with the lathe module
+                                  </div>
+                                  <div className="rb-line">
+                                    <span className="k">Time (min, manual)</span>
+                                    <input
+                                      className="num-input"
+                                      type="number"
+                                      min={0}
+                                      value={turnMin}
+                                      onChange={(e) => setTurnMin(numOr0(e.target.value))}
+                                    />
+                                  </div>
+                                  <div className="rb-line">
+                                    <span className="k">Rate (₹/hr)</span>
+                                    <input
+                                      className="num-input"
+                                      type="number"
+                                      min={0}
+                                      value={turnRate}
+                                      onChange={(e) => setTurnRate(numOr0(e.target.value))}
+                                    />
+                                  </div>
+                                </div>
+                              </>
+                            )}
+
+                            {/* Custom process blocks (operator-added, persisted) */}
+                            {customRouteSteps.map((c) => (
+                              <Fragment key={c.id}>
+                                <div className="route-connector" />
+                                <div className="route-block">
+                                  <div className="rb-head">
+                                    <span className="rb-num">{num()}</span>
+                                    <div className="rb-title">
+                                      <div className="rb-name" title={c.name}>{c.name}</div>
+                                      <div className="rb-station" title={c.station || undefined}>
+                                        {c.station || "—"}
+                                      </div>
+                                    </div>
+                                    <span className="rb-cost">{inr((c.timeMin / 60) * c.rateHr)}</span>
+                                    <button
+                                      className="rb-x"
+                                      title="Remove this process"
+                                      onClick={() => removeRouteStep(c.id)}
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                  <div className="rb-line">
+                                    <span className="k">Time</span>
+                                    <span className="v">{fmtMin(c.timeMin)}</span>
+                                  </div>
+                                  <div className="rb-line">
+                                    <span className="k">Rate</span>
+                                    <span className="v">₹{c.rateHr}/hr</span>
+                                  </div>
+                                  <div className="rb-sub">custom process</div>
+                                </div>
+                              </Fragment>
+                            ))}
+                          </div>
+
+                          {addingProcess ? (
+                            <AddProcessForm onAdd={addRouteStep} onCancel={() => setAddingProcess(false)} />
+                          ) : (
+                            <button className="btn route-add" onClick={() => setAddingProcess(true)}>
+                              + Add process
+                            </button>
+                          )}
+
+                          <div className="section-title">Route summary</div>
+                          <div className="row">
+                            <span className="k">Total route time</span>
+                            <span className="v">{fmtMin(routeCalc.totalMin)}</span>
+                          </div>
+                          <div className="ledger">
+                            <div className="ledger-row root">
+                              <span className="desc">Process blocks</span>
+                              <span className="qty">× {routeCalc.blockCount}</span>
+                              <span className="amt">{inr(routeCalc.blocksCost)}</span>
+                            </div>
+                            <div className="ledger-row">
+                              <span
+                                className="desc"
+                                title={`${analysis.material} stock — ${estCore.massKg.toFixed(1)} kg @ ₹${matPriceKg}/kg (same line as the Estimate tab)`}
+                              >
+                                Material — {analysis.material}, {estCore.massKg.toFixed(1)} kg
+                              </span>
+                              <span className="amt">{inr(estCore.materialCost)}</span>
+                            </div>
+                            <div className="ledger-row">
+                              <span className="desc">Setup charges</span>
+                              <span className="qty">× {strategy.setups.length}</span>
+                              <span className="amt">{inr(estCore.setupsCost)}</span>
+                            </div>
+                            <div className="ledger-row subtotal">
+                              <span className="desc">Subtotal</span>
+                              <span className="amt">{inr(routeCalc.subtotal)}</span>
+                            </div>
+                            <div className="ledger-row">
+                              <span className="desc">Margin ({marginPct}%)</span>
+                              <span className="amt">{inr(routeCalc.margin)}</span>
+                            </div>
+                            <div className="ledger-row grand">
+                              <span className="desc">Routed grand total</span>
+                              <span className="amt">{inr(routeCalc.total)}</span>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 8 }}>
+                            Superset of the milling-only estimate — material, setup charges and
+                            margin reuse the Estimate settings.
                           </div>
                         </>
                       );

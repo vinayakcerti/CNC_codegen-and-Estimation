@@ -172,6 +172,34 @@ function WorkholdingScene({
   );
 }
 
+// Shared Mesh-dict → BufferGeometry builder (part body + exact-face overlays).
+function buildGeometry(mesh: Mesh): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  const n = mesh.x.length;
+  const pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    pos[i * 3] = mesh.x[i];
+    pos[i * 3 + 1] = mesh.y[i];
+    pos[i * 3 + 2] = mesh.z[i];
+  }
+  // Sanitize: OCC tessellation occasionally emits NaN vertices on
+  // complex weldments — they break bounding-sphere computation.
+  for (let i = 0; i < pos.length; i++) {
+    if (!Number.isFinite(pos[i])) pos[i] = 0;
+  }
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const tri = mesh.i.length;
+  const idx = new Uint32Array(tri * 3);
+  for (let i = 0; i < tri; i++) {
+    idx[i * 3] = mesh.i[i];
+    idx[i * 3 + 1] = mesh.j[i];
+    idx[i * 3 + 2] = mesh.k[i];
+  }
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.computeVertexNormals();
+  return g;
+}
+
 function PartMesh({
   mesh,
   dimmed,
@@ -183,32 +211,7 @@ function PartMesh({
   light: boolean;
   opacity: number;
 }) {
-  const geometry = useMemo(() => {
-    const g = new THREE.BufferGeometry();
-    const n = mesh.x.length;
-    const pos = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      pos[i * 3] = mesh.x[i];
-      pos[i * 3 + 1] = mesh.y[i];
-      pos[i * 3 + 2] = mesh.z[i];
-    }
-    // Sanitize: OCC tessellation occasionally emits NaN vertices on
-    // complex weldments — they break bounding-sphere computation.
-    for (let i = 0; i < pos.length; i++) {
-      if (!Number.isFinite(pos[i])) pos[i] = 0;
-    }
-    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    const tri = mesh.i.length;
-    const idx = new Uint32Array(tri * 3);
-    for (let i = 0; i < tri; i++) {
-      idx[i * 3] = mesh.i[i];
-      idx[i * 3 + 1] = mesh.j[i];
-      idx[i * 3 + 2] = mesh.k[i];
-    }
-    g.setIndex(new THREE.BufferAttribute(idx, 1));
-    g.computeVertexNormals();
-    return g;
-  }, [mesh]);
+  const geometry = useMemo(() => buildGeometry(mesh), [mesh]);
 
   const effOpacity = (dimmed ? 0.4 : 1) * opacity;
   const isTransparent = effOpacity < 0.999;
@@ -271,9 +274,40 @@ function HighlightMarker({ hl, meshTopZ, partSize }: { hl: Highlight; meshTopZ: 
   );
 }
 
+// Exact-face highlight: the op's actual CAD faces draped on the part.
+// These faces lie ON the part skin, so depthTest stays TRUE (depthTest:false
+// would bleed them through the whole body) and polygonOffset pulls them just
+// in front of the coincident part triangles so they win the depth tie.
+function FaceMeshOverlay({ meshes }: { meshes: Mesh[] }) {
+  const geoms = useMemo(() => meshes.map(buildGeometry), [meshes]);
+  // Face overlays churn with every op click — free the GPU buffers.
+  useEffect(() => () => geoms.forEach((g) => g.dispose()), [geoms]);
+  return (
+    <group>
+      {geoms.map((g, n) => (
+        <mesh key={n} geometry={g} renderOrder={9}>
+          <meshStandardMaterial
+            color="#4a9eff"
+            emissive="#4a9eff"
+            emissiveIntensity={0.7}
+            transparent
+            opacity={0.85}
+            depthWrite={false}
+            side={THREE.DoubleSide}
+            polygonOffset
+            polygonOffsetFactor={-2}
+            polygonOffsetUnits={-2}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 export function PartViewer({
   mesh,
   highlight,
+  faceMeshes = null,
   theme = "dark",
   cameraDir = null,
   approach = null,
@@ -282,6 +316,9 @@ export function PartViewer({
 }: {
   mesh: Mesh | null;
   highlight?: Highlight | null;
+  // Exact tessellated faces of the selected op's feature (raw-CAD frame,
+  // same as `mesh`). When present they replace the approximate marker.
+  faceMeshes?: Mesh[] | null;
   theme?: "dark" | "light";
   // Direction from part center to camera — set to re-orient the view (setup click)
   cameraDir?: Vec3 | null;
@@ -346,7 +383,12 @@ export function PartViewer({
       {mesh && workholding && bbox && (
         <WorkholdingScene bbox={bbox} partSize={partSize} flip={workholding.flip} light={light} />
       )}
-      {mesh && highlight && <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} />}
+      {/* Exact faces win; the marker is the fallback for ops without them.
+          Both render OUTSIDE <Bounds> so selection never re-fits the camera. */}
+      {mesh && faceMeshes && faceMeshes.length > 0 && <FaceMeshOverlay meshes={faceMeshes} />}
+      {mesh && highlight && !(faceMeshes && faceMeshes.length > 0) && (
+        <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} />
+      )}
       {mesh && approach && <ApproachCone approach={approach} partSize={partSize} />}
       <CameraRig dir={cameraDir} center={center} dist={Math.max(partSize * 1.8, 50)} />
       <OrbitControls makeDefault enableDamping dampingFactor={0.12} />
