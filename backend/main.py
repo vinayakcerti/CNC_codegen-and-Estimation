@@ -169,14 +169,83 @@ def _extended_tools() -> list:
     return base + extra
 
 
+def _cand_float(c: dict, *keys) -> float:
+    for k in keys:
+        v = c.get(k)
+        if isinstance(v, (int, float)):
+            return float(v)
+    return 0.0
+
+
+def _same_location(a: dict, b: dict) -> bool:
+    """Two noisy detections of the same physical place — ported from the
+    review UI's _same_review_location (proximity scaled by feature size)."""
+    ax, ay = _cand_float(a, "x_pos", "center_x"), _cand_float(a, "y_pos", "center_y")
+    bx, by = _cand_float(b, "x_pos", "center_x"), _cand_float(b, "y_pos", "center_y")
+    az, bz = _cand_float(a, "z_pos", "center_z"), _cand_float(b, "z_pos", "center_z")
+    length = max(_cand_float(a, "length"), _cand_float(b, "length"))
+    width = max(_cand_float(a, "width"), _cand_float(b, "width"))
+    depth = max(_cand_float(a, "depth"), _cand_float(b, "depth"))
+    long_tol = max(3.0, length * 0.12)
+    short_tol = max(3.0, width * 1.5)
+    z_tol = max(3.0, depth * 0.35)
+    dx, dy, dz = abs(ax - bx), abs(ay - by), abs(az - bz)
+    same_xy = (dx <= long_tol and dy <= short_tol) or (dx <= short_tol and dy <= long_tol)
+    return same_xy and dz <= z_tol
+
+
+def _group_candidates_for_planning(candidates: list) -> list:
+    """One representative per physical feature — mirrors the review UI's
+    grouping: bucket by (type, dims rounded to 0.1), then keep one member
+    per approximate location within each bucket. Kills the duplicate
+    detections that inflate raw-basis estimates."""
+    buckets: dict = {}
+    order: list = []
+    for c in candidates:
+        key = (
+            c.get("feature_type") or "?",
+            round(float(c.get("diameter") or 0), 1),
+            round(float(c.get("length") or 0), 1),
+            round(float(c.get("width") or 0), 1),
+            round(float(c.get("depth") or 0), 1),
+        )
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(c)
+
+    kept = []
+    for key in order:
+        reps: list = []
+        for m in buckets[key]:
+            if any(_same_location(m, r) for r in reps):
+                continue
+            reps.append(m)
+        kept.extend(reps or buckets[key])
+    return kept
+
+
 def _default_context(
     material_name: str | None = None,
     machine_name: str | None = None,
     machine_json: str | None = None,
+    material_json: str | None = None,
 ):
     materials = get_default_materials()
     material = materials[0]
-    if material_name:
+    if material_json:
+        try:
+            mj = json.loads(material_json)
+            if mj.get("name"):
+                material = {
+                    "name": mj["name"],
+                    "density": float(mj.get("density") or 2.7),
+                    "machinability_factor": float(mj.get("machinability_factor") or 1.0),
+                    "safety_factor": float(mj.get("safety_factor") or 1.2),
+                }
+        except Exception:
+            pass
+    elif material_name:
         for m in materials:
             if m.get("name", "").lower() == material_name.lower():
                 material = m
@@ -328,6 +397,7 @@ async def analyze(
     material: str | None = None,
     machine: str | None = None,
     machine_json: str | None = Form(default=None),
+    material_json: str | None = Form(default=None),
 ):
     """Single entry point: parse a STEP file and return the full overview
     (dimensions, topology, detected features, machinability, mesh, and a
@@ -340,7 +410,7 @@ async def analyze(
     if not parse.get("success"):
         raise HTTPException(status_code=400, detail=parse.get("message", "Parse failed."))
 
-    tools, mat, mach = _default_context(material, machine, machine_json)
+    tools, mat, mach = _default_context(material, machine, machine_json, material_json)
     candidates = parse.get("candidate_features", [])
     dfm = compute_dfm_score(candidates, tools, mat, mach)
     mesh, face_areas = _tessellate(data)
@@ -459,7 +529,9 @@ async def strategy(
     material: str | None = None,
     body_index: int | None = None,
     machine: str | None = None,
+    basis: str = "raw",
     machine_json: str | None = Form(default=None),
+    material_json: str | None = Form(default=None),
 ):
     """Operation plan grouped by setup with per-op tool + cycle time —
     the Strategy screen's data. With body_index, the plan is scoped to
@@ -469,8 +541,10 @@ async def strategy(
     if not parse.get("success"):
         raise HTTPException(status_code=400, detail=parse.get("message", "Parse failed."))
 
-    tools, mat, mach = _default_context(material, machine, machine_json)
+    tools, mat, mach = _default_context(material, machine, machine_json, material_json)
     candidates = parse.get("candidate_features", [])
+    if basis == "grouped":
+        candidates = _group_candidates_for_planning(candidates)
 
     scoped_to = None
     if body_index is not None:
@@ -540,6 +614,8 @@ async def strategy(
         "totals": totals,
         "material": mat.get("name"),
         "machine": mach.get("name"),
+        "basis": basis,
+        "planned_candidate_count": len(candidates),
         "scoped_body_index": scoped_to,
         "scoped_candidate_count": len(candidates) if scoped_to is not None else None,
     }
