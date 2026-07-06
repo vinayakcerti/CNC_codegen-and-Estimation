@@ -579,6 +579,9 @@ async def strategy(
             "width": c.get("width") or 0,
             "depth": c.get("depth") or 0,
             "feature_type": c.get("feature_type", ""),
+            # Lets the UI look up the candidate's exact face meshes
+            # (analyze response carries face_mesh_data per candidate).
+            "candidate_id": c.get("candidate_id"),
         }
     ops = plan_operations(features, tools, mat, mach)
     per_op = estimate_time_per_operation(ops, mach, mat)

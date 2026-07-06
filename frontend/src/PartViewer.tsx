@@ -210,14 +210,20 @@ function PartMesh({
     return g;
   }, [mesh]);
 
+  const effOpacity = (dimmed ? 0.4 : 1) * opacity;
+  const isTransparent = effOpacity < 0.999;
   return (
     <mesh geometry={geometry}>
       <meshStandardMaterial
+        // key remounts the material when transparency mode flips — three.js
+        // does not re-sort/re-compile on a `transparent` prop change alone,
+        // which left the part looking see-through at 100% opacity.
+        key={isTransparent ? "t" : "o"}
         color={light ? "#a7aeb8" : "#c9ced6"}
         metalness={0.15}
         roughness={0.55}
-        transparent
-        opacity={(dimmed ? 0.4 : 1) * opacity}
+        transparent={isTransparent}
+        opacity={effOpacity}
       />
     </mesh>
   );
