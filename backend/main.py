@@ -33,6 +33,7 @@ from modules.data_store import (
 )
 from modules.weldment.weldment_analyzer import analyze_weldment
 from modules.workholding import recommend_workholding
+from modules.body_scope import filter_candidates_to_body
 
 app = FastAPI(title="CNC Plan & Process Pro API", version="0.1.0")
 
@@ -66,6 +67,30 @@ def _tessellate(file_bytes: bytes):
             "j": [t[1] for t in tris],
             "k": [t[2] for t in tris],
         }
+    except Exception:
+        return None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def _body_bbox(file_bytes: bytes, body_index: int) -> dict | None:
+    """Bounding box of one solid — cheap pass, no tessellation."""
+    tmp_path = None
+    try:
+        import cadquery as cq
+        with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        solids = cq.importers.importStep(tmp_path).val().Solids()
+        if body_index < 0 or body_index >= len(solids):
+            return None
+        bb = solids[body_index].BoundingBox()
+        return {"xmin": bb.xmin, "xmax": bb.xmax, "ymin": bb.ymin,
+                "ymax": bb.ymax, "zmin": bb.zmin, "zmax": bb.zmax}
     except Exception:
         return None
     finally:
@@ -150,6 +175,40 @@ def materials():
     }
 
 
+def _tool_display(t: dict) -> dict:
+    """Catalog-style presentation fields derived from the tool record.
+
+    Presentation only — the engine keeps using the raw library fields.
+    Flute counts / tip angle are standard defaults per tool type, shown
+    so the table reads like a real tool catalog.
+    """
+    ttype = str(t.get("tool_type") or "")
+    dia = float(t.get("diameter_mm") or 0)
+    tl = ttype.lower()
+    if "drill" in tl and "spot" not in tl:
+        flutes, tip = 2, "135°"
+        name = f"{dia:g}mm Drill {tip}"
+    elif "spot" in tl:
+        flutes, tip = 2, "90°"
+        name = f"{dia:g}mm Spot Drill {tip}"
+    elif "face" in tl:
+        flutes, tip = 6, None
+        name = f'{dia:g}mm {flutes}F Face Mill'
+    elif "tap" in tl:
+        flutes, tip = 2, None
+        name = f"{dia:g}mm Tap RH"
+    elif "chamfer" in tl:
+        flutes, tip = 4, "90°"
+        name = f"{dia:g}mm Chamfer Mill {tip}"
+    elif "bor" in tl:
+        flutes, tip = 1, None
+        name = f"{dia:g}mm Boring Bar"
+    else:  # end mills, slot drills
+        flutes, tip = 3, None
+        name = f"{dia:g}mm {flutes}F Flat Endmill"
+    return {"display_name": name, "flutes": flutes, "tip_angle": tip}
+
+
 @app.get("/api/tools")
 def tools_list():
     """Tool library for the Tool Table panel."""
@@ -162,6 +221,8 @@ def tools_list():
                 "diameter_mm": t.get("diameter_mm"),
                 "flute_length_mm": t.get("flute_length_mm"),
                 "max_depth_mm": t.get("max_depth_mm"),
+                **_tool_display(t),
+                "source_library": "Default Shop Library (Metric)",
             }
             for t in get_default_tools()
         ]
@@ -276,9 +337,14 @@ async def weldment(file: UploadFile = File(...)):
 
 
 @app.post("/api/strategy")
-async def strategy(file: UploadFile = File(...), material: str | None = None):
+async def strategy(
+    file: UploadFile = File(...),
+    material: str | None = None,
+    body_index: int | None = None,
+):
     """Operation plan grouped by setup with per-op tool + cycle time —
-    the Strategy screen's data."""
+    the Strategy screen's data. With body_index, the plan is scoped to
+    that solid's candidates (same body-scope filter the review UI uses)."""
     data = await file.read()
     parse = parse_step_auto(data)
     if not parse.get("success"):
@@ -286,6 +352,14 @@ async def strategy(file: UploadFile = File(...), material: str | None = None):
 
     tools, mat, machine = _default_context(material)
     candidates = parse.get("candidate_features", [])
+
+    scoped_to = None
+    if body_index is not None:
+        bbox = _body_bbox(data, body_index)
+        if bbox is None:
+            raise HTTPException(status_code=400, detail=f"Body {body_index + 1} not found.")
+        candidates = filter_candidates_to_body(candidates, {"bbox": bbox})
+        scoped_to = body_index
     features = []
     geo_by_name: dict = {}
     for i, c in enumerate(candidates):
@@ -320,11 +394,19 @@ async def strategy(file: UploadFile = File(...), material: str | None = None):
     def _base_feature(name: str) -> str:
         return name.replace(" (Rough)", "").replace(" (Finish)", "")
 
+    # Catalog-style tool display per tool number (presentation only)
+    tool_disp = {
+        t.get("tool_number"): _tool_display(t).get("display_name")
+        for t in tools
+    }
+    op_tool_num = {op.get("op_num"): op.get("tool_number") for op in ops}
+
     # Group per-op rows by setup, preserving first-appearance order
     setups: list = []
     index: dict = {}
     for row in per_op:
         row["geo"] = geo_by_name.get(_base_feature(row.get("feature", "")))
+        row["tool_display"] = tool_disp.get(op_tool_num.get(row.get("op_num"))) or row.get("tool")
         label = row["setup"]
         if label not in index:
             index[label] = {"setup_label": label, "ops": [], "subtotal_min": 0.0}
@@ -338,4 +420,6 @@ async def strategy(file: UploadFile = File(...), material: str | None = None):
         "setups": setups,
         "totals": totals,
         "material": mat.get("name"),
+        "scoped_body_index": scoped_to,
+        "scoped_candidate_count": len(candidates) if scoped_to is not None else None,
     }
