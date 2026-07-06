@@ -171,6 +171,9 @@ export interface WeldmentGroup {
   features: { feature_type: string; count: number; note: string }[];
   operations: { operation: string; tool_type: string; note: string }[];
   mesh: Mesh | null;
+  // Validated classifier counts for the group's representative body —
+  // null when the classifier could not run on it.
+  feature_counts?: FeatureCounts | null;
 }
 
 export interface WeldmentResult {
@@ -185,6 +188,64 @@ export interface WeldmentResult {
   warnings: string[];
 }
 
+// ---- Validated feature geometry (GAP-3) ----
+// Attached to an op's geo only when the plan was built from the exact
+// classifier (feature_source === "exact_classifier"); billet-path plans
+// omit it. Direction fields are raw-CAD unit vectors.
+export interface HoleGeometry {
+  kind: "hole";
+  diameter_mm: number;
+  cbore_diameter_mm: number | null;
+  depth_mm: number;
+  ld_ratio: number | null;
+  through: boolean | null; // null = unknown
+  depth_below_top_mm: number | null;
+  tip_angle_deg: number | null; // drill-tip cone at a blind bottom
+  countersink: boolean | null;
+  axis_dir: number[] | null;
+  entry_dir: number[] | null;
+}
+
+export interface SlotGeometry {
+  kind: "slot";
+  open: boolean;
+  length_mm: number;
+  width_mm: number;
+  depth_mm: number | null;
+  axis_dir: number[] | null;
+  open_dir: number[] | null;
+  entry_dir: number[] | null;
+  // Signed face label the opening points at (e.g. "Top") — open slots only
+  opens_toward: string | null;
+}
+
+export type FeatureGeometry = HoleGeometry | SlotGeometry;
+
+// Per-setup workholding recommendation (method/jaws + the sizing reason)
+export interface Workholding {
+  method: string;
+  jaw_mode: string;
+  reason: string;
+}
+
+// Hole census for the strategy header chip. threaded stays 0 until
+// thread detection ships.
+export interface HoleStats {
+  total: number;
+  threaded: number;
+  through: number;
+  blind: number;
+}
+
+// Validated typed feature counts for one body (scoped strategy plans and
+// weldment group rows share this shape).
+export interface FeatureCounts {
+  holes: number;
+  slots: number;
+  fillet_faces: number;
+  chamfer_faces: number;
+}
+
 export interface OpGeo {
   x: number | null;
   y: number | null;
@@ -197,6 +258,9 @@ export interface OpGeo {
   // Links the op back to its analyze-response candidate, whose
   // face_mesh_data provides the exact-face 3D highlight.
   candidate_id?: string | null;
+  // Validated geometry for the op panel's Geometry section (exact-classifier
+  // plans only; null/absent for billet-path features).
+  geometry?: FeatureGeometry | null;
 }
 
 export interface StrategyOp {
@@ -215,10 +279,19 @@ export interface StrategyOp {
   tool_display?: string;
 }
 
+export interface StrategySetup {
+  setup_label: string;
+  ops: StrategyOp[];
+  subtotal_min: number;
+  // Workholding recommendation sized from the scoped body (or whole part)
+  // envelope — null when the backend has no stock envelope for the scope.
+  workholding?: Workholding | null;
+}
+
 export interface StrategyResult {
   success: boolean;
   filename: string;
-  setups: { setup_label: string; ops: StrategyOp[]; subtotal_min: number }[];
+  setups: StrategySetup[];
   totals: { total_machine_time_min: number; cutting_time_min: number; num_operations: number };
   material?: string;
   machine?: string | null;
@@ -226,9 +299,17 @@ export interface StrategyResult {
   // candidates it actually planned on that basis.
   basis?: string;
   planned_candidate_count?: number;
+  // "exact_classifier" when the plan used validated geometry
+  feature_source?: string;
   // Set when the plan was scoped to one solid via ?body_index=
   scoped_body_index?: number | null;
   scoped_candidate_count?: number | null;
+  // Hole census from validated geometry (exact-classifier plans only)
+  hole_stats?: HoleStats | null;
+  // % of validated features the planner produced ops for (scoped basis)
+  features_plannable_pct?: number | null;
+  // Typed feature counts for the scoped body (scoped plans only)
+  body_feature_counts?: FeatureCounts | null;
 }
 
 async function postFile<T>(

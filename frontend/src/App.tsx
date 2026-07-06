@@ -4,6 +4,7 @@ import { api, SAMPLE_NAME } from "./api";
 import type {
   AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo, Mesh,
   WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts, MaterialOpts, PlanBasis,
+  FeatureGeometry, FeatureCounts,
 } from "./api";
 import { PartViewer } from "./PartViewer";
 import type { Vec3, Approach } from "./PartViewer";
@@ -32,6 +33,12 @@ const SETUP_DIRS: Record<string, Vec3> = {
 };
 // Unknown setup labels fall back to a front-right-top isometric view.
 const ISO_DIR: Vec3 = [0.577, -0.577, 0.577];
+
+// Bore setups ("Front (Bore)") orient like their parent face — strip the
+// suffix before the SETUP_DIRS lookup.
+function normalizeSetupLabel(label: string): string {
+  return label.replace(/\s*\(bore\)\s*$/i, "").trim().toLowerCase();
+}
 
 function gradeClass(grade: string) {
   if (grade === "A") return "green";
@@ -265,6 +272,15 @@ function scopeLabel(g: WeldmentGroup) {
   return `${titleCase(g.classification)} ×${g.quantity} (${bodyLabel(g)})`;
 }
 
+// "22 holes · 4 slots · 3 fillet faces" — fillet/chamfer terms only when
+// present. Shared by the Bodies list rows and the scoped-strategy chip.
+function typedCounts(fc: FeatureCounts): string {
+  let s = `${fc.holes} holes · ${fc.slots} slots`;
+  if (fc.fillet_faces > 0) s += ` · ${fc.fillet_faces} fillet faces`;
+  if (fc.chamfer_faces > 0) s += ` · ${fc.chamfer_faces} chamfer faces`;
+  return s;
+}
+
 // Consecutive ops in a setup that share operation type + tool collapse
 // into one rollup row (Toolpath-style "Drilling ×22 — Drill 8mm").
 interface OpRollup {
@@ -302,6 +318,85 @@ function loadInspectorWidth(): number {
   return Number.isFinite(v) && v >= INSPECTOR_MIN && v <= INSPECTOR_MAX ? v : INSPECTOR_DEFAULT;
 }
 
+// Validated-geometry rows for the op panel (GAP-3 A2/C4): hole Ø / cbore /
+// depth / L·D / through-blind / tip cone, slot size / open-closed / opening
+// face. Rendered only when the backend planned from exact classifier
+// geometry (op.geo.geometry present).
+function GeometrySection({ g }: { g: FeatureGeometry }) {
+  return (
+    <>
+      <div className="op-panel-sect">Geometry</div>
+      {g.kind === "hole" ? (
+        <>
+          <div className="op-panel-row">
+            <span className="k">Diameter</span>
+            <span className="v">Ø{fmtNum(g.diameter_mm)} mm</span>
+          </div>
+          {g.cbore_diameter_mm != null && g.cbore_diameter_mm > 0 && (
+            <div className="op-panel-row">
+              <span className="k">Counterbore</span>
+              <span className="v">Ø{fmtNum(g.cbore_diameter_mm)} mm</span>
+            </div>
+          )}
+          <div className="op-panel-row">
+            <span className="k">Depth</span>
+            <span className="v">{fmtNum(g.depth_mm)} mm</span>
+          </div>
+          {g.ld_ratio != null && (
+            <div className="op-panel-row">
+              <span className="k">L/D ratio</span>
+              <span className="v">{fmtNum(g.ld_ratio)}</span>
+            </div>
+          )}
+          <div className="op-panel-row">
+            <span className="k">Through/Blind</span>
+            <span className="v">
+              {g.through === true ? "Through" : g.through === false ? "Blind" : "—"}
+            </span>
+          </div>
+          {g.depth_below_top_mm != null && g.depth_below_top_mm > 0 && (
+            <div className="op-panel-row">
+              <span className="k">Depth below top</span>
+              <span className="v">{fmtNum(g.depth_below_top_mm)} mm</span>
+            </div>
+          )}
+          {g.tip_angle_deg != null && (
+            <div className="op-panel-row">
+              <span className="k">Tip angle</span>
+              <span className="v">{fmtNum(g.tip_angle_deg)}°</span>
+            </div>
+          )}
+          {g.countersink && (
+            <div className="op-panel-chips">
+              <span className="chip">Countersink</span>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div className="op-panel-row">
+            <span className="k">Size</span>
+            <span className="v">
+              {fmtNum(g.length_mm)} × {fmtNum(g.width_mm)} ×{" "}
+              {g.depth_mm != null ? fmtNum(g.depth_mm) : "—"} mm
+            </span>
+          </div>
+          <div className="op-panel-row">
+            <span className="k">Open/Closed</span>
+            <span className="v">{g.open ? "Open" : "Closed"}</span>
+          </div>
+          {g.open && g.opens_toward && (
+            <div className="op-panel-row">
+              <span className="k">Opens toward</span>
+              <span className="v">{g.opens_toward}</span>
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 // Floating op-detail panel over the canvas (Strategy op click). Read-mostly:
 // spindle/feed edits recompute the cut time LOCALLY — the planned time's
 // built-in safety factor (origTime·origFeed/path) is preserved, so
@@ -314,6 +409,7 @@ function OpPanel({ op, onClose }: { op: StrategyOp; onClose: () => void }) {
   const newFeed = numOr0(feedStr);
   const edited = newFeed > 0 && origFeed > 0 && Math.abs(newFeed - origFeed) > 1e-9;
   const cutMin = edited ? op.cut_min * (origFeed / newFeed) : op.cut_min;
+  const geom = op.geo?.geometry ?? null;
   return (
     <div className="op-panel">
       <div className="op-panel-head">
@@ -329,6 +425,7 @@ function OpPanel({ op, onClose }: { op: StrategyOp; onClose: () => void }) {
         <span className="k">Tool</span>
         <span className="v" title={op.tool}>{op.tool_display || op.tool}</span>
       </div>
+      {geom && <GeometrySection g={geom} />}
       <div className="op-panel-sect">Cutting parameters</div>
       <div className="op-panel-row">
         <span className="k">Spindle (rpm)</span>
@@ -757,7 +854,7 @@ export default function App() {
   // get an isometric view and no cone (no face to point at).
   const setupView = useMemo((): { dir: Vec3 | null; approach: Approach | null } => {
     if (!activeSetup) return { dir: null, approach: null };
-    const d = SETUP_DIRS[activeSetup.trim().toLowerCase()];
+    const d = SETUP_DIRS[normalizeSetupLabel(activeSetup)];
     if (!d) return { dir: ISO_DIR, approach: null };
     if (!meshBounds) return { dir: d, approach: null };
     const { mins, maxs } = meshBounds;
@@ -1062,6 +1159,7 @@ export default function App() {
         label: su.setup_label,
         opCount: su.ops.length,
         subtotal: su.subtotal_min,
+        workholding: su.workholding ?? null,
         rollups: buildRollups(su.setup_label, su.ops),
       })),
     [stratForView],
@@ -1118,6 +1216,14 @@ export default function App() {
                     {titleCase(g.classification)} ×{g.quantity}
                   </div>
                   <div className="dims">{groupDims(g)} mm</div>
+                  {g.feature_counts && (
+                    <div
+                      className="dims"
+                      title="Validated classifier counts (representative body)"
+                    >
+                      {typedCounts(g.feature_counts)}
+                    </div>
+                  )}
                 </div>
                 <span className="t">{fmtNum(g.machining_min_per_pc)} min/pc</span>
               </div>
@@ -1700,22 +1806,56 @@ export default function App() {
                         )}
                         {stratForView && (
                           <>
-                            {stratForView.basis && (
-                              <div style={{ margin: "2px 0 6px" }}>
-                                <span
-                                  className="chip"
-                                  title={
-                                    stratForView.basis === "grouped"
-                                      ? "Grouped basis — duplicate detections deduped; one op per physical feature"
-                                      : "Raw basis — every detection planned; most conservative"
-                                  }
-                                >
-                                  {stratForView.basis === "grouped"
-                                    ? `Physical features: ${stratForView.planned_candidate_count ?? "—"}`
-                                    : `Raw detections: ${stratForView.planned_candidate_count ?? "—"}`}
-                                </span>
+                            {(stratForView.basis ||
+                              stratForView.hole_stats ||
+                              stratForView.features_plannable_pct != null ||
+                              stratForView.body_feature_counts) ? (
+                              <div className="chip-row">
+                                {stratForView.basis && (
+                                  <span
+                                    className="chip"
+                                    title={
+                                      stratForView.basis === "grouped"
+                                        ? "Grouped basis — duplicate detections deduped; one op per physical feature"
+                                        : "Raw basis — every detection planned; most conservative"
+                                    }
+                                  >
+                                    {stratForView.basis === "grouped"
+                                      ? `Physical features: ${stratForView.planned_candidate_count ?? "—"}`
+                                      : `Raw detections: ${stratForView.planned_candidate_count ?? "—"}`}
+                                  </span>
+                                )}
+                                {stratForView.hole_stats && (
+                                  <>
+                                    <span
+                                      className="chip"
+                                      title="Hole census from validated geometry — threaded stays 0 until thread detection ships"
+                                    >
+                                      {stratForView.hole_stats.threaded} of {stratForView.hole_stats.total} holes threaded
+                                    </span>
+                                    <span className="chip-sub">
+                                      {stratForView.hole_stats.through} thru · {stratForView.hole_stats.blind} blind
+                                    </span>
+                                  </>
+                                )}
+                                {stratForView.features_plannable_pct != null && (
+                                  <span
+                                    className="chip"
+                                    title="Share of validated features the planner produced ops for (scoped basis)"
+                                  >
+                                    Features plannable {fmtNum(stratForView.features_plannable_pct)}%
+                                  </span>
+                                )}
+                                {stratForView.body_feature_counts && (
+                                  <span
+                                    className="chip"
+                                    title="Validated typed feature counts for the scoped body"
+                                  >
+                                    {typedCounts(stratForView.body_feature_counts)}
+                                  </span>
+                                )}
                               </div>
-                            )}
+                            ) : null}
                             <div className="row" style={{ borderBottom: "none" }}>
                               <span className="k">Total machine time</span>
                               <span className="v">{stratForView.totals.total_machine_time_min?.toFixed(0)} min</span>
@@ -1730,6 +1870,11 @@ export default function App() {
                                 <div className="section-title">
                                   Setup · {su.label} — {su.opCount} ops · {su.subtotal.toFixed(1)} min
                                 </div>
+                                {su.workholding && (
+                                  <div className="setup-wh" title={su.workholding.reason}>
+                                    {su.workholding.method} · {su.workholding.jaw_mode}
+                                  </div>
+                                )}
                                 {su.rollups.map((r) => {
                                   if (r.ops.length === 1) return renderOpRow(su.label, r.ops[0], false);
                                   const isOpen = !!expanded[r.key];

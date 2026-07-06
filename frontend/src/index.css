@@ -160,6 +160,12 @@ body { background: var(--bg-0); color: var(--text-0); }
 .op-row.child { padding-left: 30px; }
 .op-row.child .seq { width: 26px; }
 
+/* Per-setup workholding line under the Strategy setup header (GAP-3 C3) */
+.setup-wh {
+  font-size: 11px; color: var(--text-2); margin: -4px 0 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
 /* Leading status dot on rollup + op rows (red = blocked) */
 .op-dot {
   width: 7px; height: 7px; border-radius: 50%;
@@ -240,6 +246,13 @@ body { background: var(--bg-0); color: var(--text-0); }
   font-size: 10px; padding: 2px 8px; border-radius: 10px; flex-shrink: 0;
   background: var(--bg-3); color: var(--text-1); white-space: nowrap;
 }
+/* Strategy header chip strip: basis, hole census, plannable %, typed counts */
+.chip-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin: 2px 0 8px;
+}
+/* Secondary muted stat next to a chip ("N thru · M blind") */
+.chip-sub { font-size: 10.5px; color: var(--text-2); white-space: nowrap; }
 .thread-select, .mini-select {
   font-size: 11px; padding: 2px 4px; border-radius: 6px; flex-shrink: 0;
   background: var(--bg-2); color: var(--text-0);
@@ -477,6 +490,8 @@ body { background: var(--bg-0); color: var(--text-0); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .op-panel-row .num-input { width: 84px; padding: 3px 6px; font-size: 12px; }
+/* Chip strip inside the op panel's Geometry section (e.g. Countersink) */
+.op-panel-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 5px 0; }
 .op-panel-note { font-size: 10.5px; color: var(--text-2); margin-top: 8px; font-style: italic; }
 
 /* ---- Process Route (Route tab): vertical chain of process blocks ---- */
