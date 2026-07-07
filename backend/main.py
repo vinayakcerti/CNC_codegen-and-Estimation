@@ -211,7 +211,8 @@ def _validated_msa(file_bytes: bytes) -> dict | None:
 
 def _body_bbox(file_bytes: bytes, body_index: int, classify: bool = False):
     """Bounding box of one solid (cheap, no tessellation). With classify=True
-    also returns the exact cylinder classification (holes/slots) for it."""
+    also returns the exact cylinder classification (holes/slots) AND the
+    solid itself (for per-feature face tessellation)."""
     tmp_path = None
     try:
         import cadquery as cq
@@ -221,16 +222,16 @@ def _body_bbox(file_bytes: bytes, body_index: int, classify: bool = False):
             tmp_path = tmp.name
         solids = cq.importers.importStep(tmp_path).val().Solids()
         if body_index < 0 or body_index >= len(solids):
-            return (None, None) if classify else None
+            return (None, None, None) if classify else None
         bb = solids[body_index].BoundingBox()
         bbox = {"xmin": bb.xmin, "xmax": bb.xmax, "ymin": bb.ymin,
                 "ymax": bb.ymax, "zmin": bb.zmin, "zmax": bb.zmax}
         if not classify:
             return bbox
         cls = classify_cylindrical_faces(solids[body_index].Faces(), bbox=bbox)
-        return bbox, cls
+        return bbox, cls, solids[body_index]
     except Exception:
-        return (None, None) if classify else None
+        return (None, None, None) if classify else None
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
@@ -306,6 +307,7 @@ def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
             "x_pos": h["x"], "y_pos": h["y"],
             "setup_label": _setup_from_dir(entry, signed=True),
             "_exact": {"x": h["x"], "y": h["y"], "z": h["z"]},
+            "_face_indices": h.get("face_indices") or [],
             "_geometry": {
                 "kind": "hole",
                 "diameter_mm": h["diameter_mm"],
@@ -340,6 +342,7 @@ def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
             "x_pos": s.get("x", 0), "y_pos": s.get("y", 0),
             "setup_label": _setup_from_dir(entry, signed=True),
             "_exact": {"x": s.get("x"), "y": s.get("y"), "z": s.get("z")},
+            "_face_indices": s.get("face_indices") or [],
             "_geometry": {
                 "kind": "slot",
                 "open": bool(s.get("open")),
@@ -827,8 +830,9 @@ async def strategy(
     exact_features: list | None = None
     bbox = None
     body_cls = None
+    body_solid = None
     if body_index is not None:
-        bbox, body_cls = _body_bbox(data, body_index, classify=True)
+        bbox, body_cls, body_solid = _body_bbox(data, body_index, classify=True)
         if bbox is None:
             raise HTTPException(status_code=400, detail=f"Body {body_index + 1} not found.")
         candidates = filter_candidates_to_body(candidates, {"bbox": bbox})
@@ -843,6 +847,66 @@ async def strategy(
     features = []
     geo_by_name: dict = {}
     if exact_features is not None:
+        # Exact classifier features have no analyze-candidate to borrow face
+        # meshes from — tessellate their own faces so the viewer can drape
+        # the real geometry instead of falling back to the locator ring.
+        _body_faces = body_solid.Faces() if body_solid is not None else []
+
+        def _face_meshes_for(indices: list) -> list | None:
+            import math as _math
+            meshes = []
+            for fi in indices:
+                if not isinstance(fi, int) or fi < 0 or fi >= len(_body_faces):
+                    continue
+                try:
+                    f_verts, f_tris = _body_faces[fi].tessellate(0.5)
+                    if not f_verts or not f_tris:
+                        continue
+                    xs = [v.x for v in f_verts]
+                    ys = [v.y for v in f_verts]
+                    zs = [v.z for v in f_verts]
+                    # OCC tessellation can emit NaN vertices; one NaN poisons
+                    # the three.js bounding sphere and blanks the whole scene.
+                    if not all(_math.isfinite(c) for c in xs + ys + zs):
+                        continue
+                    meshes.append({
+                        "x": xs, "y": ys, "z": zs,
+                        "i": [t[0] for t in f_tris],
+                        "j": [t[1] for t in f_tris],
+                        "k": [t[2] for t in f_tris],
+                    })
+                except Exception:
+                    continue
+            return meshes or None
+
+        def _slot_extra_faces(f) -> list:
+            """Planar wall/floor faces inside a slot's volume — the cylinder
+            cap alone is a 5 mm sliver that vanishes at plate scale."""
+            g = f.get("_geometry") or {}
+            if g.get("kind") != "slot" or body_solid is None:
+                return []
+            ex = f.get("_exact") or {}
+            cx, cy, cz = ex.get("x") or 0, ex.get("y") or 0, ex.get("z") or 0
+            ax = g.get("axis_dir") or [0, 0, 1]
+            half_lat = (max(g.get("length_mm") or 0, g.get("width_mm") or 0)) / 2 + 1.5
+            half_ax = (g.get("depth_mm") or 0) / 2 + 1.5
+            extra = []
+            for fi, face in enumerate(_body_faces):
+                try:
+                    if face.geomType() != "PLANE":
+                        continue
+                    c = face.Center()
+                    d = (c.x - cx, c.y - cy, c.z - cz)
+                    along = abs(d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2])
+                    lat = (sum(v * v for v in d) - along * along) ** 0.5
+                    if along <= half_ax and lat <= half_lat:
+                        extra.append(fi)
+                    if len(extra) >= 8:
+                        break
+                except Exception:
+                    continue
+            return extra
+
         for f in exact_features:
             features.append({k: v for k, v in f.items() if not k.startswith("_")})
             ex = f.get("_exact") or {}
@@ -862,6 +926,11 @@ async def strategy(
                 # L/D, through/blind, depth below top, drill-tip cone,
                 # counterbore, slot opening direction.
                 "geometry": f.get("_geometry"),
+                # Exact face meshes (raw CAD frame, same as the body mesh)
+                # for direct 3D highlighting of classifier features.
+                "face_mesh_data": _face_meshes_for(
+                    (f.get("_face_indices") or []) + _slot_extra_faces(f)
+                ),
             }
     else:
         for i, c in enumerate(candidates):

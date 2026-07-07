@@ -285,6 +285,9 @@ export interface OpGeo {
   // Validated geometry for the op panel's Geometry section (exact-classifier
   // plans only; null/absent for billet-path features).
   geometry?: FeatureGeometry | null;
+  // Tessellated faces of a classifier feature (raw-CAD frame) — lets the
+  // viewer drape the real slot/hole surfaces instead of the locator ring.
+  face_mesh_data?: unknown;
 }
 
 export interface StrategyOp {

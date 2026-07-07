@@ -750,10 +750,16 @@ export default function App() {
     return null;
   }, [selOp, stratForView]);
 
-  // Exact face meshes for the selected op via geo.candidate_id → analyze
-  // candidates. Candidates are whole-assembly in the raw-CAD frame — the
-  // same frame as body meshes — so this works under a body scope too.
+  // Exact face meshes for the selected op. Classifier features (scoped
+  // holes/slots/turning) carry their own tessellated faces in
+  // geo.face_mesh_data; billet candidates are looked up via candidate_id
+  // in the analyze response. Both are raw-CAD frame, same as body meshes.
   const selFaceMeshes = useMemo((): Mesh[] | null => {
+    const direct = selOpData?.geo?.face_mesh_data;
+    if (direct) {
+      const meshes = normalizeFaceMeshes(direct);
+      if (meshes.length) return meshes;
+    }
     const cid = selOpData?.geo?.candidate_id;
     if (!cid || !analysis) return null;
     const cand = analysis.candidates.find((c) => c.candidate_id === cid);

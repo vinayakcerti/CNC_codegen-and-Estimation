@@ -352,7 +352,10 @@ def classify_cylindrical_faces(faces: list, bbox: dict | None = None) -> dict:
                       "depth_mm": round(max(cap_groups[i]["span"], cap_groups[j]["span"]), 2),
                       "axis_dir": tuple(round(v, 4) for v in cap_groups[i]["dir"]),
                       "open_dir": None,
-                      "entry_dir": _entry_dir_for(cap_groups[i])})
+                      "entry_dir": _entry_dir_for(cap_groups[i]),
+                      "face_indices": sorted(
+                          cap_groups[i]["members"] + cap_groups[j]["members"]
+                      )})
         for fi in cap_groups[i]["members"] + cap_groups[j]["members"]:
             face_categories[fi] = "slot"
 
@@ -381,7 +384,8 @@ def classify_cylindrical_faces(faces: list, bbox: dict | None = None) -> dict:
                               # opening direction is where the cutter exits.
                               "axis_dir": tuple(round(v, 4) for v in g["dir"]),
                               "open_dir": tuple(round(v, 4) for v in open_dir),
-                              "entry_dir": _entry_dir_for(g)})
+                              "entry_dir": _entry_dir_for(g),
+                              "face_indices": sorted(g["members"])})
                 for fi in g["members"]:
                     face_categories[fi] = "slot"
 
@@ -413,10 +417,12 @@ def classify_cylindrical_faces(faces: list, bbox: dict | None = None) -> dict:
                 "loc": g["loc"], "dir": g["dir"],
                 "radii": [g["radius"]], "span": g["span"],
                 "prange": g.get("prange"),
+                "members": list(g["members"]),
             })
         else:
             merged["radii"].append(g["radius"])
             merged["span"] = max(merged["span"], g["span"])
+            merged["members"].extend(g["members"])
             pr = g.get("prange")
             if pr:
                 d = g["dir"]
@@ -506,6 +512,7 @@ def classify_cylindrical_faces(faces: list, bbox: dict | None = None) -> dict:
             "tip_angle_deg": al["tip_angle_deg"],
             "countersink": al["countersink"],
             "entry_dir": al["entry_dir"],
+            "face_indices": sorted(al.get("members") or []),
         })
 
     return {
