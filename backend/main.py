@@ -136,6 +136,12 @@ def _validated_msa(file_bytes: bytes) -> dict | None:
         blocked_area = 0.0
         exclusions: list = []
         per_body: list = []
+        # Validated assembly-wide plannability (replaces the billet DFM
+        # grade that read 19%/D on weldments): every classified hole within
+        # the drill range and every slot the smallest endmill can enter is
+        # plannable; facing on each body is always plannable.
+        _feat_total = 0
+        _feat_plannable = 0
         for bi, solid in enumerate(solids):
             faces = solid.Faces()
             bb = solid.BoundingBox()
@@ -144,6 +150,17 @@ def _validated_msa(file_bytes: bytes) -> dict | None:
                 "ymax": bb.ymax, "zmin": bb.zmin, "zmax": bb.zmax,
             })
             cats = cls.get("face_categories", {}) if cls.get("available") else {}
+            if cls.get("available"):
+                for h in cls.get("holes", []):
+                    _feat_total += 1
+                    if _MIN_DRILL_DIA <= (h.get("diameter_mm") or 0) <= 60.0:
+                        _feat_plannable += 1
+                for s in cls.get("slots", []):
+                    _feat_total += 1
+                    if (s.get("width_mm") or 0) >= _MIN_SLOT_WIDTH:
+                        _feat_plannable += 1
+            _feat_total += 1        # facing — every body gets faced
+            _feat_plannable += 1
             b_total = b_blocked = 0.0
             b_notes: list = []
             for fi, face in enumerate(faces):
@@ -198,6 +215,11 @@ def _validated_msa(file_bytes: bytes) -> dict | None:
             "method": "validated_classifier",
             "exclusions": exclusions[:12],
             "per_body": per_body,
+            "plannable_pct": (
+                round(100.0 * _feat_plannable / _feat_total, 1)
+                if _feat_total > 0 else None
+            ),
+            "feature_totals": {"total": _feat_total, "plannable": _feat_plannable},
         }
     except Exception:
         return None
@@ -348,6 +370,8 @@ def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
                 "open": bool(s.get("open")),
                 "length_mm": s["length_mm"],
                 "width_mm": s["width_mm"],
+                # Largest endmill that can enter the slot (C4 tool-bounds)
+                "max_tool_dia_mm": s["width_mm"],
                 "depth_mm": s.get("depth_mm"),
                 "axis_dir": list(s.get("axis_dir") or ()) or None,
                 "open_dir": list(s.get("open_dir") or ()) or None,
@@ -767,6 +791,30 @@ async def weldment(file: UploadFile = File(...)):
     def _group_json(g):
         rep = g.representative
         raw = bodies_raw.get(rep.body_index) or {}
+        # Depth-carrying feature brief for the Bodies row (tester: "depth
+        # appears in the Bodies panel for every hole and slot") + likely-tap
+        # census from the pilot-diameter inference.
+        _brief: list = []
+        _likely = 0
+        from collections import Counter as _Counter
+        _hole_keys = _Counter()
+        for h in raw.get("holes") or []:
+            dia = h.get("diameter_mm") or 0
+            cb = h.get("cbore_diameter_mm")
+            dep = h.get("depth_mm") or 0
+            _hole_keys[(dia, cb, dep)] += 1
+            if _thread_likely(dia, cb):
+                _likely += 1
+        for (dia, cb, dep), n in _hole_keys.most_common(6):
+            _brief.append(
+                f"{n}× Ø{dia:g}{f'/cb Ø{cb:g}' if cb else ''} × {dep:g} deep"
+            )
+        _slot_keys = _Counter()
+        for s in raw.get("slots") or []:
+            _slot_keys[(s.get("length_mm") or 0, s.get("width_mm") or 0,
+                        s.get("depth_mm") or 0)] += 1
+        for (L, W, D), n in _slot_keys.most_common(4):
+            _brief.append(f"{n}× slot {L:g}×{W:g} × {D:g} deep")
         return {
             "group_id": g.group_id,
             "classification": g.classification,
@@ -786,7 +834,10 @@ async def weldment(file: UploadFile = File(...)):
                 "slots": raw.get("slot_count", 0),
                 "fillet_faces": raw.get("fillet_faces", 0),
                 "chamfer_faces": raw.get("chamfer_faces", 0),
+                "likely_threaded": _likely,
             } if raw.get("cyl_classifier_available") else None,
+            # Dimensioned hole/slot lines incl. DEPTH for the Bodies row
+            "features_brief": _brief or None,
         }
 
     return {

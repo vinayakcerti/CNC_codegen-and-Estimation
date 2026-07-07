@@ -155,6 +155,10 @@ export interface AnalyzeResult {
     method: string;
     exclusions: string[];
     per_body: { body_index: number; pct: number }[];
+    // Validated assembly-wide plannability (replaces the billet DFM
+    // grade on weldments)
+    plannable_pct?: number | null;
+    feature_totals?: { total: number; plannable: number } | null;
   } | null;
   // Planned lathe summary (Epic 20 v1) when turned regions were detected.
   turning?: TurningSummary | null;
@@ -184,6 +188,8 @@ export interface WeldmentGroup {
   // Validated classifier counts for the group's representative body —
   // null when the classifier could not run on it.
   feature_counts?: FeatureCounts | null;
+  // Dimensioned hole/slot lines incl. depth, e.g. "8× Ø11/cb Ø18 × 15 deep"
+  features_brief?: string[] | null;
 }
 
 export interface WeldmentResult {
@@ -224,6 +230,8 @@ export interface SlotGeometry {
   open: boolean;
   length_mm: number;
   width_mm: number;
+  // Largest endmill that fits the slot (= width)
+  max_tool_dia_mm?: number | null;
   depth_mm: number | null;
   axis_dir: number[] | null;
   open_dir: number[] | null;
@@ -268,6 +276,8 @@ export interface FeatureCounts {
   slots: number;
   fillet_faces: number;
   chamfer_faces: number;
+  // Tap-drill-table inference (pilot Ø → likely metric tap)
+  likely_threaded?: number;
 }
 
 export interface OpGeo {

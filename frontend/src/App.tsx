@@ -276,6 +276,7 @@ function scopeLabel(g: WeldmentGroup) {
 // present. Shared by the Bodies list rows and the scoped-strategy chip.
 function typedCounts(fc: FeatureCounts): string {
   let s = `${fc.holes} holes · ${fc.slots} slots`;
+  if ((fc.likely_threaded ?? 0) > 0) s += ` · ${fc.likely_threaded} likely tapped`;
   if (fc.fillet_faces > 0) s += ` · ${fc.fillet_faces} fillet faces`;
   if (fc.chamfer_faces > 0) s += ` · ${fc.chamfer_faces} chamfer faces`;
   return s;
@@ -395,6 +396,15 @@ function GeometrySection({ g }: { g: FeatureGeometry }) {
             <div className="op-panel-row">
               <span className="k">Opens toward</span>
               <span className="v">{g.opens_toward}</span>
+            </div>
+          )}
+          {g.max_tool_dia_mm != null && g.max_tool_dia_mm > 0 && (
+            <div
+              className="op-panel-row"
+              title="Largest endmill that can enter the slot (= slot width)"
+            >
+              <span className="k">Max tool Ø</span>
+              <span className="v">≤ {fmtNum(g.max_tool_dia_mm)} mm</span>
             </div>
           )}
         </>
@@ -1282,7 +1292,11 @@ export default function App() {
                   {g.feature_counts && (
                     <div
                       className="dims"
-                      title="Validated classifier counts (representative body)"
+                      title={
+                        g.features_brief?.length
+                          ? "Per-feature dims × depth:\n" + g.features_brief.join("\n")
+                          : "Validated classifier counts (representative body)"
+                      }
                     >
                       {typedCounts(g.feature_counts)}
                     </div>
@@ -1743,15 +1757,23 @@ export default function App() {
                               <div
                                 className="value"
                                 title={
-                                  analysis.is_multibody
-                                    ? "Whole-assembly grade from the raw detector — noisy on weldments. Scope to a body (Bodies list) for the validated per-body figure."
-                                    : "Share of detected features whose operations plan cleanly with the current tools + machine"
+                                  analysis.machinable_surface_detail?.plannable_pct != null
+                                    ? `Validated per-body walk: ${analysis.machinable_surface_detail.feature_totals?.plannable ?? "—"} of ${analysis.machinable_surface_detail.feature_totals?.total ?? "—"} classified features plan with the current tool library`
+                                    : analysis.is_multibody
+                                      ? "Whole-assembly grade from the raw detector — noisy on weldments. Scope to a body (Bodies list) for the validated per-body figure."
+                                      : "Share of detected features whose operations plan cleanly with the current tools + machine"
                                 }
                               >
-                                <span className={`badge ${gradeClass(analysis.dfm.grade)}`}>
-                                  {analysis.dfm.score_pct}% {analysis.dfm.grade}
-                                  {analysis.is_multibody ? " (assembly)" : ""}
-                                </span>
+                                {analysis.machinable_surface_detail?.plannable_pct != null ? (
+                                  <span className={`badge ${msaClass(analysis.machinable_surface_detail.plannable_pct)}`}>
+                                    {analysis.machinable_surface_detail.plannable_pct}%
+                                  </span>
+                                ) : (
+                                  <span className={`badge ${gradeClass(analysis.dfm.grade)}`}>
+                                    {analysis.dfm.score_pct}% {analysis.dfm.grade}
+                                    {analysis.is_multibody ? " (assembly)" : ""}
+                                  </span>
+                                )}
                               </div>
                             </div>
                             <div className="metric">
