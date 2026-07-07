@@ -38,6 +38,7 @@ from modules.data_store import (
 from modules.weldment.weldment_analyzer import analyze_weldment
 from modules.workholding import recommend_workholding
 from modules.body_scope import filter_candidates_to_body
+from modules.turning_planner import plan_turning_operations, turning_summary
 
 app = FastAPI(title="CNC Plan & Process Pro API", version="0.1.0")
 
@@ -666,6 +667,21 @@ async def analyze(
         if msa_detail:
             msa_pct = msa_detail["pct"]
 
+    # Turned-part summary (Epic 20 v1): planned lathe minutes for the
+    # Route tab's Turning block. Empty for pure milling parts.
+    _turn_cands = [c for c in candidates if (c.get("feature_type") or "") in
+                   ("OD Turning", "ID Turning / Bore", "ID Groove")]
+    turning_block = None
+    if _turn_cands:
+        _dims = sorted([parse.get("length_mm") or 0.0,
+                        parse.get("width_mm") or 0.0,
+                        parse.get("height_mm") or 0.0])
+        _t_ops = plan_turning_operations(
+            _turn_cands, mat,
+            part_length_mm=_dims[2], part_max_od_mm=_dims[1],
+        )
+        turning_block = turning_summary(_t_ops)
+
     # Stock sizing: automatic preset = part envelope + per-side allowance
     _L = parse.get("length_mm") or 0
     _W = parse.get("width_mm") or 0
@@ -706,6 +722,7 @@ async def analyze(
         "dfm": dfm,
         "machinable_surface_pct": msa_pct,
         "machinable_surface_detail": msa_detail,
+        "turning": turning_block,
         "stock": stock_block,
         "hole_groups": _hole_groups(candidates),
         "setups": [
@@ -859,6 +876,7 @@ async def strategy(
                 "x_pos": c.get("x_pos", 0) or 0,
                 "y_pos": c.get("y_pos", 0) or 0,
                 "setup_label": c.get("setup") or c.get("setup_label") or "Top",
+                "lathe_facing": bool(c.get("lathe_facing")),
             })
             # Raw-CAD-frame geometry for 3D highlighting (same frame as the mesh).
             cad = c.get("cad_position") or {}
@@ -875,9 +893,37 @@ async def strategy(
                 # (analyze response carries face_mesh_data per candidate).
                 "candidate_id": c.get("candidate_id"),
             }
-    ops = plan_operations(features, tools, mat, mach)
+    # Turned regions (19-2/19-3) plan on the lathe, not the mill. Split
+    # them out so the milling planner sees only milled work, then append
+    # the lathe ops as their own setup group.
+    _TURN_TYPES = {"OD Turning", "ID Turning / Bore", "ID Groove"}
+    turn_features = [f for f in features if f.get("feature_type") in _TURN_TYPES]
+    mill_features = [
+        f for f in features
+        if f.get("feature_type") not in _TURN_TYPES
+        # End faces of a turned part are faced on the lathe (the turning
+        # plan includes a Face op) — keep them off the mill to avoid
+        # double-counting. Milled flats on turn-mill parts stay.
+        and not (turn_features and f.get("lathe_facing"))
+    ]
+
+    ops = plan_operations(mill_features, tools, mat, mach)
     per_op = estimate_time_per_operation(ops, mach, mat)
-    totals = estimate_time(ops, mach, mat, features)
+    totals = estimate_time(ops, mach, mat, mill_features)
+
+    turning_ops = []
+    turning_sum = None
+    if turn_features:
+        _pl = parse.get("length_mm") or 0.0
+        _pw = parse.get("width_mm") or 0.0
+        _ph = parse.get("height_mm") or 0.0
+        _dims = sorted([_pl, _pw, _ph])
+        turning_ops = plan_turning_operations(
+            turn_features, mat,
+            part_length_mm=_dims[2],          # longest = turning length
+            part_max_od_mm=_dims[1],          # next = diameter envelope
+        )
+        turning_sum = turning_summary(turning_ops)
 
     def _base_feature(name: str) -> str:
         for suf in (" (Rough)", " (Finish)", " - wall finish",
@@ -919,6 +965,40 @@ async def strategy(
             setups.append(index[label])
         index[label]["ops"].append(row)
         index[label]["subtotal_min"] = round(index[label]["subtotal_min"] + row["cut_min"], 2)
+
+    # Lathe ops as their own setup group, shaped like milling rows so the
+    # Strategy view renders them without special cases.
+    if turning_ops:
+        _lrows = []
+        for i, top in enumerate(turning_ops, start=1):
+            _lrows.append({
+                "op_num": 900 + i,
+                "operation": top["op"],
+                "feature": top["feature"],
+                "setup": top["setup"],
+                "tool": top["tool"],
+                "tool_display": top["tool"],
+                "spindle_rpm": top["rpm"],
+                "feed_mm_min": round(top["feed_mm_rev"] * top["rpm"], 1),
+                "path_mm": top["path_mm"],
+                "cut_min": top["cut_min"],
+                "blocked": False,
+                "geo": None,
+                "lathe": True,
+                "notes": top.get("notes"),
+            })
+        setups.append({
+            "setup_label": turning_ops[0]["setup"],
+            "ops": _lrows,
+            "subtotal_min": round(sum(r["cut_min"] for r in _lrows), 2),
+            "workholding": {
+                "method": "3-Jaw Chuck",
+                "jaw_mode": ("Chuck + tailstock centre"
+                             if "Tailstock" in turning_ops[0]["setup"]
+                             else "Hard jaws"),
+                "reason": "Turned part — lathe workholding",
+            },
+        })
 
     # Hole stats for the threaded chip ("0 of N holes threaded" until
     # thread detection ships) + validated-geometry MSA when scoped: the
@@ -963,6 +1043,7 @@ async def strategy(
         "scoped_candidate_count": len(features) if scoped_to is not None else None,
         "hole_stats": hole_stats,
         "features_plannable_pct": msa_scoped,
+        "turning": turning_sum,
         "body_feature_counts": (
             {
                 "holes": body_cls.get("hole_count", 0),

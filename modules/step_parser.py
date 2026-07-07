@@ -2970,6 +2970,14 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                     _pos = (_cand.get("cad_position") or {}).get(turning_axis)
                     if _pos is not None:
                         _covered.append(float(_pos))
+                        # An end face perpendicular to the turning axis is
+                        # faced on the LATHE, not milled — flag it so the
+                        # strategy planner doesn't double-count facing.
+                        # Milled flats on a turn-mill part sit along the
+                        # axis, not at its ends, and stay unflagged.
+                        if (abs(_pos - _ax_lo) <= _end_tol
+                                or abs(_pos - _ax_hi) <= _end_tol):
+                            _cand["lathe_facing"] = True
                 for _end, _dirname in ((_ax_lo, "min"), (_ax_hi, "max")):
                     if any(abs(p - _end) <= _end_tol for p in _covered):
                         continue
@@ -2994,6 +3002,7 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                         "candidate_id": f"FLA{1 if _dirname == 'min' else 2:02d}",
                         "feature_name": f"Face milling — {_f_dir} surface",
                         "feature_type": "Face milling",
+                        "lathe_facing": True,
                         "quantity": 1,
                         "x_pos": _best.get("center_x"),
                         "y_pos": _best.get("center_y"),

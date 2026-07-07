@@ -813,13 +813,18 @@ export default function App() {
     const turnedCount = (wmResult?.groups ?? [])
       .filter((g) => TURNED_RE.test(g.classification))
       .reduce((n, g) => n + g.quantity, 0);
-    const hasTurning = turnedCount > 0;
-    const turnCost = (turnMin / 60) * turnRate;
+    // Turned regions detected on the part itself (Epic 20 v1) also make
+    // the Turning block appear — single-body shafts have no weldment groups.
+    const autoTurnMin = analysis?.turning?.est_minutes ?? 0;
+    const hasTurning = turnedCount > 0 || autoTurnMin > 0;
+    // Manual entry wins; otherwise the planned lathe minutes drive the block.
+    const effTurnMin = turnMin > 0 ? turnMin : autoTurnMin;
+    const turnCost = (effTurnMin / 60) * turnRate;
     const customMin = customRouteSteps.reduce((s, c) => s + c.timeMin, 0);
     const customCost = customRouteSteps.reduce((s, c) => s + (c.timeMin / 60) * c.rateHr, 0);
     const blockCount = 1 + (hasWeld ? 1 : 0) + (hasTurning ? 1 : 0) + customRouteSteps.length;
     const totalMin =
-      estCore.machineMin + (hasWeld ? weldMin : 0) + (hasTurning ? turnMin : 0) + customMin;
+      estCore.machineMin + (hasWeld ? weldMin : 0) + (hasTurning ? effTurnMin : 0) + customMin;
     const blocksCost =
       millingCost + (hasWeld ? weldCost : 0) + (hasTurning ? turnCost : 0) + customCost;
     // Same footer math as the Estimate ledger — material + setups + margin —
@@ -829,9 +834,10 @@ export default function App() {
     const total = subtotal + margin;
     return {
       millingCost, hasWeld, weldMin, weldCost, turnedCount, hasTurning, turnCost,
+      autoTurnMin, effTurnMin,
       customMin, customCost, blockCount, totalMin, blocksCost, subtotal, margin, total,
     };
-  }, [estCore, wmResult, weldRate, turnMin, turnRate, customRouteSteps, marginPct]);
+  }, [estCore, analysis, wmResult, weldRate, turnMin, turnRate, customRouteSteps, marginPct]);
 
   // ---- Setup orientation (Overview → Setups click) ----
   const [activeSetup, setActiveSetup] = useState<string | null>(null);
@@ -2285,22 +2291,31 @@ export default function App() {
                                     <span className="rb-num">{num()}</span>
                                     <div className="rb-title">
                                       <div className="rb-name">CNC Turning</div>
-                                      <div className="rb-station">Lathe — manual quote</div>
+                                      <div className="rb-station">
+                                        {routeCalc.autoTurnMin > 0
+                                          ? `Lathe — planned ${fmtNum(routeCalc.effTurnMin)} min`
+                                          : "Lathe — manual quote"}
+                                      </div>
                                     </div>
                                     <span className="rb-cost">{inr(routeCalc.turnCost)}</span>
                                   </div>
                                   <div className="rb-note">
-                                    Detected {routeCalc.turnedCount} turned part
-                                    {routeCalc.turnedCount === 1 ? "" : "s"} — turning planning coming
-                                    with the lathe module
+                                    {routeCalc.autoTurnMin > 0
+                                      ? `Planned from detected turning regions (${analysis?.turning?.op_count ?? 0} lathe ops, ${analysis?.turning?.setup ?? "Lathe Chuck"}). Enter a manual time to override.`
+                                      : `Detected ${routeCalc.turnedCount} turned part${routeCalc.turnedCount === 1 ? "" : "s"} — enter time and rate to quote.`}
                                   </div>
                                   <div className="rb-line">
-                                    <span className="k">Time (min, manual)</span>
+                                    <span className="k">
+                                      {routeCalc.autoTurnMin > 0
+                                        ? "Time (min, override)"
+                                        : "Time (min, manual)"}
+                                    </span>
                                     <input
                                       className="num-input"
                                       type="number"
                                       min={0}
                                       value={turnMin}
+                                      placeholder={routeCalc.autoTurnMin > 0 ? String(routeCalc.autoTurnMin) : undefined}
                                       onChange={(e) => setTurnMin(numOr0(e.target.value))}
                                     />
                                   </div>

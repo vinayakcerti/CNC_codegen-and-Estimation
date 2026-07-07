@@ -156,6 +156,8 @@ export interface AnalyzeResult {
     exclusions: string[];
     per_body: { body_index: number; pct: number }[];
   } | null;
+  // Planned lathe summary (Epic 20 v1) when turned regions were detected.
+  turning?: TurningSummary | null;
   // Automatic stock sizing block (part envelope + per-side allowance)
   stock?: StockBlock;
   hole_groups?: HoleGroup[];
@@ -231,6 +233,15 @@ export interface SlotGeometry {
 }
 
 export type FeatureGeometry = HoleGeometry | SlotGeometry;
+
+// Planned lathe work rollup (turning_planner): cycle minutes + a flat
+// handling allowance, for the Route tab's Turning block.
+export interface TurningSummary {
+  op_count: number;
+  cut_min: number;
+  est_minutes: number;
+  setup: string | null;
+}
 
 // Per-setup workholding recommendation (method/jaws + the sizing reason)
 export interface Workholding {
