@@ -227,11 +227,12 @@
     {
       "file": "T08_shaft_internal_groove.step",
       "sha256": "c79424835c0d99e7e12ae26dabe4eef235d9342c0cfe25aa1b1e8a0615f2586d",
-      "notes": "Epic 19 T08: shaft with through bore containing an internal annular groove (ID grooving). Validates groove detection inside bore (Story 19-3). is_axisymmetric=true. 19-2: OD Ø60 + ID Ø20 turning regions (internal groove split is Story 19-3).",
+      "notes": "Epic 19 T08: shaft with through bore containing an internal annular groove (ID grooving). Validates groove detection inside bore (Story 19-3). is_axisymmetric=true. FILE REGENERATED 2026-07-08: the original synthetic file was a plain tube with no groove (latent test defect); now Ø60×80 with Ø20 bore + Ø26×6 internal groove (sha changed). 19-3: bore segments merged to one ID Turning Ø20×80; groove emitted as ID Groove Ø26×6.",
       "expected_counts": {
         "Face milling": 2,
         "OD Turning": 1,
-        "ID Turning / Bore": 1
+        "ID Turning / Bore": 1,
+        "ID Groove": 1
       }
     },
     {

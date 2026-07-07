@@ -59,6 +59,11 @@ OPERATION_RULES = {
          "notes": "Lathe ID/bore region — quote via Route > CNC Turning "
                   "(turning module in development)"},
     ],
+    "ID Groove": [
+        {"op": "Manual Review",
+         "notes": "Internal grooving — lathe grooving insert required; "
+                  "quote via Route > CNC Turning"},
+    ],
 }
 
 _FEATURE_TYPE_ALIASES = {

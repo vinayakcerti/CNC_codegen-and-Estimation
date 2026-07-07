@@ -36,6 +36,7 @@ _FEATURE_ID_PREFIXES = {
     "Edge Milling": "EDGE",
     "OD Turning": "ODT",
     "ID Turning / Bore": "IDT",
+    "ID Groove": "IDG",
 }
 
 
@@ -2849,6 +2850,107 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                     + f" | 19-2: coaxial with {turning_axis.upper()} turning axis "
                     f"(envelope Ø{_envelope_od:.1f}) — lathe region, not a milled bore."
                 )
+
+            # 19-3: ID groove split. A grooved bore arrives as several coaxial
+            # internal cylinders: same-diameter bore SEGMENTS interrupted by a
+            # short larger-diameter ring. Merge the segments into one bore and
+            # emit the ring as an ID Groove (its dia x width drives grooving-
+            # tool selection later).
+            def _axial_range_of(cand):
+                _lo = _hi = None
+                for _fi in cand.get("face_indices") or []:
+                    _r = _rec_by_idx.get(_fi)
+                    if not _r:
+                        continue
+                    _l = _r.get(f"bbox_{turning_axis}min")
+                    _h = _r.get(f"bbox_{turning_axis}max")
+                    if _l is None or _h is None:
+                        continue
+                    _lo = _l if _lo is None else min(_lo, _l)
+                    _hi = _h if _hi is None else max(_hi, _h)
+                return (_lo, _hi)
+
+            _id_cands = [c for c in candidates
+                         if c.get("feature_type") == "ID Turning / Bore"]
+            if len(_id_cands) >= 2:
+                _bore_dia = min(c.get("diameter") or 1e9 for c in _id_cands)
+                _segs = [c for c in _id_cands
+                         if abs((c.get("diameter") or 0) - _bore_dia) <= 0.2]
+                _rings = [c for c in _id_cands if c not in _segs]
+                if len(_segs) >= 1 and _rings:
+                    _ranges = [_axial_range_of(c) for c in _segs]
+                    _ranges = [r for r in _ranges if r[0] is not None]
+                    if _ranges:
+                        _b_lo = min(r[0] for r in _ranges)
+                        _b_hi = max(r[1] for r in _ranges)
+                        _keep = _segs[0]
+                        _total = round(_b_hi - _b_lo, 3)
+                        _keep["depth"] = _total
+                        _keep["feature_name"] = (
+                            f"ID Turning Ø{_keep.get('diameter') or 0:.2f} mm × {_total:.1f} mm"
+                        )
+                        _keep["face_indices"] = sorted({
+                            fi for c in _segs for fi in (c.get("face_indices") or [])
+                        })
+                        _keep["detection_note"] = (
+                            (_keep.get("detection_note") or "")
+                            + f" | 19-3: {len(_segs)} coaxial bore segment(s) merged; "
+                            f"axial extent {_b_lo:.1f}..{_b_hi:.1f}."
+                        )
+                        _drop = {id(c) for c in _segs[1:]}
+                        for _ring in _rings:
+                            _r_lo, _r_hi = _axial_range_of(_ring)
+                            _inside = (
+                                _r_lo is not None
+                                and _r_lo >= _b_lo - 0.5 and _r_hi <= _b_hi + 0.5
+                            )
+                            _w = round((_r_hi - _r_lo), 2) if _r_lo is not None else None
+                            if _inside and _w is not None and _w <= 0.5 * _total:
+                                _ring["feature_type"] = "ID Groove"
+                                _ring["feature_name"] = (
+                                    f"ID Groove Ø{_ring.get('diameter') or 0:.2f} mm "
+                                    f"× {_w:.1f} mm wide"
+                                )
+                                _ring["depth"] = _w
+                                _ring["requires_lathe"] = True
+                                _ring["detection_note"] = (
+                                    (_ring.get("detection_note") or "")
+                                    + f" | 19-3: annular relief inside the Ø{_bore_dia:.1f} bore "
+                                    f"({_r_lo:.1f}..{_r_hi:.1f}) — internal grooving operation."
+                                )
+                        candidates = [c for c in candidates if id(c) not in _drop]
+
+            # 19-5: undercut / thread-relief flag. A short OD region that is
+            # narrower than the region machined just before it is a recess the
+            # profile tool cannot finish in one pass — relief groove, thread
+            # runout, or a thread zone. Flag for manual verification; the type
+            # (and therefore the plan counts) stays OD Turning.
+            _od_cands = [c for c in candidates if c.get("feature_type") == "OD Turning"]
+            if len(_od_cands) >= 2:
+                _od_sorted = sorted(
+                    _od_cands,
+                    key=lambda c: (_axial_range_of(c)[0]
+                                   if _axial_range_of(c)[0] is not None else 0.0),
+                )
+                for _i in range(1, len(_od_sorted)):
+                    _cur = _od_sorted[_i]
+                    _prev = _od_sorted[_i - 1]
+                    _cur_d = _cur.get("diameter") or 0.0
+                    _prev_d = _prev.get("diameter") or 0.0
+                    _span = _cur.get("depth") or 0.0
+                    if _cur_d < _prev_d and 0 < _span <= 15.0:
+                        _cur["verify_manually"] = True
+                        if "verify" not in (_cur.get("feature_name") or ""):
+                            _cur["feature_name"] = (
+                                _cur["feature_name"]
+                                + " — verify: possible undercut / thread relief"
+                            )
+                        _cur["detection_note"] = (
+                            (_cur.get("detection_note") or "")
+                            + f" | 19-5: Ø{_cur_d:.1f}×{_span:.1f} recess after "
+                            f"Ø{_prev_d:.1f} — undercut, thread relief, or thread "
+                            "zone; verify callout on the drawing."
+                        )
 
             # 19-2b: a turned part gets BOTH ends faced. Section A's 35%
             # XY-footprint gate is a prismatic rule — it drops the small end
