@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { OrbitControls, Bounds, GizmoHelper, GizmoViewcube, Grid, Html } from "@react-three/drei";
+import { TrackballControls, Bounds, GizmoHelper, GizmoViewcube, Grid, Html } from "@react-three/drei";
 import * as THREE from "three";
 import type { Mesh } from "./api";
 
@@ -610,17 +610,15 @@ export function PartViewer({
       )}
       {mesh && approach && <ApproachCone approach={approach} partSize={partSize} />}
       <CameraRig dir={cameraDir} center={center} dist={Math.max(partSize * 1.8, 50)} />
-      {/* Keep the camera ~7° off the ±Z poles. At the exact pole (looking
-          straight down/up the up-axis) OrbitControls' azimuth degenerates,
-          so horizontal drag became hypersensitive/stuck once the part was
-          tilted flat top/bottom — this bounds polar so horizontal rotation
-          stays well-defined everywhere while top/bottom stay readable. */}
-      <OrbitControls
+      {/* Free arcball rotation (like Toolpath): no up-axis pole, so the part
+          turns in ANY direction — fixes the "can't rotate horizontally at the
+          edge-on/top view" pole lock that OrbitControls can't escape. */}
+      <TrackballControls
         makeDefault
-        enableDamping
-        dampingFactor={0.12}
-        minPolarAngle={0.12}
-        maxPolarAngle={Math.PI - 0.12}
+        rotateSpeed={3.5}
+        zoomSpeed={1.2}
+        panSpeed={0.8}
+        dynamicDampingFactor={0.18}
       />
       <GizmoHelper alignment="top-right" margin={[64, 64]}>
         <GizmoViewcube
