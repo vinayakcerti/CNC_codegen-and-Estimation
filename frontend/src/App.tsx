@@ -973,6 +973,38 @@ export default function App() {
     return { dir: d, approach: { origin, dir: [-d[0], -d[1], -d[2]] as Vec3 } };
   }, [activeSetup, meshBounds]);
 
+  // Fixture context: the active machined-face normal (tool axis) + the
+  // recommended workholding method, so the 3D fixture clamps CLEAR of the
+  // face being cut and matches vise-vs-fixture-plate. Sourced from the
+  // selected op's setup when scoped, else the active whole-assembly setup.
+  const fixtureCtx = useMemo((): {
+    toolAxis: Vec3 | null;
+    method: string | null;
+    flip: boolean;
+  } => {
+    if (selectedGroup) {
+      const setupLabel = selOpData?.setup ?? stratForView?.setups[0]?.setup_label ?? null;
+      if (!setupLabel) return { toolAxis: null, method: null, flip: false };
+      const su = stratForView?.setups.find((s) => s.setup_label === setupLabel);
+      return {
+        toolAxis: SETUP_DIRS[normalizeSetupLabel(setupLabel)] ?? null,
+        method: su?.workholding?.method ?? stratForView?.setups[0]?.workholding?.method ?? null,
+        flip: false,
+      };
+    }
+    if (activeSetup) {
+      const su = analysis?.setups?.find(
+        (s) => normalizeSetupLabel(s.label) === normalizeSetupLabel(activeSetup),
+      );
+      return {
+        toolAxis: SETUP_DIRS[normalizeSetupLabel(activeSetup)] ?? null,
+        method: su?.method ?? null,
+        flip: SECONDARY_FACE_RE.test(activeSetup),
+      };
+    }
+    return { toolAxis: null, method: null, flip: false };
+  }, [selectedGroup, selOpData, stratForView, activeSetup, analysis]);
+
   // ---- Thread status per hole diameter (session-only UI state) ----
   const [threadByDia, setThreadByDia] = useState<Record<string, string>>({});
 
@@ -1632,8 +1664,15 @@ export default function App() {
                   // Workholding visuals follow the active setup — whole-assembly
                   // view only, same guard as the orientation/cone above.
                   workholding={
-                    !selectedGroup && activeSetup
-                      ? { flip: SECONDARY_FACE_RE.test(activeSetup) }
+                    // Show the fixture when the Fixture layer is on OR a
+                    // whole-assembly setup is active; it clamps clear of the
+                    // active machined face (fixtureCtx.toolAxis).
+                    layers.fixture || (!selectedGroup && !!activeSetup)
+                      ? {
+                          flip: fixtureCtx.flip,
+                          toolAxis: fixtureCtx.toolAxis,
+                          method: fixtureCtx.method,
+                        }
                       : null
                   }
                   layers={layers}

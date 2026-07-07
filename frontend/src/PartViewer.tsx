@@ -105,46 +105,106 @@ const FLIP_HEAD_QUAT = new THREE.Quaternion().setFromUnitVectors(
 function WorkholdingScene({
   bbox,
   partSize,
+  toolAxis,
+  method,
   flip,
 }: {
   bbox: Bbox;
   partSize: number;
+  // Outward normal of the face being machined in the active setup (the tool
+  // approaches along it). null → default to top-facing. The fixture must
+  // clamp PERPENDICULAR to this and never sit on the machined face.
+  toolAxis: Vec3 | null;
+  // Recommended workholding method — chooses vise vs fixture-plate + clamps.
+  method: string | null;
   flip: boolean;
 }) {
-  const [xmin, ymin, zmin] = bbox.mins;
-  const [xmax, ymax, zmax] = bbox.maxs;
-  const cx = (xmin + xmax) / 2;
-  const cy = (ymin + ymax) / 2;
-  const xspan = Math.max(xmax - xmin, 1);
-  const yspan = Math.max(ymax - ymin, 1);
-  const zspan = Math.max(zmax - zmin, 1);
+  const mins = bbox.mins;
+  const maxs = bbox.maxs;
+  const cx = (mins[0] + maxs[0]) / 2;
+  const cy = (mins[1] + maxs[1]) / 2;
+  const zmax = maxs[2];
+  const c: Vec3 = [cx, cy, (mins[2] + maxs[2]) / 2];
+  const span: Vec3 = [
+    Math.max(maxs[0] - mins[0], 1),
+    Math.max(maxs[1] - mins[1], 1),
+    Math.max(maxs[2] - mins[2], 1),
+  ];
 
-  // Vise: two soft-jaw blocks clamping the shortest horizontal axis, gripping
-  // the part's base so they don't obscure the machined faces above.
-  const clampX = xspan <= yspan;
-  const jawT = Math.max(partSize * 0.05, 6); // thickness along the clamp axis
-  const jawH = Math.max(zspan * 0.3, 4); // height (grips the lower part)
-  const jawL = (clampX ? yspan : xspan) * 0.55; // length along the other axis
-  const jawZ = zmin + jawH / 2;
-  const jawArgs: [number, number, number] = clampX ? [jawT, jawL, jawH] : [jawL, jawT, jawH];
-  const jawA: Vec3 = clampX ? [xmin - jawT / 2, cy, jawZ] : [cx, ymin - jawT / 2, jawZ];
-  const jawB: Vec3 = clampX ? [xmax + jawT / 2, cy, jawZ] : [cx, ymax + jawT / 2, jawZ];
+  // Machined-face axis = dominant tool-approach axis (default top, +Z).
+  const t: Vec3 =
+    toolAxis && Math.abs(toolAxis[0]) + Math.abs(toolAxis[1]) + Math.abs(toolAxis[2]) > 0.4
+      ? toolAxis
+      : [0, 0, 1];
+  const at = [Math.abs(t[0]), Math.abs(t[1]), Math.abs(t[2])];
+  const mAx = at[0] >= at[1] && at[0] >= at[2] ? 0 : at[1] >= at[2] ? 1 : 2;
+  const tSign = t[mAx] >= 0 ? 1 : -1;
+  const perp = [0, 1, 2].filter((a) => a !== mAx);
+  // Clamp across the WIDER perpendicular axis so grips sit far apart & stable.
+  const clampAx = span[perp[0]] >= span[perp[1]] ? perp[0] : perp[1];
+  const otherAx = perp[0] === clampAx ? perp[1] : perp[0];
+  const triple = (byAx: (a: number) => number): Vec3 => [byAx(0), byAx(1), byAx(2)];
 
-  // Flip indicator: amber curved arrow hovering over the top face
+  const isPlate = method ? /plate|toe|clamp/i.test(method) : false;
+  const steel = "#3d5a80";
+
+  // Fixture-plate style: backing plate on the tool-OPPOSITE face + two toe
+  // clamps gripping the machined-face perimeter edges (tool faces interior).
+  const plateT = Math.max(partSize * 0.03, 4);
+  const platePos = triple((a) =>
+    a === mAx ? (tSign > 0 ? mins[mAx] - plateT / 2 : maxs[mAx] + plateT / 2) : c[a],
+  );
+  const plateSize = triple((a) => (a === mAx ? plateT : span[a] * 1.2));
+  const cw = Math.max(partSize * 0.06, 6);
+  const clampM = c[mAx] + tSign * span[mAx] * 0.42;
+  const clampSize = triple((a) => (a === clampAx ? cw * 1.3 : a === mAx ? cw : cw * 1.7));
+  const clampPosA = triple((a) => (a === clampAx ? mins[clampAx] : a === mAx ? clampM : c[a]));
+  const clampPosB = triple((a) => (a === clampAx ? maxs[clampAx] : a === mAx ? clampM : c[a]));
+
+  // Vise style: two soft jaws on the ±clamp-axis faces, biased to the
+  // tool-opposite portion so the machined face stays clear.
+  const jt = Math.max(partSize * 0.05, 6);
+  const jawSize = triple((a) =>
+    a === clampAx ? jt : a === otherAx ? span[otherAx] * 0.7 : span[mAx] * 0.55,
+  );
+  const jawM = c[mAx] - tSign * span[mAx] * 0.2;
+  const jawPosA = triple((a) => (a === clampAx ? mins[clampAx] - jt / 2 : a === otherAx ? c[otherAx] : jawM));
+  const jawPosB = triple((a) => (a === clampAx ? maxs[clampAx] + jt / 2 : a === otherAx ? c[otherAx] : jawM));
+
   const r = Math.max(partSize * 0.18, 6);
   const tube = r * 0.07;
 
   return (
     <group>
-      {/* The gridded bed (SceneFloor) is the ground now; the vise just clamps. */}
-      <mesh position={jawA}>
-        <boxGeometry args={jawArgs} />
-        <meshStandardMaterial color="#3d5a80" metalness={0.3} roughness={0.5} />
-      </mesh>
-      <mesh position={jawB}>
-        <boxGeometry args={jawArgs} />
-        <meshStandardMaterial color="#3d5a80" metalness={0.3} roughness={0.5} />
-      </mesh>
+      {/* The gridded bed (SceneFloor) is the ground; fixture clamps clear of
+          the machined face (perpendicular to the active tool axis). */}
+      {isPlate ? (
+        <>
+          <mesh position={platePos}>
+            <boxGeometry args={plateSize} />
+            <meshStandardMaterial color={steel} metalness={0.3} roughness={0.55} />
+          </mesh>
+          <mesh position={clampPosA}>
+            <boxGeometry args={clampSize} />
+            <meshStandardMaterial color="#c07a2a" metalness={0.4} roughness={0.5} />
+          </mesh>
+          <mesh position={clampPosB}>
+            <boxGeometry args={clampSize} />
+            <meshStandardMaterial color="#c07a2a" metalness={0.4} roughness={0.5} />
+          </mesh>
+        </>
+      ) : (
+        <>
+          <mesh position={jawPosA}>
+            <boxGeometry args={jawSize} />
+            <meshStandardMaterial color={steel} metalness={0.3} roughness={0.5} />
+          </mesh>
+          <mesh position={jawPosB}>
+            <boxGeometry args={jawSize} />
+            <meshStandardMaterial color={steel} metalness={0.3} roughness={0.5} />
+          </mesh>
+        </>
+      )}
       {flip && (
         // Local XY arc rotated into a vertical plane; drawn through the part
         // (depthTest false) but BELOW the approach cone (renderOrder 11 < 12).
@@ -464,8 +524,10 @@ export function PartViewer({
   approach?: Approach | null;
   // Part opacity (0.2–1); multiplies the dim-on-highlight factor
   opacity?: number;
-  // Fixture visuals for the active setup; flip = secondary face, re-fixture hint
-  workholding?: { flip: boolean } | null;
+  // Fixture visuals for the active setup. toolAxis = machined-face normal so
+  // the fixture clamps clear of it; method picks vise vs fixture-plate; flip =
+  // secondary face re-fixture hint.
+  workholding?: { flip: boolean; toolAxis?: Vec3 | null; method?: string | null } | null;
   // Toggleable scene layers (operator-controlled render settings)
   layers?: { grid: boolean; dims: boolean; stock: boolean; fixture: boolean };
   // Per-side stock allowance (mm) for the translucent stock envelope
@@ -529,13 +591,15 @@ export function PartViewer({
       {mesh && bbox && L.stock && (
         <StockBox bbox={bbox} allowance={stockAllowance} light={light} />
       )}
-      {/* Fixture: shows during an active setup (flip hint) OR whenever the
-          Fixture layer is toggled on (always-on clamp preview). */}
-      {mesh && bbox && (workholding || L.fixture) && (
+      {/* Fixture: App decides visibility (Fixture layer or an active setup)
+          and passes the machined-face axis so it clamps clear of it. */}
+      {mesh && bbox && workholding && (
         <WorkholdingScene
           bbox={bbox}
           partSize={partSize}
-          flip={workholding?.flip ?? false}
+          toolAxis={workholding.toolAxis ?? null}
+          method={workholding.method ?? null}
+          flip={workholding.flip}
         />
       )}
       {/* Exact faces win; the marker is the fallback for ops without them.
