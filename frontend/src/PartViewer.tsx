@@ -440,32 +440,50 @@ function HighlightMarker({ hl, meshTopZ, partSize }: { hl: Highlight; meshTopZ: 
   // Locator ring scales with the part so small features stay findable
   const ringR = Math.max(r + 3, num(partSize, 100) * 0.02);
 
+  const L = num(hl.length, 10);
+  const W = num(hl.width, 10);
   return (
     <group position={[x, y, z]} renderOrder={10}>
       {isArea ? (
-        <mesh renderOrder={10}>
-          <boxGeometry args={[num(hl.length, 10), num(hl.width, 10), depth]} />
-          <meshStandardMaterial
-            color="#4a9eff" emissive="#4a9eff" emissiveIntensity={0.6}
-            transparent opacity={0.45} depthWrite={false} depthTest={false}
-          />
-        </mesh>
+        // Area feature (facing / step / pocket) with no exact faces: a filled
+        // slab sized to the machined region + a bright wireframe outline so it
+        // reads as "this surface/area", NOT a hole ring.
+        <group renderOrder={10}>
+          <mesh>
+            <boxGeometry args={[L, W, depth]} />
+            <meshStandardMaterial
+              color="#4a9eff" emissive="#4a9eff" emissiveIntensity={0.5}
+              transparent opacity={0.32} depthWrite={false} depthTest={false}
+            />
+          </mesh>
+          <mesh>
+            <boxGeometry args={[L, W, depth]} />
+            <meshBasicMaterial
+              color="#8fc4ff" wireframe
+              transparent opacity={0.9} depthWrite={false} depthTest={false}
+            />
+          </mesh>
+        </group>
       ) : (
-        <mesh rotation={[Math.PI / 2, 0, 0]} renderOrder={10}>
-          <cylinderGeometry args={[r, r, depth + 6, 32]} />
-          <meshStandardMaterial
-            color="#4a9eff" emissive="#4a9eff" emissiveIntensity={0.6}
-            transparent opacity={0.6} depthWrite={false} depthTest={false}
-          />
-        </mesh>
+        // Hole / drill: short cylinder down the bore + a locator ring (the
+        // ring is intuitive for round holes; kept for this case only).
+        <>
+          <mesh rotation={[Math.PI / 2, 0, 0]} renderOrder={10}>
+            <cylinderGeometry args={[r, r, depth + 6, 32]} />
+            <meshStandardMaterial
+              color="#4a9eff" emissive="#4a9eff" emissiveIntensity={0.6}
+              transparent opacity={0.6} depthWrite={false} depthTest={false}
+            />
+          </mesh>
+          <mesh renderOrder={11}>
+            <ringGeometry args={[ringR, ringR * 1.18, 48]} />
+            <meshBasicMaterial
+              color="#4a9eff" side={THREE.DoubleSide}
+              transparent opacity={0.95} depthWrite={false} depthTest={false}
+            />
+          </mesh>
+        </>
       )}
-      <mesh renderOrder={11}>
-        <ringGeometry args={[ringR, ringR * 1.18, 48]} />
-        <meshBasicMaterial
-          color="#4a9eff" side={THREE.DoubleSide}
-          transparent opacity={0.95} depthWrite={false} depthTest={false}
-        />
-      </mesh>
     </group>
   );
 }
