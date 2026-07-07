@@ -2920,6 +2920,88 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                                 )
                         candidates = [c for c in candidates if id(c) not in _drop]
 
+            # 19-2d: cross-drilled holes (turn-mill). A radial hole's cylinder
+            # is NOT coaxial with the turning axis, so the frame vote —
+            # dominated by the shaft's own OD cylinders — routinely lands in
+            # a frame where the cross hole fails the circular-XY test and
+            # vanishes. Detect them directly from face records instead.
+            _covered_cross = set()
+            for _cand in candidates:
+                if _cand.get("feature_type") in ("Hole", "Large hole / boring"):
+                    for _fi in _cand.get("face_indices") or []:
+                        _covered_cross.add(_fi)
+            _x_n = 0
+            for _r in face_records:
+                if _r.get("geom_type") != "CYLINDER":
+                    continue
+                if _r.get("face_index") in _covered_cross:
+                    continue
+                # hole axis: OCC axis when present, else bbox odd-axis
+                # (a cylinder's bbox has two equal dims = diameter; the odd
+                # one is the axis — same inference Section G uses)
+                _hax = None
+                _ax = _r.get("cylinder_axis_x")
+                _ay = _r.get("cylinder_axis_y")
+                _az = _r.get("cylinder_axis_z")
+                if None not in (_ax, _ay, _az):
+                    _m = (_ax**2 + _ay**2 + _az**2) ** 0.5
+                    if _m > 0.5:
+                        _comp = {"x": abs(_ax / _m), "y": abs(_ay / _m), "z": abs(_az / _m)}
+                        _hax = max(_comp, key=_comp.get)
+                        if _comp[turning_axis] >= 0.5:
+                            continue   # coaxial-ish — turning territory, handled above
+                if _hax is None:
+                    _dims = {a: _r.get(f"bbox_length_{a}") or 0.0 for a in ("x", "y", "z")}
+                    _best_ax, _best_score = None, 0.0
+                    for _cand_ax in ("x", "y", "z"):
+                        _others = [v for k, v in _dims.items() if k != _cand_ax]
+                        if max(_others) <= 0:
+                            continue
+                        _sim = min(_others) / max(_others)
+                        if _sim > _best_score:
+                            _best_score, _best_ax = _sim, _cand_ax
+                    if _best_ax is None or _best_score < 0.85:
+                        continue   # ambiguous bbox — skip rather than guess
+                    _hax = _best_ax
+                    if _hax == turning_axis:
+                        continue   # coaxial — turning territory
+                _rad = _r.get("cylinder_radius_mm")
+                if not _rad or _rad <= 0:
+                    _rad = max(_r.get(f"bbox_length_{a}") or 0.0
+                               for a in ("x", "y", "z") if a != _hax) / 2.0
+                _dia = 2.0 * _rad
+                if _dia <= 0 or (_envelope_od > 0 and _dia > 0.5 * _envelope_od):
+                    continue   # too big to be a drilled cross hole
+                _span = _r.get(f"bbox_length_{_hax}") or 0.0
+                _area = _r.get("area_mm2") or 0.0
+                if _span <= 0 or _area < 0.7 * (2 * 3.14159265 * _rad * _span):
+                    continue   # partial wrap — fillet/blend, not a hole
+                _x_n += 1
+                candidates.append({
+                    "candidate_id": f"XH{_x_n:03d}",
+                    "feature_name": f"Hole Ø{_dia:.2f} mm (cross-drilled)",
+                    "feature_type": "Hole",
+                    "quantity": 1,
+                    "x_pos": _r.get("center_x"),
+                    "y_pos": _r.get("center_y"),
+                    "diameter": round(_dia, 3),
+                    "length": None, "width": None,
+                    "depth": round(_span, 3),
+                    "tolerance_note": "",
+                    "priority": 2,
+                    "confidence": "medium",
+                    "setup_label": {"x": "Right", "y": "Front", "z": "Top"}[_hax],
+                    "detection_source": "cadquery_face_records",
+                    "detection_note": (
+                        f"19-2d cross-drilled: cylinder face #{_r['face_index']} "
+                        f"axis {_hax.upper()} ⊥ turning axis {turning_axis.upper()}; "
+                        "milled drilling on a turn-mill / rotary or secondary setup."
+                    ),
+                    "face_indices": [_r["face_index"]],
+                    "accepted": False,
+                    "ignored": False,
+                })
+
             # 19-5: undercut / thread-relief flag. A short OD region that is
             # narrower than the region machined just before it is a recess the
             # profile tool cannot finish in one pass — relief groove, thread

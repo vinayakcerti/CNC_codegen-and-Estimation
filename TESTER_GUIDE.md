@@ -71,9 +71,11 @@ STEP parse → feature detection → machinability → 3D tessellation.
   Manual mode lets you type stock L/W/H; the estimate's material line uses it.
 - **Features plannable (grade)** — % of detected features whose operations
   plan cleanly with the current tool library + machine (A–D grade).
-- **Machinable surface (%)** — face-area metric: total surface area minus
-  faces belonging to features whose planning is blocked. Comparable to
-  Toolpath's "machinable surface area".
+- **Machinable surface (%)** — on multibody parts this is now computed from
+  a validated per-body surface walk (hover the value for the method and the
+  exclusions list, e.g. weld-prep grooves below the smallest endmill).
+  Comparable to Toolpath's "machinable surface area"; expect ≥95% on
+  normal parts.
 - **Bodies** — multibody parts split into groups (identical parts grouped
   with ×N). Clicking a group **scopes the whole app to that body**: isolated
   3D, its features, its own machining plan. "Full assembly" resets. The scope
@@ -83,7 +85,11 @@ STEP parse → feature detection → machinability → 3D tessellation.
   camera and shows the amber tool-approach cone + grid floor + vise-jaw
   visual (v1 workholding scene).
 - **Holes** — grouped by diameter ("7× Ø5mm — Setup …") with a thread-status
-  dropdown (UI state for now; thread detection is on the roadmap).
+  dropdown. When scoped, the Strategy header also shows a hole census chip
+  ("0 of 22 holes threaded (7 likely M6) · 8 thru · 14 blind") — the
+  "likely" part is a tap-drill-table inference from the pilot diameter
+  (Ø4.2→M5, Ø5→M6, Ø6.8→M8 …), clearly labeled, since STEP files carry no
+  thread data. Counterbored holes are never marked likely-tapped.
 - **Machinability issues** — features whose ops are blocked (no tool fits,
   depth exceeds reach…).
 
@@ -131,12 +137,24 @@ Multi-process routing for one job:
 1. **CNC Milling** — auto from the Strategy totals on your selected machine.
 2. **Welding & Assembly** — auto for weldments (fit-up → tack → weld →
    grind → inspect phases with times from the fabrication model), own ₹/hr.
-3. **CNC Turning** — placeholder when turned parts are detected (manual
-   time + rate until the lathe module ships).
+3. **CNC Turning** — **now auto-planned**: when turned regions are detected,
+   the block shows planned lathe minutes from the turning planner (insert
+   tools, surface-speed cycle times). Enter a manual time to override.
 4. **+ Add process** — anything (powder coating, heat treat…) with
    name/time/rate.
 Route summary = process blocks + material + setup charges + margin →
 **routed grand total**.
+
+### Turning (NEW — test with any shaft/flange/bushing STEP)
+Upload a turned part: detection types **OD Turning** regions (Ø × length),
+**ID Turning / Bore**, and **ID Groove** (dia × width); short recesses get a
+"verify: possible undercut / thread relief" flag. The Strategy tab shows a
+**Lathe Chuck setup group** (3-jaw chuck workholding; long shafts L/D>5
+escalate to "Chuck + Tailstock") with Face → OD Rough → OD Finish →
+ID Rough/Finish Bore → Groove ops, each with an insert-grade tool (CNMG /
+DNMG / boring bars / MGMN groove), RPM from surface speed, and cycle time.
+Cross-drilled holes on shafts are detected too and planned as milled
+drilling. Note: this is planning + quoting, not lathe G-code.
 
 ### Viewer controls
 Orbit/pan/zoom always; view cube; **Opacity slider** (bottom-right);
@@ -147,10 +165,13 @@ sun/moon **theme toggle** (topbar); resizable/collapsible right inspector
 
 ## 5. Known limitations (don't file these — we know)
 - ~90 s analysis with only a spinner (job queue planned).
-- Estimate/Route stay whole-assembly while a body scope is active (notice
-  bar says so); per-body estimate is planned.
-- Thread status is UI-only; no thread detection yet.
-- Turning is a placeholder (lathe module in development).
+- **Estimate is now per-body when scoped** (ledger switches to the body's
+  own plan + stock and says "Per-body estimate — … , 1 pc"); the ROUTE tab
+  intentionally stays whole-job.
+- Thread status on hole rows is still a dropdown; the "likely M…" chips are
+  tap-drill inference, not detected threads (STEP has no thread data).
+- Turning plans ops + times but does not generate lathe G-code or canned
+  cycles yet.
 - No toolpath motion simulation (Toolpath licenses ModuleWorks for that; we
   render feature highlights instead — out of scope for now).
 - Whole-assembly Strategy on weldments includes noisy detections; scoped

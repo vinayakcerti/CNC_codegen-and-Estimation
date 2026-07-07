@@ -23,12 +23,42 @@ def generate_quote_html(quote: dict) -> str:
         quote_ref  : reference string
         validity_days : quote validity (default 30)
         notes      : free-text terms/notes
+        scope_note : optional per-body context line, e.g.
+                     "Per-body quote — Plate ×1 (Body 28), 1 pc"
+        process_rows : optional multi-process routing rows,
+                     list of (process_name, minutes, value) — e.g.
+                     [("CNC Milling", 33.0, 440.0),
+                      ("CNC Turning (lathe)", 11.9, 119.0),
+                      ("Welding & Assembly", 610.0, 5083.0)]
     """
     sym = quote.get("currency", "₹")
     rows_html = "\n".join(
         f"<tr><td>{label}</td><td class='num'>{sym}{value:,.2f}</td></tr>"
         for label, value in quote.get("cost_rows", [])
     )
+    scope_html = (
+        f"<div class='scope'>{quote['scope_note']}</div>"
+        if quote.get("scope_note") else ""
+    )
+    proc = quote.get("process_rows") or []
+    proc_html = ""
+    if proc:
+        proc_rows = "\n".join(
+            f"<tr><td>{name}</td>"
+            f"<td class='num'>{mins:,.1f} min</td>"
+            f"<td class='num'>{sym}{value:,.2f}</td></tr>"
+            for name, mins, value in proc
+        )
+        proc_total_min = sum(m for _, m, _ in proc)
+        proc_total_val = sum(v for _, _, v in proc)
+        proc_html = f"""
+<table class="cost">
+  <tr><th>Process routing</th><th>Time</th><th>Value</th></tr>
+  {proc_rows}
+  <tr><td>Total across processes</td>
+      <td class='num'>{proc_total_min:,.1f} min</td>
+      <td class='num'>{sym}{proc_total_val:,.2f}</td></tr>
+</table>"""
     sell = quote.get("sell_price")
     sell_html = f"{sym}{sell:,.2f}" if sell is not None else "—"
     batch = quote.get("batch_qty", 1)
@@ -49,6 +79,9 @@ def generate_quote_html(quote: dict) -> str:
   tr:last-child td {{ font-weight: 700; background: #f6ffed; }}
   .price {{ font-size: 26px; font-weight: 700; color: #1a73e8; margin: 16px 0 4px; }}
   .small {{ font-size: 11px; color: #777; margin-top: 24px; }}
+  .scope {{ font-size: 12px; color: #8a5a00; background: #fff7e0;
+            border: 1px solid #e8c26a; border-radius: 4px;
+            padding: 5px 10px; margin: 8px 0; }}
   @media print {{ body {{ margin: 12mm; }} }}
 </style></head><body>
 <h1>{quote.get('shop_name', 'CNC Machining Quotation')}</h1>
@@ -67,6 +100,7 @@ def generate_quote_html(quote: dict) -> str:
   <tr><td><b>Batch quantity:</b> {batch}</td>
       <td><b>Est. machine time / part:</b> {time_html}</td></tr>
 </table>
+{scope_html}{proc_html}
 <table class="cost">
   <tr><th>Cost item</th><th>Per part</th></tr>
   {rows_html}
