@@ -1783,10 +1783,21 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
 
             # Skip if CYLINDER faces lie within the pocket XY/Z region — rounded
             # slot ends indicate the region is already handled by Section C.
+            # Only end-cap-sized cylinders disqualify (radius ~ half the slot
+            # width); a big cylinder here is the part's own round-stock skin
+            # (pocket milled into a cylinder), not a slot end.
             _has_cyl = False
             for _rc in face_records:
                 if _rc.get("geom_type") != "CYLINDER":
                     continue
+                _rc_r = _rc.get("cylinder_radius_mm")
+                if _rc_r is None:
+                    # Adaptor radius missing — estimate from the face bbox
+                    # (a full cylinder's bbox spans equal its diameter).
+                    _rc_r = max(_rc.get("bbox_length_x") or 0.0,
+                                _rc.get("bbox_length_y") or 0.0) / 2.0
+                if _rc_r > 0.75 * min(_px, _py):
+                    continue   # stock OD / large bore — not a slot end-cap
                 _rx = _rc.get("center_x") or 0.0
                 _ry = _rc.get("center_y") or 0.0
                 _rz = _rc.get("center_z") or 0.0
@@ -2838,6 +2849,99 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                     + f" | 19-2: coaxial with {turning_axis.upper()} turning axis "
                     f"(envelope Ø{_envelope_od:.1f}) — lathe region, not a milled bore."
                 )
+
+            # 19-2b: a turned part gets BOTH ends faced. Section A's 35%
+            # XY-footprint gate is a prismatic rule — it drops the small end
+            # of a stepped shaft (e.g. Ø30 end on a Ø50 shaft). Synthesize a
+            # facing candidate for any axis end without one.
+            _ax_mins = [r.get(f"bbox_{turning_axis}min") for r in face_records
+                        if r.get(f"bbox_{turning_axis}min") is not None]
+            _ax_maxs = [r.get(f"bbox_{turning_axis}max") for r in face_records
+                        if r.get(f"bbox_{turning_axis}max") is not None]
+            if _ax_mins and _ax_maxs:
+                _ax_lo, _ax_hi = min(_ax_mins), max(_ax_maxs)
+                _end_tol = max(2.0, (_ax_hi - _ax_lo) * 0.06)
+                _covered = []
+                for _cand in candidates:
+                    if _cand.get("feature_type") not in ("Face milling", "Face Milling"):
+                        continue
+                    _pos = (_cand.get("cad_position") or {}).get(turning_axis)
+                    if _pos is not None:
+                        _covered.append(float(_pos))
+                for _end, _dirname in ((_ax_lo, "min"), (_ax_hi, "max")):
+                    if any(abs(p - _end) <= _end_tol for p in _covered):
+                        continue
+                    _best = None
+                    for _r in face_records:
+                        if _r.get("geom_type") != "PLANE":
+                            continue
+                        _n = abs(_r.get(f"normal_{turning_axis}") or 0.0)
+                        if _n < 0.85:
+                            continue
+                        _c = _r.get(f"center_{turning_axis}")
+                        if _c is None or abs(_c - _end) > _end_tol:
+                            continue
+                        if (_r.get("area_mm2") or 0.0) < 100.0:
+                            continue
+                        if _best is None or (_r.get("area_mm2") or 0) > (_best.get("area_mm2") or 0):
+                            _best = _r
+                    if _best is None:
+                        continue
+                    _f_dir = "top" if _dirname == "max" else "bottom"
+                    candidates.append({
+                        "candidate_id": f"FLA{1 if _dirname == 'min' else 2:02d}",
+                        "feature_name": f"Face milling — {_f_dir} surface",
+                        "feature_type": "Face milling",
+                        "quantity": 1,
+                        "x_pos": _best.get("center_x"),
+                        "y_pos": _best.get("center_y"),
+                        "diameter": None,
+                        "length": round(float(_best.get("bbox_length_x") or 0.0), 3),
+                        "width": round(float(_best.get("bbox_length_y") or 0.0), 3),
+                        "depth": 1.0,
+                        "tolerance_note": "",
+                        "priority": 1,
+                        "confidence": "medium",
+                        "setup_label": "Top" if _f_dir == "top" else "Bottom",
+                        "detection_source": "cadquery_face_records",
+                        "detection_note": (
+                            f"19-2b lathe end-facing: face #{_best['face_index']} at "
+                            f"{turning_axis}={_end:.1f} — small stepped-shaft end below "
+                            "the prismatic 35% footprint gate; every turned part is "
+                            "faced at both ends."
+                        ),
+                        "face_indices": [_best["face_index"]],
+                        "cad_position": {
+                            "x": round(float(_best.get("center_x") or 0.0), 6),
+                            "y": round(float(_best.get("center_y") or 0.0), 6),
+                            "z": round(float(_best.get("center_z") or 0.0), 6),
+                        },
+                        "accepted": False,
+                        "ignored": False,
+                    })
+        else:
+            # 19-2c: round MILLED stock (axisymmetric=false, e.g. a cylinder
+            # with a pocket cut into it). The stock's outer skin is still a
+            # cylinder and Section B still reads it as a bore. A hole whose
+            # diameter spans (nearly) the part's whole cross-section is the
+            # part's own OD — drop it. Real bores are always smaller.
+            _xr = part_bbox.get("x_range", (0.0, 0.0))
+            _yr = part_bbox.get("y_range", (0.0, 0.0))
+            _xspan = _xr[1] - _xr[0]
+            _yspan = _yr[1] - _yr[0]
+            _xc = (_xr[0] + _xr[1]) / 2.0
+            _yc = (_yr[0] + _yr[1]) / 2.0
+            if _xspan > 0 and _yspan > 0:
+                _skin_dia = 0.9 * min(_xspan, _yspan)
+                candidates = [
+                    c for c in candidates
+                    if not (
+                        c.get("feature_type") in ("Hole", "Large hole / boring")
+                        and (c.get("diameter") or 0.0) >= _skin_dia
+                        and abs((c.get("x_pos") or 0.0) - _xc) <= 0.05 * _xspan
+                        and abs((c.get("y_pos") or 0.0) - _yc) <= 0.05 * _yspan
+                    )
+                ]
 
         if not candidates:
             warnings_out.append(
