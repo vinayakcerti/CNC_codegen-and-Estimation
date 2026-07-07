@@ -9,8 +9,8 @@
 | Metric | Count |
 |--------|-------|
 | Total entries | 30 |
-| PASS | 22 |
-| FAIL | 8 |
+| PASS | 28 |
+| FAIL | 2 |
 | MISSING | 0 |
 | ERROR | 0 |
 
@@ -40,14 +40,14 @@
 | `SF11_bottom_chamfer_plate.step` | **PASS** | Chamfer=1, Face milling=2 | Chamfer=1, Face milling=2 | Epic 12.4 SF-11: 80x120x25 block with 2mm chamfer on all bottom edges only. Validates bottom-edge chamfer detection (Section F nz<0 branch). Chamfer setup=Bottom, depth=2.0. |
 | `SF14_top_fillet_no_chamfer.step` | **PASS** | Face milling=2, Hole=2 | Face milling=2, Hole=2 | Epic 12.4 SF-14: 80x120x25 block with 3mm fillet on all top edges. Fillets are TOROIDAL faces — Section F must NOT emit a Chamfer candidate. After the Section C lz>=8mm filter (Tenon Slot fix), toroidal fillet faces (lz=3mm) are excluded from slot detection and surface as Hole=2 instead — still a known TOROIDAL false positive tracked in Epic F3. Key assertion: Chamfer=0. |
 | `SF13_variable_chamfer_top_bottom.step` | **PASS** | Chamfer=2, Face milling=2 | Chamfer=2, Face milling=2 | Epic 12.4 SF-13: 100x80x30 block with 3mm chamfer top edges and 1mm chamfer bottom edges. Validates that top and bottom chamfers are emitted as SEPARATE candidates (Chamfer=2) with correct setup labels and depths, never collapsed into one. |
-| `T04_plain_cylinder_d60_l120.step` | **FAIL** | Face milling=2 | Face milling=2, Large hole / boring=1 | Epic 19 T04: plain cylinder D=60 L=120. Axisymmetric baseline — facing + OD only. Key assertion: is_axisymmetric=true, no milled features detected. |
-| `T05_undercut_shaft.step` | **FAIL** | Face milling=2 | Face milling=1, Large hole / boring=3 | Epic 19 T05: stepped shaft with undercut/thread-relief groove between two shoulders. Validates undercut flagging (Story 19-5). is_axisymmetric=true. |
-| `T06_short_disc_hub_d120_l20.step` | **FAIL** | Face milling=2 | Face milling=2, Large hole / boring=1 | Epic 19 T06: short disc/hub D=120 L=20 (L:D=0.17). Facing-dominant turned part. is_axisymmetric=true. |
-| `T07_flange_bore_boltholes.step` | **FAIL** | Face milling=2, Hole=6 | Face milling=2, Hole=6, Large hole / boring=2 | Epic 19 T07: flange OD=150 with central through bore D=40 and 6 bolt holes on PCD=100. Mixed lathe (OD + bore) + drilling. is_axisymmetric=true. |
-| `T08_shaft_internal_groove.step` | **FAIL** | Face milling=2 | Face milling=2, Hole=1, Large hole / boring=1 | Epic 19 T08: shaft with through bore containing an internal annular groove (ID grooving). Validates groove detection inside bore (Story 19-3). is_axisymmetric=true. |
+| `T04_plain_cylinder_d60_l120.step` | **PASS** | Face milling=2, OD Turning=1 | Face milling=2, OD Turning=1 | Epic 19 T04: plain cylinder D=60 L=120. Axisymmetric baseline — facing + OD only. Key assertion: is_axisymmetric=true, no milled features detected. 19-2: OD region Ø60×120 detected as OD Turning. |
+| `T05_undercut_shaft.step` | **FAIL** | Face milling=2, OD Turning=3 | Face milling=1, OD Turning=3 | Epic 19 T05: stepped shaft with undercut/thread-relief groove between two shoulders. Validates undercut flagging (Story 19-5). is_axisymmetric=true. 19-2: 3 OD regions (Ø50/Ø38 undercut/Ø30). KNOWN GAP: one end face missed by facing detection (actual Face milling=1) — expectation kept at 2 so the defect stays visible. |
+| `T06_short_disc_hub_d120_l20.step` | **PASS** | Face milling=2, OD Turning=1 | Face milling=2, OD Turning=1 | Epic 19 T06: short disc/hub D=120 L=20 (L:D=0.17). Facing-dominant turned part. is_axisymmetric=true. 19-2: OD Ø120×20 as OD Turning. |
+| `T07_flange_bore_boltholes.step` | **PASS** | Face milling=2, Hole=6, ID Turning / Bore=1, OD Turning=1 | Face milling=2, Hole=6, ID Turning / Bore=1, OD Turning=1 | Epic 19 T07: flange OD=150 with central through bore D=40 and 6 bolt holes on PCD=100. Mixed lathe (OD + bore) + drilling. is_axisymmetric=true. 19-2: OD Ø150 + central ID Ø40 typed as turning; the 6 off-axis bolt holes stay milled Holes. |
+| `T08_shaft_internal_groove.step` | **PASS** | Face milling=2, ID Turning / Bore=1, OD Turning=1 | Face milling=2, ID Turning / Bore=1, OD Turning=1 | Epic 19 T08: shaft with through bore containing an internal annular groove (ID grooving). Validates groove detection inside bore (Story 19-3). is_axisymmetric=true. 19-2: OD Ø60 + ID Ø20 turning regions (internal groove split is Story 19-3). |
 | `T09_round_milled_part_not_lathe.step` | **FAIL** | Face milling=2, Pocket=1 | Face milling=2, Large hole / boring=1 | Epic 19 T09: FALSE-POSITIVE TRAP — round cylindrical stock with a rectangular pocket milled on top. Must NOT be classified as a turned part. Key assertion: is_axisymmetric=false (or lathe=false). Pocket=1. |
-| `T10_long_shaft_ld7_d40_l300.step` | **FAIL** | Face milling=2 | Face milling=2, Large hole / boring=1 | Epic 19 T10: long shaft D=40 L=300 (L:D=7.5). Must trigger tailstock/steady-rest flag in operation planning (Story 19-6). is_axisymmetric=true. |
-| `T11_shaft_thread_region.step` | **FAIL** | Face milling=2 | Face milling=2, Large hole / boring=3 | Epic 19 T11: stepped shaft with a narrower-diameter region representing a thread zone. Must not crash. Thread region should be flagged as unrecognised or 'Thread — verify manually' (Story 19-5). is_axisymmetric=true. |
+| `T10_long_shaft_ld7_d40_l300.step` | **PASS** | Face milling=2, OD Turning=1 | Face milling=2, OD Turning=1 | Epic 19 T10: long shaft D=40 L=300 (L:D=7.5). Must trigger tailstock/steady-rest flag in operation planning (Story 19-6). is_axisymmetric=true. 19-2: OD Ø40×300 as OD Turning. |
+| `T11_shaft_thread_region.step` | **PASS** | Face milling=2, OD Turning=3 | Face milling=2, OD Turning=3 | Epic 19 T11: stepped shaft with a narrower-diameter region representing a thread zone. Must not crash. Thread region should be flagged as unrecognised or 'Thread — verify manually' (Story 19-5). is_axisymmetric=true. 19-2: 3 OD regions incl. the Ø44 thread zone (thread flagging is Story 19-5). |
 
 ## Uncovered STEP Files
 
@@ -64,84 +64,20 @@ These files exist in `test_samples/` but have no entry in `feature_detection_exp
 ## Failure Details
 
 
-### T04_plain_cylinder_d60_l120.step — FAIL
-
-- **Expected:** Face milling=2
-- **Actual:** Face milling=2, Large hole / boring=1
-- **Notes:** Epic 19 T04: plain cylinder D=60 L=120. Axisymmetric baseline — facing + OD only. Key assertion: is_axisymmetric=true, no milled features detected.
-
-Candidates detected:
-
-| ID | Type | Name | Confidence |
-|----|------|------|------------|
-| FACE-ef40506fa9004f98 | Face milling | Face milling — top surface | high |
-| FACE-2de48ce935da64f4 | Face milling | Face milling — bottom surface | high |
-| BORE-0985596c7f3ac7b6 | Large hole / boring | Large hole / boring Ø60.00 mm | medium |
-
 ### T05_undercut_shaft.step — FAIL
 
-- **Expected:** Face milling=2
-- **Actual:** Face milling=1, Large hole / boring=3
-- **Notes:** Epic 19 T05: stepped shaft with undercut/thread-relief groove between two shoulders. Validates undercut flagging (Story 19-5). is_axisymmetric=true.
+- **Expected:** Face milling=2, OD Turning=3
+- **Actual:** Face milling=1, OD Turning=3
+- **Notes:** Epic 19 T05: stepped shaft with undercut/thread-relief groove between two shoulders. Validates undercut flagging (Story 19-5). is_axisymmetric=true. 19-2: 3 OD regions (Ø50/Ø38 undercut/Ø30). KNOWN GAP: one end face missed by facing detection (actual Face milling=1) — expectation kept at 2 so the defect stays visible.
 
 Candidates detected:
 
 | ID | Type | Name | Confidence |
 |----|------|------|------------|
 | FACE-1eb3950876665a6d | Face milling | Face milling — bottom surface | high |
-| BORE-30cdfbdc23d00e17 | Large hole / boring | Large hole / boring Ø50.00 mm | medium |
-| BORE-d760e6dd88225da3 | Large hole / boring | Large hole / boring Ø38.00 mm | medium |
-| BORE-995fba1efb59a0a4 | Large hole / boring | Large hole / boring Ø30.00 mm | medium |
-
-### T06_short_disc_hub_d120_l20.step — FAIL
-
-- **Expected:** Face milling=2
-- **Actual:** Face milling=2, Large hole / boring=1
-- **Notes:** Epic 19 T06: short disc/hub D=120 L=20 (L:D=0.17). Facing-dominant turned part. is_axisymmetric=true.
-
-Candidates detected:
-
-| ID | Type | Name | Confidence |
-|----|------|------|------------|
-| FACE-cad3d9ce04a5ce00 | Face milling | Face milling — top surface | high |
-| FACE-b8f3ee620aa66691 | Face milling | Face milling — bottom surface | high |
-| BORE-d3fe53d313ce3142 | Large hole / boring | Large hole / boring Ø120.00 mm | medium |
-
-### T07_flange_bore_boltholes.step — FAIL
-
-- **Expected:** Face milling=2, Hole=6
-- **Actual:** Face milling=2, Hole=6, Large hole / boring=2
-- **Notes:** Epic 19 T07: flange OD=150 with central through bore D=40 and 6 bolt holes on PCD=100. Mixed lathe (OD + bore) + drilling. is_axisymmetric=true.
-
-Candidates detected:
-
-| ID | Type | Name | Confidence |
-|----|------|------|------------|
-| FACE-d5444147324018e2 | Face milling | Face milling — top surface | high |
-| FACE-3369315c46f37c3c | Face milling | Face milling — bottom surface | high |
-| BORE-99b1e8ad9af8d821 | Large hole / boring | Large hole / boring Ø150.00 mm | medium |
-| HOLE-618c7b9a826ab224 | Hole | Hole Ø10.00 mm | medium |
-| HOLE-fa21107dfea19f8d | Hole | Hole Ø10.00 mm | medium |
-| BORE-89ba526ecf43f2fc | Large hole / boring | Large hole / boring Ø40.00 mm | medium |
-| HOLE-2e69236e97e61c64 | Hole | Hole Ø10.00 mm | medium |
-| HOLE-aaafd628b479a766 | Hole | Hole Ø10.00 mm | medium |
-| HOLE-d929cc946ae65255 | Hole | Hole Ø10.00 mm | medium |
-| HOLE-f86c1a8a12feb85b | Hole | Hole Ø10.00 mm | medium |
-
-### T08_shaft_internal_groove.step — FAIL
-
-- **Expected:** Face milling=2
-- **Actual:** Face milling=2, Hole=1, Large hole / boring=1
-- **Notes:** Epic 19 T08: shaft with through bore containing an internal annular groove (ID grooving). Validates groove detection inside bore (Story 19-3). is_axisymmetric=true.
-
-Candidates detected:
-
-| ID | Type | Name | Confidence |
-|----|------|------|------------|
-| FACE-6ca492a667de72ee | Face milling | Face milling — top surface | high |
-| FACE-f67661d30fe84224 | Face milling | Face milling — bottom surface | high |
-| BORE-8552a08bbe800fea | Large hole / boring | Large hole / boring Ø60.00 mm | medium |
-| HOLE-3b305041c445e5be | Hole | Hole Ø20.00 mm | medium |
+| ODT-7f6b6505210ed65c | OD Turning | OD Turning Ø50.00 mm × 40.0 mm | medium |
+| ODT-94b66caf2bb7f512 | OD Turning | OD Turning Ø38.00 mm × 5.0 mm | medium |
+| ODT-22ab7ceedc1cbd12 | OD Turning | OD Turning Ø30.00 mm × 25.0 mm | medium |
 
 ### T09_round_milled_part_not_lathe.step — FAIL
 
@@ -156,33 +92,3 @@ Candidates detected:
 | FACE-14f74d608263f401 | Face milling | Face milling — top surface | high |
 | FACE-a1cacad5d3495b03 | Face milling | Face milling — bottom surface | high |
 | BORE-5f05c7aa8a947220 | Large hole / boring | Large hole / boring Ø100.00 mm | medium |
-
-### T10_long_shaft_ld7_d40_l300.step — FAIL
-
-- **Expected:** Face milling=2
-- **Actual:** Face milling=2, Large hole / boring=1
-- **Notes:** Epic 19 T10: long shaft D=40 L=300 (L:D=7.5). Must trigger tailstock/steady-rest flag in operation planning (Story 19-6). is_axisymmetric=true.
-
-Candidates detected:
-
-| ID | Type | Name | Confidence |
-|----|------|------|------------|
-| FACE-9024b6fdacc37655 | Face milling | Face milling — top surface | high |
-| FACE-d42f21cf961662a5 | Face milling | Face milling — bottom surface | high |
-| BORE-9de6f82b325d51ac | Large hole / boring | Large hole / boring Ø40.00 mm | medium |
-
-### T11_shaft_thread_region.step — FAIL
-
-- **Expected:** Face milling=2
-- **Actual:** Face milling=2, Large hole / boring=3
-- **Notes:** Epic 19 T11: stepped shaft with a narrower-diameter region representing a thread zone. Must not crash. Thread region should be flagged as unrecognised or 'Thread — verify manually' (Story 19-5). is_axisymmetric=true.
-
-Candidates detected:
-
-| ID | Type | Name | Confidence |
-|----|------|------|------------|
-| FACE-52b1f4d8048f82e0 | Face milling | Face milling — top surface | high |
-| FACE-eefb32e42c526958 | Face milling | Face milling — bottom surface | high |
-| BORE-29252ec40f083c7a | Large hole / boring | Large hole / boring Ø50.00 mm | medium |
-| BORE-21036ac2c6af2490 | Large hole / boring | Large hole / boring Ø44.00 mm | medium |
-| BORE-9dae09fab3751056 | Large hole / boring | Large hole / boring Ø40.00 mm | medium |

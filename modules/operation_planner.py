@@ -46,6 +46,19 @@ OPERATION_RULES = {
     "Chamfer": [
         {"op": "Chamfer", "notes": "Chamfer top edges"},
     ],
+    # Turned regions (Story 19-2 detection). Lathe operation planning is the
+    # turning module's job — on a VMC plan these are surfaced for routing,
+    # not silently dropped or mis-planned as milling.
+    "OD Turning": [
+        {"op": "Manual Review",
+         "notes": "Lathe OD region — quote via Route > CNC Turning "
+                  "(turning module in development)"},
+    ],
+    "ID Turning / Bore": [
+        {"op": "Manual Review",
+         "notes": "Lathe ID/bore region — quote via Route > CNC Turning "
+                  "(turning module in development)"},
+    ],
 }
 
 _FEATURE_TYPE_ALIASES = {

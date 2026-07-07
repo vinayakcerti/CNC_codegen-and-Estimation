@@ -34,6 +34,8 @@ _FEATURE_ID_PREFIXES = {
     "Step": "STEP",
     "Chamfer": "CHAMFER",
     "Edge Milling": "EDGE",
+    "OD Turning": "ODT",
+    "ID Turning / Bore": "IDT",
 }
 
 
@@ -2761,6 +2763,81 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                 axisymmetric_confidence = "low"
 
         candidates = _classify_face_records(face_records, part_bbox)
+
+        # ── Story 19-2: OD/ID turning regions on axisymmetric parts ────────
+        # The billet-path Section B reads every circular cylinder as a hole or
+        # bore. On a turned part the OUTER surface is such a cylinder, so a
+        # plain shaft grows a phantom "Large hole / boring". Re-type coaxial
+        # cylinder candidates: external diameters become OD Turning regions,
+        # central internal diameters become ID Turning / Bore. Off-axis holes
+        # (bolt circles, cross-drilled) are untouched — they stay milled.
+        if is_axisymmetric and turning_axis:
+            _rec_by_idx = {r.get("face_index"): r for r in face_records}
+            _cross = [a for a in ("x", "y", "z") if a != turning_axis]
+            _c_mins = {a: [r.get(f"bbox_{a}min") for r in face_records
+                           if r.get(f"bbox_{a}min") is not None] for a in _cross}
+            _c_maxs = {a: [r.get(f"bbox_{a}max") for r in face_records
+                           if r.get(f"bbox_{a}max") is not None] for a in _cross}
+            _spans = {a: ((max(_c_maxs[a]) - min(_c_mins[a]))
+                          if _c_mins[a] and _c_maxs[a] else 0.0) for a in _cross}
+            _centerline = {a: ((max(_c_maxs[a]) + min(_c_mins[a])) / 2.0
+                               if _c_mins[a] and _c_maxs[a] else 0.0) for a in _cross}
+            _envelope_od = max(_spans.values()) if _spans else 0.0
+
+            def _is_coaxial(rec) -> bool:
+                if not rec:
+                    return False
+                # axis direction: OCC axis when present, else bbox odd-axis
+                _ax = rec.get("cylinder_axis_x")
+                _ay = rec.get("cylinder_axis_y")
+                _az = rec.get("cylinder_axis_z")
+                if None not in (_ax, _ay, _az):
+                    _m = (_ax**2 + _ay**2 + _az**2) ** 0.5
+                    if _m > 0.5:
+                        _comp = {"x": _ax / _m, "y": _ay / _m, "z": _az / _m}
+                        if abs(_comp[turning_axis]) < 0.95:
+                            return False
+                # radial offset of the face centre from the part centreline
+                _off = 0.0
+                for a in _cross:
+                    _c = rec.get(f"center_{a}")
+                    if _c is None:
+                        return False
+                    _off += (_c - _centerline[a]) ** 2
+                _off = _off ** 0.5
+                return _off <= max(2.0, 0.05 * _envelope_od)
+
+            _od_n = 0
+            _id_n = 0
+            for _cand in candidates:
+                if _cand.get("feature_type") not in ("Hole", "Large hole / boring"):
+                    continue
+                _fis = _cand.get("face_indices") or []
+                if not _fis or not _is_coaxial(_rec_by_idx.get(_fis[0])):
+                    continue
+                _dia = _cand.get("diameter") or 0.0
+                _depth = _cand.get("depth")
+                if _envelope_od > 0 and _dia >= 0.55 * _envelope_od:
+                    _od_n += 1
+                    _cand["feature_type"] = "OD Turning"
+                    _cand["feature_name"] = (
+                        f"OD Turning Ø{_dia:.2f} mm"
+                        + (f" × {_depth:.1f} mm" if _depth else "")
+                    )
+                else:
+                    _id_n += 1
+                    _cand["feature_type"] = "ID Turning / Bore"
+                    _cand["feature_name"] = (
+                        f"ID Turning Ø{_dia:.2f} mm"
+                        + (f" × {_depth:.1f} mm" if _depth else "")
+                    )
+                _cand["requires_lathe"] = True
+                _cand["confidence"] = "medium"
+                _cand["detection_note"] = (
+                    (_cand.get("detection_note") or "")
+                    + f" | 19-2: coaxial with {turning_axis.upper()} turning axis "
+                    f"(envelope Ø{_envelope_od:.1f}) — lathe region, not a milled bore."
+                )
 
         if not candidates:
             warnings_out.append(
