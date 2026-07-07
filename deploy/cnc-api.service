@@ -1,0 +1,19 @@
+[Unit]
+Description=CNC Plan & Process Pro - FastAPI engine
+After=network.target
+
+[Service]
+Type=simple
+User=cnc
+WorkingDirectory=/home/cnc/app
+# conda run gives CadQuery its OCCT DLL/so context (same rule as dev)
+ExecStart=/home/cnc/miniforge3/bin/conda run --no-capture-output -n cnc-cadquery \
+  uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 2
+Restart=always
+RestartSec=5
+# OCCT can spike on big STEP files; cap so a bad file can't take the box down
+MemoryMax=3G
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
