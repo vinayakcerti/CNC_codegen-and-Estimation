@@ -684,7 +684,9 @@ export default function App() {
 
   useEffect(() => {
     const token = ++scopedReqRef.current;
-    if (tab !== "strategy" || scopedBodyIndex == null || !partFile) return;
+    // The Estimate tab consumes the scoped plan too (per-body ledger),
+    // so a scope set from Overview must fetch on either tab.
+    if ((tab !== "strategy" && tab !== "estimate") || scopedBodyIndex == null || !partFile) return;
     const machineKey = machineSel
       ? customMachines.some((c) => c.name === machineSel)
         ? `custom:${machineSel}`
@@ -799,6 +801,49 @@ export default function App() {
   }, [
     analysis, strategy, estPreset, estTolerance, estComplexity,
     customMaterials, materials, stockMode, manualStock, matPriceKg, setupCharge, rateHr,
+  ]);
+
+  // Per-body estimate (scoped): same ledger math as estCore but from the
+  // SCOPED strategy plan and the body's own stock envelope (+5 mm/side).
+  // One piece — the Bodies row shows ×N; the Route/assembly view remains
+  // the whole-job quote. estCore itself stays whole-assembly because the
+  // routed grand total must remain a superset of the milling estimate.
+  const scopedEstCore = useMemo(() => {
+    if (!analysis || !selectedGroup) return null;
+    const sp = scopedStrategy;
+    if (!sp || sp.scoped_body_index !== scopedBodyIndex) return null;
+    const machineMin = sp.totals.total_machine_time_min ?? 0;
+    const presetMult = PRESET_MULT[estPreset];
+    const tolMult = TOLERANCE_MULT[estTolerance];
+    const complexity = Number.isFinite(estComplexity)
+      ? Math.min(COMPLEXITY_MAX, Math.max(COMPLEXITY_MIN, estComplexity))
+      : 1.0;
+    const machMult = presetMult * complexity * tolMult;
+    const machining = (machineMin / 60) * rateHr * machMult;
+    const density =
+      customMaterials.find((m) => m.name === analysis.material)?.density ??
+      materials.find((m) => m.name === analysis.material)?.density ??
+      2.7;
+    const dims = selectedGroup.dims_mm;
+    const allow = 5.0;
+    const stockSize = {
+      length: dims.length + 2 * allow,
+      width: dims.width + 2 * allow,
+      height: dims.height + 2 * allow,
+    };
+    const stockVolCm3 =
+      (stockSize.length * stockSize.width * stockSize.height) / 1000;
+    const massKg = (stockVolCm3 * density) / 1000;
+    const materialCost = massKg * matPriceKg;
+    const setupsCost = sp.setups.length * setupCharge;
+    return {
+      machineMin, presetMult, tolMult, complexity, machMult, machining,
+      stockSize, massKg, materialCost, setupsCost,
+    };
+  }, [
+    analysis, selectedGroup, scopedStrategy, scopedBodyIndex, estPreset,
+    estTolerance, estComplexity, customMaterials, materials, matPriceKg,
+    setupCharge, rateHr,
   ]);
 
   // ---- Route rollup: block times/costs + routed grand total ----
@@ -1939,10 +1984,17 @@ export default function App() {
                     {tab === "estimate" && strategy && estCore && (() => {
                       // All shared cost math lives in estCore (also feeds the
                       // Route tab, keeping the routed total a strict superset).
+                      // Under a body scope the ledger switches to the scoped
+                      // plan + body stock (scopedEstCore); Route stays whole-job.
+                      const scoped = !!(selectedGroup && scopedEstCore);
                       const {
                         machineMin, presetMult, tolMult, complexity, machMult,
                         machining, stockSize, massKg, materialCost: material_, setupsCost,
-                      } = estCore;
+                      } = scoped ? scopedEstCore! : estCore;
+                      // Itemised rows must come from the SAME plan as the
+                      // totals — scoped plan under a body scope.
+                      const ledgerSetups =
+                        scoped && scopedStrategy ? scopedStrategy.setups : strategy.setups;
                       const partTotal = material_ + machining; // block 1: material + machining
                       const subtotal = partTotal + setupsCost;
                       const margin = subtotal * (marginPct / 100);
@@ -1960,14 +2012,21 @@ export default function App() {
                       const stockDims = stockSize
                         ? `${fmtNum(stockSize.length)} × ${fmtNum(stockSize.width)} × ${fmtNum(stockSize.height)} mm`
                         : `${d.length} × ${d.width} × ${d.height} mm`;
-                      const stockTag = stockSize && stockMode === "manual" ? " (manual)" : "";
+                      const stockTag =
+                        stockSize && stockMode === "manual" && !scoped ? " (manual)" : "";
                       const materialLine =
                         `${analysis.material} stock ${stockDims}${stockTag} — ${massKg.toFixed(1)} kg @ ₹${matPriceKg}/kg`;
                       return (
                         <>
                           {selectedGroup && (
                             <div className="scope-note">
-                              Estimate is whole-assembly; body-scoped planning coming.
+                              {scoped
+                                ? `Per-body estimate — ${scopeLabel(selectedGroup)}, 1 pc` +
+                                  (selectedGroup.quantity > 1
+                                    ? ` (assembly has ×${selectedGroup.quantity} — multiply for the set)`
+                                    : "") +
+                                  ". Clear the scope for the whole-assembly quote."
+                                : "Scoped plan loading — showing whole-assembly estimate."}
                             </div>
                           )}
                           <div className="section-title">Estimate settings</div>
@@ -2093,7 +2152,7 @@ export default function App() {
                               <span className="desc" title={materialLine}>{materialLine}</span>
                               <span className="amt">{inr(material_)}</span>
                             </div>
-                            {strategy.setups.map((su) => {
+                            {ledgerSetups.map((su) => {
                               const multTag = machMult !== 1 ? ` × ${machMult.toFixed(2)}` : "";
                               const line = `Setup · ${su.setup_label} — ${fmtMin(su.subtotal_min)} — ₹${rateHr}/hr${multTag}`;
                               return (
@@ -2107,10 +2166,10 @@ export default function App() {
                             {/* Block 2 — per-setup fixed charges */}
                             <div className="ledger-row root">
                               <span className="desc">Setup Charges</span>
-                              <span className="qty">× {strategy.setups.length}</span>
+                              <span className="qty">× {ledgerSetups.length}</span>
                               <span className="amt">{inr(setupsCost)}</span>
                             </div>
-                            {strategy.setups.map((su) => (
+                            {ledgerSetups.map((su) => (
                               <div className="ledger-row child" key={su.setup_label}>
                                 <span className="desc">Setup · {su.setup_label}</span>
                                 <span className="amt">{inr(setupCharge)}</span>
