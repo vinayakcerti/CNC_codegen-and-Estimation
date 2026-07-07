@@ -1334,9 +1334,32 @@ export default function App() {
   function renderHolesSection() {
     const groups = analysis?.hole_groups ?? [];
     if (!groups.length) return null;
+    // Whole-part threaded census (Toolpath parity: "0 of 33"). Validated
+    // per-body counts when the weldment split is available, else the
+    // billet hole groups.
+    const validatedTotal = (wmResult?.groups ?? []).reduce(
+      (n, g) => n + (g.feature_counts?.holes ?? 0) * g.quantity,
+      0,
+    );
+    const totalHoles =
+      validatedTotal > 0
+        ? validatedTotal
+        : groups.reduce((n, g) => n + g.count, 0);
     return (
       <>
         <div className="section-title">Holes</div>
+        <div className="hole-row" style={{ opacity: 0.9 }}>
+          <span
+            className="chip"
+            title={
+              validatedTotal > 0
+                ? "Validated per-body hole count. Thread detection is inference-based — scope a body for likely-tap chips."
+                : "From detected hole groups."
+            }
+          >
+            0 of {totalHoles} holes threaded
+          </span>
+        </div>
         {groups.map((g) => {
           const diaKey = g.diameter_mm.toFixed(2);
           return (
