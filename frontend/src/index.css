@@ -463,6 +463,13 @@ body { background: var(--bg-0); color: var(--text-0); }
   background: var(--accent); color: #fff; border-color: var(--accent);
 }
 
+/* ---- Color-coded setups (Strategy) ---- */
+.setup-group { padding-left: 8px; margin: 2px 0 10px; }
+.setup-swatch {
+  display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+  margin-right: 7px; vertical-align: middle;
+}
+
 .toast-error {
   position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
   z-index: 100; background: var(--red-bg); color: var(--red);

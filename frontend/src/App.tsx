@@ -34,6 +34,17 @@ const SETUP_DIRS: Record<string, Vec3> = {
 // Unknown setup labels fall back to a front-right-top isometric view.
 const ISO_DIR: Vec3 = [0.577, -0.577, 0.577];
 
+// Distinct per-setup colors (Toolpath-style color-coded setups). Assigned by
+// setup order; shared by the Strategy list band and the 3D highlight so a
+// setup reads the same everywhere.
+const SETUP_COLORS = [
+  "#4a9eff", "#e0a63b", "#5ac36a", "#c86ee0", "#e06a6a",
+  "#3ec9c9", "#e0c93b", "#7a8cff", "#e07ab0", "#8a9aa8",
+];
+function setupColorAt(i: number): string {
+  return SETUP_COLORS[((i % SETUP_COLORS.length) + SETUP_COLORS.length) % SETUP_COLORS.length];
+}
+
 // Bore setups ("Front (Bore)") orient like their parent face — strip the
 // suffix before the SETUP_DIRS lookup.
 function normalizeSetupLabel(label: string): string {
@@ -2086,10 +2097,18 @@ export default function App() {
                                 No machinable candidates in this scope
                               </div>
                             )}
-                            {rollupsBySetup.map((su) => (
-                              <div key={su.label}>
+                            {rollupsBySetup.map((su, si) => (
+                              <div
+                                key={su.label}
+                                className="setup-group"
+                                style={{ borderLeft: `3px solid ${setupColorAt(si)}` }}
+                              >
                                 <div className="section-title">
-                                  Setup · {su.label} — {su.opCount} ops · {su.subtotal.toFixed(1)} min
+                                  <span
+                                    className="setup-swatch"
+                                    style={{ background: setupColorAt(si) }}
+                                  />
+                                  Setup {si + 1} · {su.label} — {su.opCount} ops · {su.subtotal.toFixed(1)} min
                                 </div>
                                 {su.workholding && (
                                   <div className="setup-wh" title={su.workholding.reason}>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { TrackballControls, Bounds, GizmoHelper, GizmoViewcube, Grid, Html } from "@react-three/drei";
+import { TrackballControls, Bounds, GizmoHelper, GizmoViewcube, Grid, Html, Line } from "@react-three/drei";
 import * as THREE from "three";
 import type { Mesh } from "./api";
 
@@ -328,6 +328,22 @@ function SceneFloor({
   );
 }
 
+// Colored X/Y/Z axis triad (Toolpath-style: X red, Y green, Z blue) at the
+// part's lower corner — an orientation aid that reads with the free rotation.
+function AxisTriad({ bbox, partSize }: { bbox: Bbox; partSize: number }) {
+  const [xmin, ymin, zmin] = bbox.mins;
+  const pad = partSize * 0.06;
+  const o: Vec3 = [xmin - pad, ymin - pad, zmin - pad];
+  const L = partSize * 0.32;
+  return (
+    <group>
+      <Line points={[o, [o[0] + L, o[1], o[2]]]} color="#e05a5a" lineWidth={2} />
+      <Line points={[o, [o[0], o[1] + L, o[2]]]} color="#5ac36a" lineWidth={2} />
+      <Line points={[o, [o[0], o[1], o[2] + L]]} color="#5a9eff" lineWidth={2} />
+    </group>
+  );
+}
+
 // Translucent raw-stock envelope: the part bbox grown by the per-side
 // allowance (Streamlit had this; the React viewer had dropped it). Stays in
 // the mesh frame so it works for the assembly and any scoped body.
@@ -606,6 +622,7 @@ export function PartViewer({
       {mesh && bbox && (
         <SceneFloor bbox={bbox} partSize={partSize} light={light} showGrid={L.grid} showDims={L.dims} />
       )}
+      {mesh && bbox && L.grid && <AxisTriad bbox={bbox} partSize={partSize} />}
       {mesh && bbox && L.stock && (
         <StockBox bbox={bbox} allowance={stockAllowance} light={light} />
       )}
