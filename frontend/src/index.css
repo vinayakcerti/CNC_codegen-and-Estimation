@@ -445,6 +445,24 @@ body { background: var(--bg-0); color: var(--text-0); }
   width: 90px; margin: 0; accent-color: var(--accent);
 }
 
+/* ---- Viewer scene-layer toggles ---- */
+.viewer-layers {
+  position: absolute; bottom: 44px; right: 12px; z-index: 5;
+  display: flex; gap: 4px;
+  padding: 4px; border-radius: 8px;
+  background: var(--bg-1); border: 1px solid var(--border);
+}
+.layer-chip {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 3px 7px; border-radius: 5px; cursor: pointer;
+  background: transparent; color: var(--text-2);
+  border: 1px solid transparent;
+}
+.layer-chip:hover { color: var(--text-1); border-color: var(--border); }
+.layer-chip.on {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+
 .toast-error {
   position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
   z-index: 100; background: var(--red-bg); color: var(--red);

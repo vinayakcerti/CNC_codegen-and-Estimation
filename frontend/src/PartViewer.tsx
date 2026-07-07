@@ -106,12 +106,10 @@ function WorkholdingScene({
   bbox,
   partSize,
   flip,
-  light,
 }: {
   bbox: Bbox;
   partSize: number;
   flip: boolean;
-  light: boolean;
 }) {
   const [xmin, ymin, zmin] = bbox.mins;
   const [xmax, ymax, zmax] = bbox.maxs;
@@ -121,17 +119,12 @@ function WorkholdingScene({
   const yspan = Math.max(ymax - ymin, 1);
   const zspan = Math.max(zmax - zmin, 1);
 
-  // Grid floor: large thin plate 2 mm under the part (raw CAD frame, Z-up)
-  const floorSize = partSize * 2.5;
-  const floorT = Math.max(partSize * 0.005, 0.5);
-  const floorZ = zmin - 2 - floorT / 2;
-
-  // Vise: two jaw blocks clamping the shortest horizontal axis, flush to
-  // the part's bbox sides and rising from its base (below the approach cone).
+  // Vise: two soft-jaw blocks clamping the shortest horizontal axis, gripping
+  // the part's base so they don't obscure the machined faces above.
   const clampX = xspan <= yspan;
-  const jawT = Math.max(partSize * 0.15, 2); // thickness along the clamp axis
-  const jawH = Math.max(zspan * 0.4, 2); // height
-  const jawL = (clampX ? yspan : xspan) * 0.7; // length along the other axis
+  const jawT = Math.max(partSize * 0.05, 6); // thickness along the clamp axis
+  const jawH = Math.max(zspan * 0.3, 4); // height (grips the lower part)
+  const jawL = (clampX ? yspan : xspan) * 0.55; // length along the other axis
   const jawZ = zmin + jawH / 2;
   const jawArgs: [number, number, number] = clampX ? [jawT, jawL, jawH] : [jawL, jawT, jawH];
   const jawA: Vec3 = clampX ? [xmin - jawT / 2, cy, jawZ] : [cx, ymin - jawT / 2, jawZ];
@@ -143,10 +136,7 @@ function WorkholdingScene({
 
   return (
     <group>
-      <mesh position={[cx, cy, floorZ]}>
-        <boxGeometry args={[floorSize, floorSize, floorT]} />
-        <meshStandardMaterial color={light ? "#d6dae0" : "#2a2f36"} metalness={0} roughness={0.9} />
-      </mesh>
+      {/* The gridded bed (SceneFloor) is the ground now; the vise just clamps. */}
       <mesh position={jawA}>
         <boxGeometry args={jawArgs} />
         <meshStandardMaterial color="#3d5a80" metalness={0.3} roughness={0.5} />
@@ -207,7 +197,19 @@ function DimLabel({ pos, text, light }: { pos: Vec3; text: string; light: boolea
   );
 }
 
-function SceneFloor({ bbox, partSize, light }: { bbox: Bbox; partSize: number; light: boolean }) {
+function SceneFloor({
+  bbox,
+  partSize,
+  light,
+  showGrid,
+  showDims,
+}: {
+  bbox: Bbox;
+  partSize: number;
+  light: boolean;
+  showGrid: boolean;
+  showDims: boolean;
+}) {
   const [xmin, ymin, zmin] = bbox.mins;
   const [xmax, ymax, zmax] = bbox.maxs;
   const cx = (xmin + xmax) / 2;
@@ -219,7 +221,7 @@ function SceneFloor({ bbox, partSize, light }: { bbox: Bbox; partSize: number; l
   const floorZ = zmin - Math.max(partSize * 0.01, 0.5);
   const pad = Math.max(partSize * 0.05, 4);
 
-  // Round grid cell to a sensible mm step for the part scale (10 or 50 mm).
+  // Round grid cell to a sensible mm step for the part scale (10/25/50 mm).
   const cell = partSize > 400 ? 50 : partSize > 120 ? 25 : 10;
   const section = cell * 5;
 
@@ -233,29 +235,75 @@ function SceneFloor({ bbox, partSize, light }: { bbox: Bbox; partSize: number; l
 
   return (
     <group>
-      {/* Gridded machine bed on the XY plane at the part base */}
-      <Grid
-        position={[cx, cy, floorZ]}
-        rotation={[-Math.PI / 2, 0, 0]}
-        args={[partSize * 3, partSize * 3]}
-        cellSize={cell}
-        cellThickness={0.6}
-        cellColor={light ? "#c2c8d0" : "#3a4048"}
-        sectionSize={section}
-        sectionThickness={1.1}
-        sectionColor={light ? "#8a94a0" : "#5a6570"}
-        fadeDistance={partSize * 6}
-        fadeStrength={1.2}
-        infiniteGrid={false}
-      />
-      {/* Bounding-box dimension frame */}
-      <lineSegments geometry={edges} position={[cx, cy, cz]} renderOrder={2}>
-        <lineBasicMaterial color={light ? "#7b8794" : "#6b7480"} transparent opacity={0.55} />
+      {showGrid && (
+        // Gridded machine bed on the XY plane at the part base
+        <Grid
+          position={[cx, cy, floorZ]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          args={[partSize * 3, partSize * 3]}
+          cellSize={cell}
+          cellThickness={0.6}
+          cellColor={light ? "#c2c8d0" : "#3a4048"}
+          sectionSize={section}
+          sectionThickness={1.1}
+          sectionColor={light ? "#8a94a0" : "#5a6570"}
+          fadeDistance={partSize * 6}
+          fadeStrength={1.2}
+          infiniteGrid={false}
+        />
+      )}
+      {showDims && (
+        <>
+          {/* Bounding-box dimension frame */}
+          <lineSegments geometry={edges} position={[cx, cy, cz]} renderOrder={2}>
+            <lineBasicMaterial color={light ? "#7b8794" : "#6b7480"} transparent opacity={0.55} />
+          </lineSegments>
+          {/* L × W × H labels along the three edges */}
+          <DimLabel pos={[cx, ymin - pad, zmin]} text={fmtMm(xspan)} light={light} />
+          <DimLabel pos={[xmax + pad, cy, zmin]} text={fmtMm(yspan)} light={light} />
+          <DimLabel pos={[xmax + pad, ymin - pad, cz]} text={fmtMm(zspan)} light={light} />
+        </>
+      )}
+    </group>
+  );
+}
+
+// Translucent raw-stock envelope: the part bbox grown by the per-side
+// allowance (Streamlit had this; the React viewer had dropped it). Stays in
+// the mesh frame so it works for the assembly and any scoped body.
+function StockBox({ bbox, allowance, light }: { bbox: Bbox; allowance: number; light: boolean }) {
+  const [xmin, ymin, zmin] = bbox.mins;
+  const [xmax, ymax, zmax] = bbox.maxs;
+  const a = Math.max(allowance, 0);
+  const sx = xmax - xmin + 2 * a;
+  const sy = ymax - ymin + 2 * a;
+  const sz = zmax - zmin + 2 * a;
+  const cx = (xmin + xmax) / 2;
+  const cy = (ymin + ymax) / 2;
+  const cz = (zmin + zmax) / 2;
+  const edges = useMemo(() => {
+    const box = new THREE.BoxGeometry(Math.max(sx, 0.1), Math.max(sy, 0.1), Math.max(sz, 0.1));
+    const e = new THREE.EdgesGeometry(box);
+    box.dispose();
+    return e;
+  }, [sx, sy, sz]);
+  useEffect(() => () => edges.dispose(), [edges]);
+  return (
+    <group position={[cx, cy, cz]}>
+      <mesh renderOrder={1}>
+        <boxGeometry args={[sx, sy, sz]} />
+        <meshStandardMaterial
+          color={light ? "#5a86c0" : "#4a78b0"}
+          transparent
+          opacity={0.06}
+          depthWrite={false}
+          metalness={0}
+          roughness={1}
+        />
+      </mesh>
+      <lineSegments geometry={edges} renderOrder={2}>
+        <lineBasicMaterial color="#5a86c0" transparent opacity={0.5} />
       </lineSegments>
-      {/* L × W × H labels along the three edges */}
-      <DimLabel pos={[cx, ymin - pad, zmin]} text={fmtMm(xspan)} light={light} />
-      <DimLabel pos={[xmax + pad, cy, zmin]} text={fmtMm(yspan)} light={light} />
-      <DimLabel pos={[xmax + pad, ymin - pad, cz]} text={fmtMm(zspan)} light={light} />
     </group>
   );
 }
@@ -401,6 +449,8 @@ export function PartViewer({
   approach = null,
   opacity = 1,
   workholding = null,
+  layers,
+  stockAllowance = 5,
 }: {
   mesh: Mesh | null;
   highlight?: Highlight | null;
@@ -416,7 +466,12 @@ export function PartViewer({
   opacity?: number;
   // Fixture visuals for the active setup; flip = secondary face, re-fixture hint
   workholding?: { flip: boolean } | null;
+  // Toggleable scene layers (operator-controlled render settings)
+  layers?: { grid: boolean; dims: boolean; stock: boolean; fixture: boolean };
+  // Per-side stock allowance (mm) for the translucent stock envelope
+  stockAllowance?: number;
 }) {
+  const L = layers ?? { grid: true, dims: true, stock: false, fixture: false };
   const light = theme === "light";
   const { meshTopZ, partSize, center, bbox } = useMemo(() => {
     const none = {
@@ -468,9 +523,20 @@ export function PartViewer({
           <PartMesh mesh={mesh} dimmed={!!highlight} light={light} opacity={opacity} />
         </Bounds>
       )}
-      {mesh && bbox && <SceneFloor bbox={bbox} partSize={partSize} light={light} />}
-      {mesh && workholding && bbox && (
-        <WorkholdingScene bbox={bbox} partSize={partSize} flip={workholding.flip} light={light} />
+      {mesh && bbox && (
+        <SceneFloor bbox={bbox} partSize={partSize} light={light} showGrid={L.grid} showDims={L.dims} />
+      )}
+      {mesh && bbox && L.stock && (
+        <StockBox bbox={bbox} allowance={stockAllowance} light={light} />
+      )}
+      {/* Fixture: shows during an active setup (flip hint) OR whenever the
+          Fixture layer is toggled on (always-on clamp preview). */}
+      {mesh && bbox && (workholding || L.fixture) && (
+        <WorkholdingScene
+          bbox={bbox}
+          partSize={partSize}
+          flip={workholding?.flip ?? false}
+        />
       )}
       {/* Exact faces win; the marker is the fallback for ops without them.
           Both render OUTSIDE <Bounds> so selection never re-fits the camera. */}

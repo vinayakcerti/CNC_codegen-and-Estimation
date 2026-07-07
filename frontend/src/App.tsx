@@ -62,6 +62,29 @@ function loadViewerOpacity(): number {
   return Number.isFinite(v) && v >= 0.2 && v <= 1 ? v : 1;
 }
 
+export interface ViewerLayers {
+  grid: boolean;
+  dims: boolean;
+  stock: boolean;
+  fixture: boolean;
+}
+const DEFAULT_LAYERS: ViewerLayers = { grid: true, dims: true, stock: false, fixture: false };
+function loadLayers(): ViewerLayers {
+  try {
+    const raw = lsGet("cnc.viewerLayers");
+    if (!raw) return DEFAULT_LAYERS;
+    const o = JSON.parse(raw) as Partial<ViewerLayers>;
+    return {
+      grid: o.grid ?? true,
+      dims: o.dims ?? true,
+      stock: o.stock ?? false,
+      fixture: o.fixture ?? false,
+    };
+  } catch {
+    return DEFAULT_LAYERS;
+  }
+}
+
 function loadCustomMachines(): CustomMachine[] {
   try {
     const raw = lsGet("cnc.customMachines");
@@ -644,6 +667,14 @@ export default function App() {
 
   // Part opacity in the 3D viewer (0.2–1, persisted)
   const [viewerOpacity, setViewerOpacity] = useState<number>(loadViewerOpacity);
+  const [layers, setLayers] = useState<ViewerLayers>(loadLayers);
+  function toggleLayer(k: keyof ViewerLayers) {
+    setLayers((cur) => {
+      const next = { ...cur, [k]: !cur[k] };
+      lsSet("cnc.viewerLayers", JSON.stringify(next));
+      return next;
+    });
+  }
 
   // Per-body scope for multibody weldments. selectedGroupId null = full assembly.
   // Session-only by design — scope resets on every new analysis.
@@ -1605,6 +1636,8 @@ export default function App() {
                       ? { flip: SECONDARY_FACE_RE.test(activeSetup) }
                       : null
                   }
+                  layers={layers}
+                  stockAllowance={analysis.stock?.allowance_mm ?? 5}
                 />
               )}
               {analysis && !loading && selectedGroup && !selectedGroup.mesh && (
@@ -1617,6 +1650,26 @@ export default function App() {
                   {selectedGroup
                     ? `${scopeLabel(selectedGroup)} · ${groupDims(selectedGroup)} mm · drag to orbit`
                     : `${analysis.dimensions_mm.length} × ${analysis.dimensions_mm.width} × ${analysis.dimensions_mm.height} mm · drag to orbit`}
+                </div>
+              )}
+              {analysis && !loading && (
+                <div className="viewer-layers" title="Scene layers">
+                  {([
+                    ["grid", "Grid"],
+                    ["dims", "Dims"],
+                    ["stock", "Stock"],
+                    ["fixture", "Fixture"],
+                  ] as [keyof ViewerLayers, string][]).map(([k, label]) => (
+                    <button
+                      key={k}
+                      type="button"
+                      className={`layer-chip${layers[k] ? " on" : ""}`}
+                      onClick={() => toggleLayer(k)}
+                      title={`Toggle ${label.toLowerCase()}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               )}
               {analysis && !loading && (
