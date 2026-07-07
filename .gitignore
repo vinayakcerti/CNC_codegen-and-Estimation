@@ -46,3 +46,6 @@ Thumbs.db
 test_samples/ 
 .claude/ 
 .claude/ 
+
+# Confidential strategy documents - never in the shared repo (tester has access)
+_bmad-output/planning-artifacts/private/
