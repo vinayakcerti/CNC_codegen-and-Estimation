@@ -1,8 +1,13 @@
 import { useEffect, useMemo } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { OrbitControls, Bounds, GizmoHelper, GizmoViewcube } from "@react-three/drei";
+import { OrbitControls, Bounds, GizmoHelper, GizmoViewcube, Grid, Html } from "@react-three/drei";
 import * as THREE from "three";
 import type { Mesh } from "./api";
+
+// CAD/STEP data is Z-up (part height runs along +Z). three.js defaults to
+// Y-up, which put the orbit poles on ±Y and gimbal-locked flat faces so the
+// part couldn't be flipped bottom-to-top. Everything here assumes Z-up.
+const UP: Vec3 = [0, 0, 1];
 
 export type Vec3 = [number, number, number];
 
@@ -37,11 +42,11 @@ function CameraRig({ dir, center, dist }: { dir: Vec3 | null; center: Vec3; dist
     const d = new THREE.Vector3(dir[0], dir[1], dir[2]);
     if (d.lengthSq() < 1e-9) return;
     d.normalize();
-    // Nudge off the exact camera-up pole (±Y) so OrbitControls' azimuth
-    // stays well-defined for the Front/Back views.
-    if (Math.abs(d.y) > 0.999) {
+    // Nudge off the exact camera-up pole (±Z, since the scene is Z-up) so
+    // OrbitControls' azimuth stays well-defined for the Top/Bottom views.
+    if (Math.abs(d.z) > 0.999) {
       d.x += 0.02;
-      d.z += 0.02;
+      d.y += 0.02;
       d.normalize();
     }
     const c = new THREE.Vector3(center[0], center[1], center[2]);
@@ -168,6 +173,89 @@ function WorkholdingScene({
           </mesh>
         </group>
       )}
+    </group>
+  );
+}
+
+// ---- Scene floor: machine-bed grid + scale + dimension labels ----------
+// Toolpath-style "meshed base" that grounds the part and doubles as the
+// scale reference (each grid cell = a round number of mm), plus an L×W×H
+// dimension frame. Rendered outside <Bounds> so it never affects the fit.
+function fmtMm(v: number): string {
+  return v >= 100 ? `${Math.round(v)} mm` : `${v.toFixed(1)} mm`;
+}
+
+function DimLabel({ pos, text, light }: { pos: Vec3; text: string; light: boolean }) {
+  return (
+    <Html position={pos} center style={{ pointerEvents: "none", userSelect: "none" }}>
+      <div
+        style={{
+          fontFamily: "system-ui, sans-serif",
+          fontSize: 11,
+          fontWeight: 600,
+          whiteSpace: "nowrap",
+          padding: "1px 6px",
+          borderRadius: 4,
+          color: light ? "#2a2f36" : "#e6e9ee",
+          background: light ? "rgba(255,255,255,0.85)" : "rgba(20,24,28,0.8)",
+          border: `1px solid ${light ? "#c2c8d0" : "#3a4048"}`,
+        }}
+      >
+        {text}
+      </div>
+    </Html>
+  );
+}
+
+function SceneFloor({ bbox, partSize, light }: { bbox: Bbox; partSize: number; light: boolean }) {
+  const [xmin, ymin, zmin] = bbox.mins;
+  const [xmax, ymax, zmax] = bbox.maxs;
+  const cx = (xmin + xmax) / 2;
+  const cy = (ymin + ymax) / 2;
+  const cz = (zmin + zmax) / 2;
+  const xspan = xmax - xmin;
+  const yspan = ymax - ymin;
+  const zspan = zmax - zmin;
+  const floorZ = zmin - Math.max(partSize * 0.01, 0.5);
+  const pad = Math.max(partSize * 0.05, 4);
+
+  // Round grid cell to a sensible mm step for the part scale (10 or 50 mm).
+  const cell = partSize > 400 ? 50 : partSize > 120 ? 25 : 10;
+  const section = cell * 5;
+
+  const edges = useMemo(() => {
+    const box = new THREE.BoxGeometry(Math.max(xspan, 0.1), Math.max(yspan, 0.1), Math.max(zspan, 0.1));
+    const e = new THREE.EdgesGeometry(box);
+    box.dispose();
+    return e;
+  }, [xspan, yspan, zspan]);
+  useEffect(() => () => edges.dispose(), [edges]);
+
+  return (
+    <group>
+      {/* Gridded machine bed on the XY plane at the part base */}
+      <Grid
+        position={[cx, cy, floorZ]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        args={[partSize * 3, partSize * 3]}
+        cellSize={cell}
+        cellThickness={0.6}
+        cellColor={light ? "#c2c8d0" : "#3a4048"}
+        sectionSize={section}
+        sectionThickness={1.1}
+        sectionColor={light ? "#8a94a0" : "#5a6570"}
+        fadeDistance={partSize * 6}
+        fadeStrength={1.2}
+        infiniteGrid={false}
+      />
+      {/* Bounding-box dimension frame */}
+      <lineSegments geometry={edges} position={[cx, cy, cz]} renderOrder={2}>
+        <lineBasicMaterial color={light ? "#7b8794" : "#6b7480"} transparent opacity={0.55} />
+      </lineSegments>
+      {/* L × W × H labels along the three edges */}
+      <DimLabel pos={[cx, ymin - pad, zmin]} text={fmtMm(xspan)} light={light} />
+      <DimLabel pos={[xmax + pad, cy, zmin]} text={fmtMm(yspan)} light={light} />
+      <DimLabel pos={[xmax + pad, ymin - pad, cz]} text={fmtMm(zspan)} light={light} />
     </group>
   );
 }
@@ -368,18 +456,19 @@ export function PartViewer({
 
   return (
     <Canvas
-      camera={{ position: [400, 320, 400], fov: 45, near: 1, far: 20000 }}
+      camera={{ position: [420, -520, 380], up: UP, fov: 45, near: 1, far: 20000 }}
       style={{ width: "100%", height: "100%" }}
     >
       <color attach="background" args={[light ? "#eef0f3" : "#191c20"]} />
       <ambientLight intensity={0.85} />
-      <directionalLight position={[300, 500, 200]} intensity={1.3} />
-      <directionalLight position={[-200, -100, -300]} intensity={0.4} />
+      <directionalLight position={[300, 200, 500]} intensity={1.3} />
+      <directionalLight position={[-200, -300, -100]} intensity={0.4} />
       {mesh && (
         <Bounds fit clip observe margin={1.25}>
           <PartMesh mesh={mesh} dimmed={!!highlight} light={light} opacity={opacity} />
         </Bounds>
       )}
+      {mesh && bbox && <SceneFloor bbox={bbox} partSize={partSize} light={light} />}
       {mesh && workholding && bbox && (
         <WorkholdingScene bbox={bbox} partSize={partSize} flip={workholding.flip} light={light} />
       )}
