@@ -610,7 +610,18 @@ export function PartViewer({
       )}
       {mesh && approach && <ApproachCone approach={approach} partSize={partSize} />}
       <CameraRig dir={cameraDir} center={center} dist={Math.max(partSize * 1.8, 50)} />
-      <OrbitControls makeDefault enableDamping dampingFactor={0.12} />
+      {/* Keep the camera ~7° off the ±Z poles. At the exact pole (looking
+          straight down/up the up-axis) OrbitControls' azimuth degenerates,
+          so horizontal drag became hypersensitive/stuck once the part was
+          tilted flat top/bottom — this bounds polar so horizontal rotation
+          stays well-defined everywhere while top/bottom stay readable. */}
+      <OrbitControls
+        makeDefault
+        enableDamping
+        dampingFactor={0.12}
+        minPolarAngle={0.12}
+        maxPolarAngle={Math.PI - 0.12}
+      />
       <GizmoHelper alignment="top-right" margin={[64, 64]}>
         <GizmoViewcube
           color={light ? "#dde1e6" : "#2a2f36"}
