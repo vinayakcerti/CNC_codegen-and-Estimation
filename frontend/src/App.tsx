@@ -557,6 +557,45 @@ function GeometrySection({ g }: { g: FeatureGeometry }) {
   );
 }
 
+// Geometry section for mill/facing ops that carry no hole/slot geometry
+// object (gap-v5 A3). A Face Mill / Rough-End-Mill on a planar face still has
+// L×W×depth on op.geo, so surface Feature depth + L/D the same way holes do —
+// the Face Mill card used to show only cutting parameters.
+function MillGeometrySection({ g }: { g: OpGeo }) {
+  const L = g.length ?? 0;
+  const W = g.width ?? 0;
+  const D = g.depth ?? 0;
+  const span = Math.max(L, W);
+  const ld = D > 0 && span > 0 ? D / span : null; // shallow face -> low L/D
+  if (L <= 0 && W <= 0 && D <= 0) return null;
+  return (
+    <>
+      <div className="op-panel-sect">Geometry</div>
+      <div className="op-panel-row">
+        <span className="k">Size</span>
+        <span className="v">
+          {fmtNum(L)} × {fmtNum(W)} × {fmtNum(D)} mm
+        </span>
+      </div>
+      {D > 0 && (
+        <div className="op-panel-row">
+          <span className="k">Feature depth</span>
+          <span className="v">{fmtNum(D)} mm</span>
+        </div>
+      )}
+      {ld != null && (
+        <div
+          className="op-panel-row"
+          title="Feature depth ÷ largest planar span — low for shallow faces"
+        >
+          <span className="k">L/D ratio</span>
+          <span className="v">{(ld < 0.1 ? ld.toFixed(3) : ld.toFixed(2))}:1</span>
+        </div>
+      )}
+    </>
+  );
+}
+
 // Floating op-detail panel over the canvas (Strategy op click). Read-mostly:
 // spindle/feed edits recompute the cut time LOCALLY — the planned time's
 // built-in safety factor (origTime·origFeed/path) is preserved, so
@@ -585,7 +624,11 @@ function OpPanel({ op, onClose }: { op: StrategyOp; onClose: () => void }) {
         <span className="k">Tool</span>
         <span className="v" title={op.tool}>{op.tool_display || op.tool}</span>
       </div>
-      {geom && <GeometrySection g={geom} />}
+      {geom ? (
+        <GeometrySection g={geom} />
+      ) : (
+        op.geo && <MillGeometrySection g={op.geo} />
+      )}
       <div className="op-panel-sect">Cutting parameters</div>
       <div className="op-panel-row">
         <span className="k">Spindle (rpm)</span>
