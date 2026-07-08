@@ -146,20 +146,34 @@ function WorkholdingScene({
   const triple = (byAx: (a: number) => number): Vec3 => [byAx(0), byAx(1), byAx(2)];
 
   const isPlate = method ? /plate|toe|clamp/i.test(method) : false;
-  const steel = "#3d5a80";
+  // Muted steel-grey so the fixture reads as tooling and stays subordinate to
+  // the bright workpiece — the old saturated navy looked like a second part.
+  const steel = "#566173";
 
-  // Fixture-plate style: backing plate on the tool-OPPOSITE face + two toe
-  // clamps gripping the machined-face perimeter edges (tool faces interior).
-  const plateT = Math.max(partSize * 0.03, 4);
+  // Fixture-plate style: a THIN backing sub-plate on the tool-OPPOSITE face +
+  // two toe clamps gripping the machined-face perimeter edges. Kept thin and
+  // barely wider than the part so the workpiece stays the visual star.
+  const plateT = Math.max(partSize * 0.012, 3);
   const platePos = triple((a) =>
     a === mAx ? (tSign > 0 ? mins[mAx] - plateT / 2 : maxs[mAx] + plateT / 2) : c[a],
   );
-  const plateSize = triple((a) => (a === mAx ? plateT : span[a] * 1.2));
-  const cw = Math.max(partSize * 0.06, 6);
-  const clampM = c[mAx] + tSign * span[mAx] * 0.42;
-  const clampSize = triple((a) => (a === clampAx ? cw * 1.3 : a === mAx ? cw : cw * 1.7));
-  const clampPosA = triple((a) => (a === clampAx ? mins[clampAx] : a === mAx ? clampM : c[a]));
-  const clampPosB = triple((a) => (a === clampAx ? maxs[clampAx] : a === mAx ? clampM : c[a]));
+  const plateSize = triple((a) => (a === mAx ? plateT : span[a] * 1.08));
+  const cw = Math.max(partSize * 0.045, 6);
+  const toe = cw * 0.35;                              // small overlap onto the edge
+  const clampLenC = cw * 1.3;                         // clamp body length along clampAx
+  const faceM = tSign > 0 ? maxs[mAx] : mins[mAx];    // machined (tool-side) face
+  // Toe clamps rest on the machined face and sit just OUTSIDE the part ends,
+  // overlapping the top edge by `toe` only — the body never sinks into the
+  // part. Along the tool axis the clamp sits above the face (a small toe dips
+  // onto it); along clampAx it sits beyond each end.
+  const clampM = faceM + tSign * (cw / 2 - toe);
+  const clampSize = triple((a) => (a === clampAx ? clampLenC : a === mAx ? cw : cw * 1.7));
+  const clampPosA = triple((a) =>
+    a === clampAx ? mins[clampAx] - clampLenC / 2 + toe : a === mAx ? clampM : c[a],
+  );
+  const clampPosB = triple((a) =>
+    a === clampAx ? maxs[clampAx] + clampLenC / 2 - toe : a === mAx ? clampM : c[a],
+  );
 
   // Vise style: two soft jaws on the ±clamp-axis faces, biased to the
   // tool-opposite portion so the machined face stays clear.
@@ -414,18 +428,20 @@ function buildGeometry(mesh: Mesh): THREE.BufferGeometry {
 
 function PartMesh({
   mesh,
-  dimmed,
   light,
   opacity,
 }: {
   mesh: Mesh;
-  dimmed: boolean;
   light: boolean;
   opacity: number;
 }) {
   const geometry = useMemo(() => buildGeometry(mesh), [mesh]);
 
-  const effOpacity = (dimmed ? 0.4 : 1) * opacity;
+  // The opacity slider is the single source of truth: the part stays SOLID at
+  // 100% even while a feature/op is highlighted (the highlight draws on top).
+  // Previously it auto-dimmed to 0.4 on any selection, so a selected slot made
+  // the whole workpiece look translucent. Lower the slider to see inside.
+  const effOpacity = opacity;
   const isTransparent = effOpacity < 0.999;
   return (
     <mesh geometry={geometry}>
@@ -627,7 +643,7 @@ export function PartViewer({
       <directionalLight position={[-200, -300, -100]} intensity={0.55} />
       {mesh && (
         <Bounds fit clip observe margin={1.25}>
-          <PartMesh mesh={mesh} dimmed={!!highlight} light={light} opacity={opacity} />
+          <PartMesh mesh={mesh} light={light} opacity={opacity} />
         </Bounds>
       )}
       {mesh && bbox && (
