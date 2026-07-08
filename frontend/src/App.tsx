@@ -4,7 +4,7 @@ import { api, SAMPLE_NAME } from "./api";
 import type {
   AnalyzeResult, StrategyResult, StrategyOp, StrategySetup, Material, OpGeo, Mesh,
   WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts, MaterialOpts, PlanBasis,
-  FeatureGeometry, FeatureCounts,
+  FeatureGeometry, FeatureCounts, Candidate,
 } from "./api";
 import { PartViewer } from "./PartViewer";
 import type { Vec3, Approach } from "./PartViewer";
@@ -390,6 +390,40 @@ function baseFeatureName(name: string): string {
     .replace(/\s*-\s*(?:wall|floor)\s*finish\s*$/i, "")
     .replace(/\s*-\s*(?:rough|finish)\s*bore\s*$/i, "")
     .trim();
+}
+
+// Feature Table rows from the SCOPED plan (gap-v5 A2 + C1). The whole-part
+// billet detector over-segments slots (one long slot shows up 15x); the
+// scoped plan's features come from the exact classifier, which already lists
+// each physical feature once. Group the plan's ops back to their physical
+// feature (rough/finish variants collapse) and tag each with its setup — so
+// the table de-dupes AND the previously-empty Setup column fills in.
+function buildScopedFeatureRows(sp: StrategyResult): Candidate[] {
+  const byName = new Map<string, Candidate>();
+  for (const su of sp.setups) {
+    for (const op of su.ops) {
+      const base = baseFeatureName(op.feature || "");
+      if (!base) continue;
+      const existing = byName.get(base);
+      if (existing) {
+        if (!existing.setup) existing.setup = su.setup_label;
+        continue;
+      }
+      const g = op.geo;
+      byName.set(base, {
+        candidate_id: g?.candidate_id ?? base,
+        feature_type: g?.feature_type || op.operation || "—",
+        feature_name: base,
+        diameter: g?.diameter || undefined,
+        length: g?.length || undefined,
+        width: g?.width || undefined,
+        depth: g?.depth || undefined,
+        confidence: "exact",
+        setup: su.setup_label,
+      });
+    }
+  }
+  return [...byName.values()];
 }
 
 interface MachiningBreakdown {
@@ -1074,6 +1108,19 @@ export default function App() {
     estTolerance, estComplexity, customMaterials, materials, matPriceKg,
     setupCharge, rateHr,
   ]);
+
+  // Feature Table source: under a body scope, use the classifier's
+  // de-duplicated features (with setup labels) instead of the raw whole-part
+  // billet candidates that over-segment slots (gap-v5 A2 + C1).
+  const featureTableRows = useMemo<Candidate[]>(() => {
+    if (
+      selectedGroup && scopedStrategy &&
+      scopedStrategy.scoped_body_index === scopedBodyIndex
+    ) {
+      return buildScopedFeatureRows(scopedStrategy);
+    }
+    return analysis?.candidates ?? [];
+  }, [analysis, selectedGroup, scopedStrategy, scopedBodyIndex]);
 
   // ---- Route rollup: block times/costs + routed grand total ----
   // Computed at top level (not in the Route tab) because the Estimate tab
@@ -1953,7 +2000,7 @@ export default function App() {
                 />
               )}
             </div>
-            {analysis && <BottomPanel candidates={analysis.candidates} />}
+            {analysis && <BottomPanel candidates={featureTableRows} />}
           </div>
 
           {analysis && (
