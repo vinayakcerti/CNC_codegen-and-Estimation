@@ -1112,6 +1112,26 @@ export default function App() {
     return { dir: d, approach: { origin, dir: [-d[0], -d[1], -d[2]] as Vec3 } };
   }, [activeSetup, meshBounds]);
 
+  // Per-op tool-approach cone from the SELECTED op's own geometry — the tool
+  // enters at the feature along its real entry direction, not the setup's
+  // nominal face (a "BACK" setup can hold a Top-opening slot). entry_dir is
+  // the OUTWARD vector (where the tool comes from), so the tool travels into
+  // the part along -entry_dir. Works for the scoped body too (same raw-CAD
+  // frame as its mesh), so a slot reads as cut INTO the part from outside.
+  const opApproach = useMemo((): Approach | null => {
+    const geo = selOpData?.geo;
+    const gg = geo?.geometry;
+    if (!geo || !gg || geo.x == null || geo.y == null || geo.z == null) return null;
+    const ed = gg.entry_dir;
+    if (!ed || ed.length < 3) return null;
+    const n = Math.hypot(ed[0], ed[1], ed[2]);
+    if (n < 1e-6) return null;
+    return {
+      origin: [geo.x, geo.y, geo.z] as Vec3,
+      dir: [-ed[0] / n, -ed[1] / n, -ed[2] / n] as Vec3,
+    };
+  }, [selOpData]);
+
   // Fixture context: the active machined-face normal (tool axis) + the
   // recommended workholding method, so the 3D fixture clamps CLEAR of the
   // face being cut and matches vise-vs-fixture-plate. Sourced from the
@@ -1798,7 +1818,10 @@ export default function App() {
                   // Setup orientation applies to the whole-assembly view only
                   // (the Setups list is a whole-assembly analysis).
                   cameraDir={selectedGroup ? null : setupView.dir}
-                  approach={selectedGroup ? null : setupView.approach}
+                  // Per-op cone (from the op's real entry direction) wins; the
+                  // setup-level cone is the fallback for the whole-assembly
+                  // Setups view when no single op is selected.
+                  approach={opApproach ?? (selectedGroup ? null : setupView.approach)}
                   opacity={viewerOpacity}
                   // Workholding visuals follow the active setup — whole-assembly
                   // view only, same guard as the orientation/cone above.
