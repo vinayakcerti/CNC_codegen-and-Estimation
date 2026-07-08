@@ -21,6 +21,9 @@ export interface Candidate {
   y_pos?: number;
   confidence?: string;
   setup?: string;
+  // Likely metric tap inferred from a hole's pilot Ø ("M6"), "No Thread", or
+  // undefined for non-hole features (gap-v5 C2 Feature-Table Thread column).
+  thread?: string;
   // Exact tessellated face geometry (raw-CAD frame, same as the part mesh).
   // Shape varies by backend version — a list of {vertices,triangles} dicts,
   // a single {x,y,z,i,j,k} mesh, or a list of those — so it stays `unknown`

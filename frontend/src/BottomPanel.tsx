@@ -200,6 +200,7 @@ export function BottomPanel({ candidates }: { candidates: Candidate[] }) {
                     <th>W (mm)</th>
                     <th>Depth (mm)</th>
                     <th>Confidence</th>
+                    <th>Thread</th>
                     <th>Setup</th>
                   </tr>
                 </thead>
@@ -213,6 +214,7 @@ export function BottomPanel({ candidates }: { candidates: Candidate[] }) {
                       <td>{fmt(c.width)}</td>
                       <td>{fmt(c.depth)}</td>
                       <td>{c.confidence || "—"}</td>
+                      <td>{c.thread || "—"}</td>
                       <td>{c.setup || "—"}</td>
                     </tr>
                   ))}

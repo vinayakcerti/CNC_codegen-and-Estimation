@@ -410,6 +410,9 @@ function buildScopedFeatureRows(sp: StrategyResult): Candidate[] {
         continue;
       }
       const g = op.geo;
+      const ft = (g?.feature_type || "").toLowerCase();
+      const threadLikely =
+        g?.geometry && g.geometry.kind === "hole" ? g.geometry.thread_likely : null;
       byName.set(base, {
         candidate_id: g?.candidate_id ?? base,
         feature_type: g?.feature_type || op.operation || "—",
@@ -420,6 +423,7 @@ function buildScopedFeatureRows(sp: StrategyResult): Candidate[] {
         depth: g?.depth || undefined,
         confidence: "exact",
         setup: su.setup_label,
+        thread: threadLikely || (ft.includes("hole") ? "No Thread" : undefined),
       });
     }
   }
