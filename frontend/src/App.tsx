@@ -496,6 +496,131 @@ function buildMachiningBreakdown(
   };
 }
 
+// ---- Effort Estimate (MVP-1): a print-ready internal document for whoever
+// prices the job. Distinct from the customer Quote — it shows the effort
+// DRIVERS (time by feature category, tool changes, setups, cost breakdown),
+// not a customer-facing price sheet. Built entirely client-side from data the
+// app already has and printed via the browser (Save as PDF).
+interface EffortEstimateParams {
+  filename: string;
+  scopeLabel: string;
+  machine: string;
+  materialLine: string;
+  machineMin: number;
+  setupCount: number;
+  toolChanges: number;
+  complexityMult: number;
+  rateHr: number;
+  breakdown: MachiningBreakdown;
+  setups: { label: string; ops: number; min: number }[];
+  cost: {
+    material: number; machining: number; setups: number;
+    subtotal: number; margin: number; marginPct: number; total: number;
+  };
+}
+
+function effortLabel(min: number): string {
+  if (min < 30) return "Low";
+  if (min < 90) return "Medium";
+  return "High";
+}
+
+function effortEstimateHtml(p: EffortEstimateParams): string {
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const date = new Date().toLocaleDateString("en-IN", {
+    year: "numeric", month: "short", day: "numeric",
+  });
+  const catRows = p.breakdown.categories
+    .map((c) => `<tr><td>${esc(c.label)}</td><td class="n">${c.count}</td><td class="n">${fmtDur(c.min)}</td><td class="n">${inr(c.cost)}</td></tr>`)
+    .join("");
+  const overhead = [
+    p.breakdown.rapid.min > 0.001 ? { l: "Positioning &amp; rapids", ...p.breakdown.rapid } : null,
+    p.breakdown.toolChanges.cost > 0 || p.breakdown.toolChanges.min > 0.001
+      ? { l: `Tool changes ×${p.breakdown.toolChanges.count}`, min: p.breakdown.toolChanges.min, cost: p.breakdown.toolChanges.cost } : null,
+    p.breakdown.machineSetup.min > 0.001 ? { l: "Machine setup &amp; load", ...p.breakdown.machineSetup } : null,
+  ].filter(Boolean) as { l: string; min: number; cost: number }[];
+  const ovRows = overhead
+    .map((o) => `<tr><td>${o.l}</td><td class="n">—</td><td class="n">${fmtDur(o.min)}</td><td class="n">${inr(o.cost)}</td></tr>`)
+    .join("");
+  const setupRows = p.setups
+    .map((s) => `<tr><td>${esc(s.label)}</td><td class="n">${s.ops}</td><td class="n">${fmtMin(s.min)}</td></tr>`)
+    .join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Effort Estimate — ${esc(p.filename)}</title>
+<style>
+  :root{--ink:#1c2530;--mut:#5a6470;--line:#d5dae1;--band:#f3f5f8;}
+  *{box-sizing:border-box}
+  body{font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);margin:0;padding:28px 32px;}
+  h1{font-size:20px;margin:0 0 2px}
+  .sub{color:var(--mut);font-size:12px;margin:0 0 16px}
+  .badge{display:inline-block;background:var(--band);border:1px solid var(--line);border-radius:5px;padding:2px 8px;font-size:11px;color:var(--mut);margin-left:6px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:20px 0 6px;border-bottom:1px solid var(--line);padding-bottom:3px}
+  table{width:100%;border-collapse:collapse;margin:0}
+  td,th{padding:5px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:11px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+  td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .summary td:first-child{color:var(--mut);width:42%}
+  .tot td{font-weight:700;border-top:2px solid var(--ink)}
+  .note{margin-top:22px;color:var(--mut);font-size:11px;border-top:1px solid var(--line);padding-top:8px}
+  @media print{body{padding:0}}
+</style></head><body>
+<h1>Effort Estimate</h1>
+<p class="sub">Internal machining-effort sheet for quoting — not a customer quote. &nbsp;${esc(p.filename)} <span class="badge">${esc(p.scopeLabel)}</span> <span class="badge">${date}</span></p>
+
+<h2>Job summary</h2>
+<table class="summary">
+  <tr><td>Material &amp; stock</td><td>${esc(p.materialLine)}</td></tr>
+  <tr><td>Machine</td><td>${esc(p.machine || "—")}</td></tr>
+  <tr><td>Total machine time</td><td>${fmtMin(p.machineMin)}</td></tr>
+  <tr><td>Setups</td><td>${p.setupCount}</td></tr>
+  <tr><td>Tool changes</td><td>${p.toolChanges}</td></tr>
+  <tr><td>Complexity factor</td><td>×${p.complexityMult.toFixed(2)}</td></tr>
+  <tr><td>Effort level</td><td>${effortLabel(p.machineMin)}</td></tr>
+</table>
+
+<h2>Where the machining time goes</h2>
+<table>
+  <thead><tr><th>Category</th><th class="n">Features</th><th class="n">Time</th><th class="n">Cost @ ₹${p.rateHr}/hr</th></tr></thead>
+  <tbody>${catRows}${ovRows}
+    <tr class="tot"><td>Machining</td><td class="n"></td><td class="n">${fmtMin(p.machineMin)}</td><td class="n">${inr(p.cost.machining)}</td></tr>
+  </tbody>
+</table>
+
+<h2>By setup</h2>
+<table>
+  <thead><tr><th>Setup</th><th class="n">Ops</th><th class="n">Cut time</th></tr></thead>
+  <tbody>${setupRows}</tbody>
+</table>
+
+<h2>Cost drivers</h2>
+<table class="summary">
+  <tr><td>Material</td><td>${inr(p.cost.material)}</td></tr>
+  <tr><td>Machining</td><td>${inr(p.cost.machining)}</td></tr>
+  <tr><td>Setup charges</td><td>${inr(p.cost.setups)}</td></tr>
+  <tr><td>Subtotal</td><td>${inr(p.cost.subtotal)}</td></tr>
+  <tr><td>Margin (${p.cost.marginPct}%)</td><td>${inr(p.cost.margin)}</td></tr>
+  <tr class="tot"><td>Indicative total</td><td>${inr(p.cost.total)}</td></tr>
+</table>
+
+<p class="note">Times are analytical estimates (feed × path-length with a material safety factor); verify against shop actuals. Prepared by CNC Plan &amp; Process Pro.</p>
+</body></html>`;
+}
+
+// Open an HTML document in a new window and trigger the print dialog
+// (browser "Save as PDF" gives the downloadable file). Popup-blocked → no-op.
+function openPrintDoc(html: string): void {
+  const w = window.open("", "_blank", "width=900,height=1000");
+  if (!w) {
+    alert("Please allow pop-ups to download the Effort Estimate.");
+    return;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 350);
+}
+
 function loadInspectorWidth(): number {
   const v = Number(lsGet("cnc.inspectorWidth"));
   return Number.isFinite(v) && v >= INSPECTOR_MIN && v <= INSPECTOR_MAX ? v : INSPECTOR_DEFAULT;
@@ -2449,6 +2574,47 @@ export default function App() {
                                 : "Scoped plan loading — showing whole-assembly estimate."}
                             </div>
                           )}
+                          <div style={{ margin: "2px 0 12px" }}>
+                            <button
+                              className="btn"
+                              title="Print-ready internal effort sheet for whoever prices the job — opens a print dialog, Save as PDF"
+                              onClick={() =>
+                                openPrintDoc(
+                                  effortEstimateHtml({
+                                    filename: analysis.filename,
+                                    scopeLabel:
+                                      scoped && selectedGroup
+                                        ? scopeLabel(selectedGroup)
+                                        : "Whole assembly",
+                                    machine: machineSel || strategy.machine || "",
+                                    materialLine,
+                                    machineMin,
+                                    setupCount: ledgerSetups.length,
+                                    toolChanges: totalsForView.num_tool_changes ?? 0,
+                                    complexityMult: machMult,
+                                    rateHr,
+                                    breakdown: machBreakdown,
+                                    setups: ledgerSetups.map((su) => ({
+                                      label: su.setup_label,
+                                      ops: su.ops.length,
+                                      min: su.subtotal_min,
+                                    })),
+                                    cost: {
+                                      material: material_,
+                                      machining,
+                                      setups: setupsCost,
+                                      subtotal,
+                                      margin,
+                                      marginPct,
+                                      total,
+                                    },
+                                  }),
+                                )
+                              }
+                            >
+                              ⭳ Download Effort Estimate
+                            </button>
+                          </div>
                           <div className="section-title">Estimate settings</div>
                           <div className="row">
                             <span className="k">Machining rate (₹/hr)</span>
