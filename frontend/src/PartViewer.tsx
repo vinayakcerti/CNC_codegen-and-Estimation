@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { TrackballControls, Bounds, GizmoHelper, GizmoViewcube, Grid, Html, Line } from "@react-three/drei";
+import { TrackballControls, Bounds, GizmoHelper, GizmoViewcube, Grid, Html, Line, Edges } from "@react-three/drei";
 import * as THREE from "three";
 import type { Mesh } from "./api";
 
@@ -434,11 +434,22 @@ function PartMesh({
         // does not re-sort/re-compile on a `transparent` prop change alone,
         // which left the part looking see-through at 100% opacity.
         key={isTransparent ? "t" : "o"}
-        color={light ? "#a7aeb8" : "#c9ced6"}
-        metalness={0.15}
-        roughness={0.55}
+        color={light ? "#b6bdc8" : "#dbe0e8"}
+        metalness={0.12}
+        roughness={0.48}
         transparent={isTransparent}
         opacity={effOpacity}
+      />
+      {/* Crisp edge lines so corners/edges read against the dark scene —
+          like Toolpath's part view. threshold hides curved-surface
+          tessellation but keeps sharp feature/silhouette edges. Kept
+          visible (faded) when the body is dimmed so the outline still
+          orients you while a feature is highlighted. */}
+      <Edges
+        threshold={20}
+        color={light ? "#5b636e" : "#7c8794"}
+        transparent
+        opacity={isTransparent ? 0.4 : 1}
       />
     </mesh>
   );
@@ -611,9 +622,9 @@ export function PartViewer({
       style={{ width: "100%", height: "100%" }}
     >
       <color attach="background" args={[light ? "#eef0f3" : "#191c20"]} />
-      <ambientLight intensity={0.85} />
-      <directionalLight position={[300, 200, 500]} intensity={1.3} />
-      <directionalLight position={[-200, -300, -100]} intensity={0.4} />
+      <ambientLight intensity={0.98} />
+      <directionalLight position={[300, 200, 500]} intensity={1.55} />
+      <directionalLight position={[-200, -300, -100]} intensity={0.55} />
       {mesh && (
         <Bounds fit clip observe margin={1.25}>
           <PartMesh mesh={mesh} dimmed={!!highlight} light={light} opacity={opacity} />
