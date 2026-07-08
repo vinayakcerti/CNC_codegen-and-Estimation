@@ -463,6 +463,10 @@ body { background: var(--bg-0); color: var(--text-0); }
   background: var(--accent); color: #fff; border-color: var(--accent);
 }
 
+/* ---- Route: per-stage machine selector ---- */
+.rb-machine { margin: 7px 0 4px; }
+.rb-machine .search-select-label { font-size: 10px; }
+
 /* ---- Color-coded setups (Strategy) ---- */
 .setup-group { padding-left: 8px; margin: 2px 0 10px; }
 .setup-swatch {

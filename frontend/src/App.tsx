@@ -670,6 +670,24 @@ export default function App() {
   const [customMachines, setCustomMachines] = useState<CustomMachine[]>(loadCustomMachines);
   const [machineSel, setMachineSel] = useState<string>(() => lsGet("cnc.machine") ?? "");
 
+  // Multi-machine routing (our moat): the operator can assign a distinct
+  // machine to each process stage in the Route tab. Milling stays tied to
+  // machineSel (it drove the plan); turning + custom stages get their own.
+  const [routeMachines, setRouteMachines] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(lsGet("cnc.routeMachines") || "{}") as Record<string, string>;
+    } catch {
+      return {};
+    }
+  });
+  function setRouteMachine(stage: string, name: string) {
+    setRouteMachines((cur) => {
+      const next = { ...cur, [stage]: name };
+      lsSet("cnc.routeMachines", JSON.stringify(next));
+      return next;
+    });
+  }
+
   // Stock config (Overview → Material section). Manual sizes replace the
   // stock volume behind the Estimate material line. Per-part session state.
   const [stockMode, setStockMode] = useState<"auto" | "manual">("auto");
@@ -2415,6 +2433,16 @@ export default function App() {
                                 </div>
                                 <span className="rb-cost">{inr(routeCalc.millingCost)}</span>
                               </div>
+                              <div className="rb-machine">
+                                <MachineSelect
+                                  machines={machines}
+                                  customMachines={customMachines}
+                                  value={machineSel}
+                                  onChange={changeMachine}
+                                  onAddCustom={addCustomMachine}
+                                  disabled={machines.length === 0 && customMachines.length === 0}
+                                />
+                              </div>
                               <div className="rb-line">
                                 <span className="k">Time</span>
                                 <span className="v">{fmtMin(estCore.machineMin)}</span>
@@ -2520,6 +2548,16 @@ export default function App() {
                                     </div>
                                     <span className="rb-cost">{inr(routeCalc.turnCost)}</span>
                                   </div>
+                                  <div className="rb-machine">
+                                    <MachineSelect
+                                      machines={machines}
+                                      customMachines={customMachines}
+                                      value={routeMachines.turning ?? ""}
+                                      onChange={(n) => setRouteMachine("turning", n)}
+                                      onAddCustom={addCustomMachine}
+                                      disabled={machines.length === 0 && customMachines.length === 0}
+                                    />
+                                  </div>
                                   <div className="rb-note">
                                     {routeCalc.autoTurnMin > 0
                                       ? `Planned from detected turning regions (${analysis?.turning?.op_count ?? 0} lathe ops, ${analysis?.turning?.setup ?? "Lathe Chuck"}). Enter a manual time to override.`
@@ -2599,6 +2637,25 @@ export default function App() {
                           )}
 
                           <div className="section-title">Route summary</div>
+                          {(() => {
+                            const used = [
+                              machineSel || strategy.machine,
+                              routeCalc.hasTurning ? routeMachines.turning : null,
+                              ...customRouteSteps.map((c) => c.station),
+                            ].filter((m): m is string => !!m && m.trim().length > 0);
+                            const distinct = [...new Set(used)];
+                            if (distinct.length < 1) return null;
+                            return (
+                              <div className="row" title="Machines assigned across the routed stages">
+                                <span className="k">
+                                  Machines{distinct.length > 1 ? ` (${distinct.length})` : ""}
+                                </span>
+                                <span className="v" style={{ textAlign: "right", maxWidth: 210 }}>
+                                  {distinct.join(" → ")}
+                                </span>
+                              </div>
+                            );
+                          })()}
                           <div className="row">
                             <span className="k">Total route time</span>
                             <span className="v">{fmtMin(routeCalc.totalMin)}</span>
