@@ -1122,7 +1122,13 @@ export default function App() {
     const geo = selOpData?.geo;
     const gg = geo?.geometry;
     if (!geo || !gg || geo.x == null || geo.y == null || geo.z == null) return null;
-    const ed = gg.entry_dir;
+    // Open slots: the tool enters through the OPENING (open_dir); holes and
+    // closed slots enter along entry_dir. Both are OUTWARD vectors, so the
+    // tool travels into the part along the negated direction below.
+    const ed =
+      gg.kind === "slot" && gg.open_dir && gg.open_dir.length >= 3
+        ? gg.open_dir
+        : gg.entry_dir;
     if (!ed || ed.length < 3) return null;
     const n = Math.hypot(ed[0], ed[1], ed[2]);
     if (n < 1e-6) return null;

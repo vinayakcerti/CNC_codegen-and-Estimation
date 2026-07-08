@@ -348,10 +348,17 @@ def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
             },
         })
     for i, s in enumerate(cls.get("slots", []), start=1):
-        # A3 fix: a slot's setup comes from the face its cutter enters
-        # (cap-axis entry side), never a hardcoded label. Open slots keep
-        # their opening direction for accessibility display.
-        entry = s.get("entry_dir") or s.get("axis_dir") or (0, 0, 1)
+        # Gap-v5 A1: a slot's setup is the face its cutter ENTERS through.
+        # For an OPEN slot the tool comes in through the opening, so route by
+        # open_dir — this matches the card's "Opens toward" and splits slots
+        # that open different ways (Left/Top/Bottom/Right) into their own
+        # setups instead of collapsing them onto the shared cap-axis (which
+        # made four differently-opening slots all land in one BACK setup).
+        # A closed slot is cut from its cap-axis entry side.
+        if s.get("open") and s.get("open_dir"):
+            entry = s["open_dir"]
+        else:
+            entry = s.get("entry_dir") or s.get("axis_dir") or (0, 0, 1)
         features.append({
             "feature_type": "Slot",
             "feature_name": (
