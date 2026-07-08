@@ -314,6 +314,8 @@ export interface StrategyOp {
   geo: OpGeo | null;
   // Catalog-style tool name ("6mm Drill 135°") — presentation only
   tool_display?: string;
+  // Set on lathe rows so the Estimate breakdown buckets them as Turning.
+  lathe?: boolean;
 }
 
 export interface StrategySetup {
@@ -329,7 +331,18 @@ export interface StrategyResult {
   success: boolean;
   filename: string;
   setups: StrategySetup[];
-  totals: { total_machine_time_min: number; cutting_time_min: number; num_operations: number };
+  totals: {
+    total_machine_time_min: number;
+    cutting_time_min: number;
+    num_operations: number;
+    // Time-model components (present in the backend payload). The Estimate
+    // tab's machining breakdown uses them to reconcile category cutting +
+    // positioning + tool-changes + machine-setup back to the machining total.
+    rapid_time_min?: number;
+    tool_change_time_min?: number;
+    setup_time_min?: number;
+    num_tool_changes?: number;
+  };
   material?: string;
   machine?: string | null;
   // Planning basis the backend used ("grouped" | "raw") and how many

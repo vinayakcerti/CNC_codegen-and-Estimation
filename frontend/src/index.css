@@ -422,6 +422,12 @@ body { background: var(--bg-0); color: var(--text-0); }
 .ledger-row.root .desc { color: var(--text-0); font-weight: 600; }
 .ledger-row.child { padding-left: 26px; }
 .ledger-row.child .desc { font-size: 12px; }
+/* Machining breakdown rows (feature categories, positioning, tool changes,
+   machine setup) nested one level under the Machining sub-header. */
+.ledger-row.grandchild { padding-left: 42px; padding-top: 3px; padding-bottom: 3px; }
+.ledger-row.grandchild .desc { font-size: 11.5px; color: var(--text-1); }
+.ledger-row.grandchild .amt { font-size: 11.5px; color: var(--text-1); font-weight: 400; }
+.ledger-row.grandchild .desc .mut { color: var(--text-2); font-variant-numeric: tabular-nums; }
 .ledger-row.subtotal { border-top: 1px solid var(--border-strong); }
 .ledger-row.subtotal .desc, .ledger-row.subtotal .amt { font-weight: 500; }
 .ledger-row.grand { background: var(--bg-2); border-top: 1px solid var(--border-strong); }

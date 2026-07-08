@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import { api, SAMPLE_NAME } from "./api";
 import type {
-  AnalyzeResult, StrategyResult, StrategyOp, Material, OpGeo, Mesh,
+  AnalyzeResult, StrategyResult, StrategyOp, StrategySetup, Material, OpGeo, Mesh,
   WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts, MaterialOpts, PlanBasis,
   FeatureGeometry, FeatureCounts,
 } from "./api";
@@ -187,6 +187,14 @@ const fmtMin = (min: number) => {
   const m = Math.round(min);
   return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min`;
 };
+// Finer duration for the machining breakdown rows: minutes+seconds under an
+// hour, bare seconds under a minute — so sub-minute cutting never reads "0 min".
+const fmtDur = (min: number) => {
+  if (min >= 60) { const m = Math.round(min); return `${Math.floor(m / 60)}h ${m % 60}m`; }
+  const s = Math.round(min * 60);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+};
 
 // ---- Exact-face highlight (Feature A) ----
 // A candidate's face_mesh_data has shipped in three shapes across backend
@@ -346,6 +354,108 @@ function buildRollups(setupLabel: string, ops: StrategyOp[]): OpRollup[] {
     }
   }
   return out;
+}
+
+// ---- Machining cost breakdown by feature category (Estimate tab) ----
+// Toolpath shows where the machining minutes go per feature category plus a
+// tool-change line; we adopt the same view. The category cutting rows +
+// positioning + tool-changes + machine-setup are the four components of
+// total_machine_time_min, so they reconcile exactly to the machining cost.
+const CATEGORY_ORDER = [
+  "facing", "holes", "slots", "pockets", "profile", "edges", "turning", "other",
+] as const;
+type CategoryKey = (typeof CATEGORY_ORDER)[number];
+
+function opCategory(op: StrategyOp): { key: CategoryKey; label: string } {
+  if (op.lathe) return { key: "turning", label: "Turning" };
+  const s = `${op.feature || ""} ${op.operation || ""}`.toLowerCase();
+  if (/\b(?:od|id)\s*turn|turning|groove|face\s*turn/.test(s)) return { key: "turning", label: "Turning" };
+  // Edges before facing: a chamfer/edge-break op on a faced surface carries
+  // "face" in its text but belongs in Chamfer & edges, not Facing.
+  if (/chamfer|deburr|fillet|edge/.test(s)) return { key: "edges", label: "Chamfer & edges" };
+  if (/face|facing/.test(s)) return { key: "facing", label: "Facing" };
+  if (/hole|drill|ream|bore|spot|tap|c'?bore|counterbore|countersink|c'?sink/.test(s))
+    return { key: "holes", label: "Holes & drilling" };
+  if (/slot/.test(s)) return { key: "slots", label: "Slots" };
+  if (/pocket/.test(s)) return { key: "pockets", label: "Pockets" };
+  if (/contour|profile|perimeter|outline|\bstep\b/.test(s)) return { key: "profile", label: "Profile & contour" };
+  return { key: "other", label: "Other milling" };
+}
+
+// Strip rough/finish variant suffixes so a feature machined over several
+// passes counts once (mirrors the backend's _base_feature).
+function baseFeatureName(name: string): string {
+  return (name || "")
+    .replace(/\s*\((?:Rough|Finish)\)\s*$/i, "")
+    .replace(/\s*-\s*(?:wall|floor)\s*finish\s*$/i, "")
+    .replace(/\s*-\s*(?:rough|finish)\s*bore\s*$/i, "")
+    .trim();
+}
+
+interface MachiningBreakdown {
+  categories: { key: CategoryKey; label: string; count: number; min: number; cost: number }[];
+  rapid: { min: number; cost: number };
+  toolChanges: { count: number; min: number; cost: number };
+  machineSetup: { min: number; cost: number };
+}
+
+function buildMachiningBreakdown(
+  setups: StrategySetup[],
+  totals: StrategyResult["totals"],
+  rateHr: number,
+  machMult: number,
+): MachiningBreakdown {
+  const machineMin = totals.total_machine_time_min ?? 0;
+  const rapidMin = totals.rapid_time_min ?? 0;
+  const tcMin = totals.tool_change_time_min ?? 0;
+  const setupMin = totals.setup_time_min ?? 0;
+  const tcCount = totals.num_tool_changes ?? 0;
+
+  const cat = new Map<CategoryKey, { label: string; minRaw: number; feats: Set<string> }>();
+  for (const su of setups) {
+    for (const op of su.ops) {
+      const c = opCategory(op);
+      let e = cat.get(c.key);
+      if (!e) { e = { label: c.label, minRaw: 0, feats: new Set() }; cat.set(c.key, e); }
+      e.minRaw += op.cut_min || 0;
+      e.feats.add(baseFeatureName(op.feature));
+    }
+  }
+
+  // The authoritative cutting total is (machine − rapid − tc − setup). Per-op
+  // cut_min sums to ≈ that (differs only by per-op rounding); scale the
+  // category cutting so the category minutes sum to it exactly.
+  const sumCatRaw = [...cat.values()].reduce((a, e) => a + e.minRaw, 0);
+  const cutMinAuth = Math.max(machineMin - rapidMin - tcMin - setupMin, 0);
+  const scale = sumCatRaw > 0 ? cutMinAuth / sumCatRaw : 0;
+  const costF = (min: number) => (min / 60) * rateHr * machMult;
+
+  const catList = [...cat.entries()]
+    .map(([key, e]) => ({ key, label: e.label, count: e.feats.size, min: e.minRaw * scale }))
+    .filter((c) => c.min > 0.001 || c.count > 0)
+    .sort((a, b) => CATEGORY_ORDER.indexOf(a.key) - CATEGORY_ORDER.indexOf(b.key));
+
+  // Round every rupee cost with the largest-remainder method so the displayed
+  // rows sum EXACTLY to the rounded machining total — no ±₹1 drift. Σ of the
+  // row minutes is machineMin, so Σ floatCosts == machining and the header
+  // (inr(machining)) equals `target`.
+  const rowMins = [...catList.map((c) => c.min), rapidMin, tcMin, setupMin];
+  const target = Math.round(costF(machineMin));
+  const floatCosts = rowMins.map(costF);
+  const intCosts = floatCosts.map(Math.floor);
+  let residual = target - intCosts.reduce((a, b) => a + b, 0);
+  const byFrac = floatCosts
+    .map((c, idx) => ({ idx, frac: c - Math.floor(c) }))
+    .sort((a, b) => b.frac - a.frac);
+  for (let k = 0; k < byFrac.length && residual > 0; k++, residual--) intCosts[byFrac[k].idx]++;
+
+  const nCat = catList.length;
+  return {
+    categories: catList.map((c, i) => ({ ...c, cost: intCosts[i] })),
+    rapid: { min: rapidMin, cost: intCosts[nCat] },
+    toolChanges: { count: tcCount, min: tcMin, cost: intCosts[nCat + 1] },
+    machineSetup: { min: setupMin, cost: intCosts[nCat + 2] },
+  };
 }
 
 function loadInspectorWidth(): number {
@@ -2175,6 +2285,13 @@ export default function App() {
                       // totals — scoped plan under a body scope.
                       const ledgerSetups =
                         scoped && scopedStrategy ? scopedStrategy.setups : strategy.setups;
+                      const totalsForView =
+                        scoped && scopedStrategy ? scopedStrategy.totals : strategy.totals;
+                      // Toolpath-style: where the machining minutes go, by feature
+                      // category + a tool-change line. Reconciles to `machining`.
+                      const machBreakdown = buildMachiningBreakdown(
+                        ledgerSetups, totalsForView, rateHr, machMult,
+                      );
                       const partTotal = material_ + machining; // block 1: material + machining
                       const subtotal = partTotal + setupsCost;
                       const margin = subtotal * (marginPct / 100);
@@ -2332,16 +2449,61 @@ export default function App() {
                               <span className="desc" title={materialLine}>{materialLine}</span>
                               <span className="amt">{inr(material_)}</span>
                             </div>
-                            {ledgerSetups.map((su) => {
+                            {(() => {
+                              // Machining sub-header + Toolpath-style breakdown by
+                              // feature category, then Positioning / Tool changes /
+                              // Machine setup — the four components of machineMin, so
+                              // these rows sum exactly to the machining cost above.
                               const multTag = machMult !== 1 ? ` × ${machMult.toFixed(2)}` : "";
-                              const line = `Setup · ${su.setup_label} — ${fmtMin(su.subtotal_min)} — ₹${rateHr}/hr${multTag}`;
+                              const bd = machBreakdown;
                               return (
-                                <div className="ledger-row child" key={su.setup_label}>
-                                  <span className="desc" title={line}>{line}</span>
-                                  <span className="amt">{inr((su.subtotal_min / 60) * rateHr * machMult)}</span>
-                                </div>
+                                <>
+                                  <div className="ledger-row child">
+                                    <span
+                                      className="desc"
+                                      title={`Machining — ${fmtMin(machineMin)} @ ₹${rateHr}/hr${multTag}. Broken down by feature category below; positioning, tool changes and machine setup are the remaining time components.`}
+                                    >
+                                      Machining — {fmtMin(machineMin)} @ ₹{rateHr}/hr{multTag}
+                                    </span>
+                                    <span className="amt">{inr(machining)}</span>
+                                  </div>
+                                  {bd.categories.map((c) => (
+                                    <div className="ledger-row grandchild" key={c.key}>
+                                      <span className="desc">
+                                        {c.label} <span className="mut">×{c.count}</span> — {fmtDur(c.min)}
+                                      </span>
+                                      <span className="amt">{inr(c.cost)}</span>
+                                    </div>
+                                  ))}
+                                  {/* Overhead rows are gated on cost/min, never on
+                                      count — so a row that carries an allocated
+                                      rupee is never hidden and the visible rows
+                                      always sum to the Machining header. */}
+                                  {(bd.rapid.cost > 0 || bd.rapid.min > 0.001) && (
+                                    <div className="ledger-row grandchild">
+                                      <span className="desc">Positioning &amp; rapids — {fmtDur(bd.rapid.min)}</span>
+                                      <span className="amt">{inr(bd.rapid.cost)}</span>
+                                    </div>
+                                  )}
+                                  {(bd.toolChanges.cost > 0 || bd.toolChanges.min > 0.001) && (
+                                    <div className="ledger-row grandchild">
+                                      <span className="desc">
+                                        Tool changes{bd.toolChanges.count > 0 && (
+                                          <span className="mut"> ×{bd.toolChanges.count}</span>
+                                        )} — {fmtDur(bd.toolChanges.min)}
+                                      </span>
+                                      <span className="amt">{inr(bd.toolChanges.cost)}</span>
+                                    </div>
+                                  )}
+                                  {(bd.machineSetup.cost > 0 || bd.machineSetup.min > 0.001) && (
+                                    <div className="ledger-row grandchild">
+                                      <span className="desc">Machine setup &amp; load — {fmtDur(bd.machineSetup.min)}</span>
+                                      <span className="amt">{inr(bd.machineSetup.cost)}</span>
+                                    </div>
+                                  )}
+                                </>
                               );
-                            })}
+                            })()}
 
                             {/* Block 2 — per-setup fixed charges */}
                             <div className="ledger-row root">
