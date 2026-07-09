@@ -748,6 +748,17 @@ function GeometrySection({ g }: { g: FeatureGeometry }) {
               <span className="v">{fmtNum(g.tip_angle_deg)}°</span>
             </div>
           )}
+          {g.cone_deviation && (
+            <div
+              className="op-panel-row"
+              title="Shallow blind hole — a full 118° drill point would go deeper than the feature; tip auto-upgraded to a near-flat 140°."
+            >
+              <span className="k">Hole Cone Deviation</span>
+              <span className="v">
+                {g.cone_deviation.original_deg}° → {g.cone_deviation.modified_deg}°
+              </span>
+            </div>
+          )}
           {g.thread_likely && (
             <div className="op-panel-row" title="Inferred from the pilot diameter (tap-drill table) — not thread data from the CAD file">
               <span className="k">Thread</span>

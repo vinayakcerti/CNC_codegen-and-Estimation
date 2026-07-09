@@ -342,6 +342,19 @@ def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
                 "countersink": h.get("countersink"),
                 "axis_dir": list(h.get("dir") or ()) or None,
                 "entry_dir": list(h.get("entry_dir") or ()) or None,
+                # Gap-v5 B4 "Hole Cone Deviation": a shallow blind hole (L/D<0.3)
+                # can't take a full 118° drill point — the cone would be deeper
+                # than the feature. Flag the auto-upgrade to a 140° (near-flat)
+                # tip so the drill card shows "118° -> 140°".
+                "cone_deviation": (
+                    {"original_deg": 118, "modified_deg": 140}
+                    if (
+                        h.get("through") is False
+                        and (h.get("ld_ratio") or 1.0) > 0
+                        and (h.get("ld_ratio") or 1.0) < 0.3
+                    )
+                    else None
+                ),
                 "thread_likely": _thread_likely(
                     h["diameter_mm"], h.get("cbore_diameter_mm")
                 ),

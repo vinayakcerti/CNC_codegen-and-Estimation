@@ -226,6 +226,9 @@ export interface HoleGeometry {
   // Likely metric tap inferred from the pilot diameter (e.g. "M5");
   // an inference, not detected thread data.
   thread_likely?: string | null;
+  // Gap-v5 B4: shallow blind hole whose drill tip is auto-upgraded from the
+  // standard 118° to a near-flat 140° so the point doesn't exceed the depth.
+  cone_deviation?: { original_deg: number; modified_deg: number } | null;
 }
 
 export interface SlotGeometry {
