@@ -622,6 +622,79 @@ function openPrintDoc(html: string): void {
   setTimeout(() => w.print(), 350);
 }
 
+// Download a text file (G-code, CSV, …) from the browser.
+function downloadText(filename: string, text: string): void {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---- DRAFT G-code (good-to-have) ---------------------------------------------
+// A STARTING-POINT program, not machine-ready: real drilling canned cycles and
+// positions from the plan, with milling toolpaths deliberately left to CAM. The
+// header makes the "verify before running" contract explicit — feeding
+// unverified milling code to a machine is a crash/liability risk.
+function draftGcode(setups: StrategySetup[], machineName: string, partName: string): string {
+  const L: string[] = [];
+  const n = (v: number | null | undefined) =>
+    Number.isFinite(v as number) ? (v as number).toFixed(3) : "0.000";
+  L.push("; ============================================================");
+  L.push("; DRAFT PROGRAM - DO NOT RUN DIRECTLY ON A MACHINE.");
+  L.push("; Planning / starting-point code only. Work offset (G54), tool");
+  L.push("; numbers/offsets, Z zero, speeds and feeds MUST be set and");
+  L.push("; verified in a CAM simulator by a qualified programmer first.");
+  L.push("; Milling toolpaths are NOT generated - only hole positions and");
+  L.push("; drilling cycles. Generate milling paths in your CAM system.");
+  L.push("; ============================================================");
+  L.push(`; Part    : ${partName}`);
+  L.push(`; Machine : ${machineName || "CNC Machine"}`);
+  L.push("; Program : CNC Plan & Process Pro (draft)");
+  L.push("O0001");
+  L.push("G21 G17 G90 G94 G54 G49 G80 G40 (metric, absolute, cancel cycles/comp)");
+  L.push("G0 Z50.0");
+  let curTool = "";
+  let toolNo = 0;
+  for (const su of setups) {
+    L.push(`(======== SETUP: ${su.setup_label} ========)`);
+    for (const op of su.ops) {
+      const tool = op.tool_display || op.tool || "Tool";
+      if (tool !== curTool) {
+        curTool = tool;
+        toolNo += 1;
+        L.push("M5");
+        L.push(`T${toolNo} M6 (${tool})`);
+        L.push(`S${Math.round(op.spindle_rpm || 0)} M3`);
+      }
+      const g = op.geo;
+      const opl = (op.operation || "").toLowerCase();
+      const feed = Math.round(op.feed_mm_min || 200);
+      if (g && g.x != null && g.y != null && /drill|spot|ream|bore|tap/.test(opl)) {
+        const depth = Math.max(g.depth || 5, 1);
+        const spot = /spot/.test(opl);
+        const cyc = spot ? "G81" : "G83";
+        const peck = spot ? "" : ` Q${n(Math.max(depth / 4, 1))}`;
+        L.push(`G0 X${n(g.x)} Y${n(g.y)}`);
+        L.push(`${cyc} Z${n(-depth)} R2.0${peck} F${feed} (${op.feature || op.operation})`);
+        L.push("G80");
+      } else {
+        if (g && g.x != null && g.y != null) L.push(`G0 X${n(g.x)} Y${n(g.y)}`);
+        L.push(`(MILL: ${op.operation} - ${op.feature || ""} | make toolpath in CAM, feed ~${feed})`);
+      }
+    }
+  }
+  L.push("G0 Z50.0");
+  L.push("M5");
+  L.push("M30");
+  L.push("%");
+  return L.join("\n");
+}
+
 function loadInspectorWidth(): number {
   const v = Number(lsGet("cnc.inspectorWidth"));
   return Number.isFinite(v) && v >= INSPECTOR_MIN && v <= INSPECTOR_MAX ? v : INSPECTOR_DEFAULT;
@@ -2624,6 +2697,23 @@ export default function App() {
                               }
                             >
                               ⭳ Download Effort Estimate
+                            </button>
+                            <button
+                              className="btn"
+                              style={{ marginLeft: 8 }}
+                              title="Draft starting-point program — real drilling cycles + hole positions; milling left to CAM. Verify in a simulator before running."
+                              onClick={() =>
+                                downloadText(
+                                  `${analysis.filename.replace(/\.[^.]+$/, "")}_draft.nc`,
+                                  draftGcode(
+                                    ledgerSetups,
+                                    machineSel || strategy.machine || "",
+                                    analysis.filename,
+                                  ),
+                                )
+                              }
+                            >
+                              ⭳ Draft G-code
                             </button>
                           </div>
                           <div className="section-title">Estimate settings</div>

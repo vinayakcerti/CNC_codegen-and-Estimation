@@ -51,6 +51,13 @@ const BASE_TAXES: TaxPreset[] = [
   { name: "VAT 5%", rate: 5 },
   { name: "VAT 15%", rate: 15 },
 ];
+const TEMPLATES: { id: string; name: string; accent: string }[] = [
+  { id: "blue", name: "Professional Blue", accent: "#2f6fb0" },
+  { id: "slate", name: "Classic Slate", accent: "#334155" },
+  { id: "teal", name: "Modern Teal", accent: "#0f766e" },
+  { id: "maroon", name: "Elegant Maroon", accent: "#7a2e3a" },
+  { id: "green", name: "Fresh Green", accent: "#2f7a44" },
+];
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -81,7 +88,7 @@ function openPrintDoc(html: string) {
 function quoteHtml(o: {
   company: Company; customer: Party; quoteNo: string; date: string;
   part: string; qty: number; unit: number; sym: string;
-  tax: TaxPreset; notes: string;
+  tax: TaxPreset; notes: string; accent: string;
 }): string {
   const esc = (s: string) =>
     (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -96,7 +103,7 @@ function quoteHtml(o: {
     o.customer.email, o.customer.phone].filter(Boolean).map(esc).join("<br>");
   return `<!doctype html><html><head><meta charset="utf-8"><title>Quotation ${esc(o.quoteNo)}</title>
 <style>
-  :root{--ink:#1c2530;--mut:#5a6470;--line:#d5dae1;--band:#f5f7fa;--accent:#2f6fb0;}
+  :root{--ink:#1c2530;--mut:#5a6470;--line:#d5dae1;--band:#f5f7fa;--accent:${o.accent};}
   *{box-sizing:border-box}
   body{font:13px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);margin:0;padding:32px 36px}
   .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--accent);padding-bottom:14px}
@@ -166,6 +173,7 @@ export function QuoteModal({
   const [notes, setNotes] = useState<string>(() =>
     lsGet("cnc.quote.notes") ||
     "Prices valid 30 days. 50% advance, balance before dispatch. Delivery: 2–3 weeks ex-works.");
+  const [templateId, setTemplateId] = useState<string>(() => lsGet("cnc.quote.template") || "blue");
 
   // Add-custom UI state
   const [newTaxName, setNewTaxName] = useState("");
@@ -227,11 +235,13 @@ export function QuoteModal({
     lsSet("cnc.quote.prefix", prefix);
     lsSet("cnc.quote.curCode", curCode);
     lsSet("cnc.quote.taxName", taxName);
+    lsSet("cnc.quote.template", templateId);
+    const accent = (TEMPLATES.find((t) => t.id === templateId) || TEMPLATES[0]).accent;
     openPrintDoc(quoteHtml({
       company, customer, quoteNo,
       date: new Date().toLocaleDateString("en-GB", { year: "numeric", month: "short", day: "numeric" }),
       part: quote.partName, qty: quote.qty, unit: quote.unitAmount,
-      sym: cur.symbol, tax, notes,
+      sym: cur.symbol, tax, notes, accent,
     }));
     const nextSeq = seq + 1;
     setSeq(nextSeq); lsSet("cnc.quote.seq", String(nextSeq)); // auto-number next
@@ -283,6 +293,12 @@ export function QuoteModal({
           </div>
 
           <div className="qm-col">
+            <div className="qm-sect">Template</div>
+            <select className="qm-in" value={templateId}
+              onChange={(e) => { setTemplateId(e.target.value); lsSet("cnc.quote.template", e.target.value); }}>
+              {TEMPLATES.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+
             <div className="qm-sect">Quote number</div>
             <div className="qm-row2">
               <input className="qm-in" placeholder="Prefix" value={prefix}
