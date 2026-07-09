@@ -3147,8 +3147,14 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
         # build_step_mesh3d() can render exact colored surfaces instead of
         # approximate marker shapes.  Failures per-face are silenced; the
         # candidate falls back to its marker representation.
+        # Every candidate type that carries real machined faces must be here,
+        # or its face_indices are never tessellated and the 3D highlight falls
+        # back to an approximate box. "Step" was missing despite emitting valid
+        # floor+wall+outer face indices, so step-shoulder markers floated off
+        # the part (out of sync). Keep this in step with the feature detectors.
         _FACE_COLOR_TYPES = {
-            "Face milling", "Hole", "Large hole / boring", "Pocket", "Chamfer", "Slot",
+            "Face milling", "Hole", "Large hole / boring", "Pocket", "Chamfer",
+            "Slot", "Step",
         }
         try:
             _faces_list = cq_result.faces().vals()
