@@ -12,6 +12,7 @@ import { MaterialSelect } from "./MaterialSelect";
 import { MachineSelect } from "./MachineSelect";
 import type { CustomMachine } from "./MachineSelect";
 import { BottomPanel } from "./BottomPanel";
+import { QuoteModal } from "./QuoteModal";
 import { lsGet, lsSet } from "./storage";
 
 type Tab = "overview" | "strategy" | "estimate" | "route";
@@ -1391,6 +1392,7 @@ export default function App() {
 
   // ---- Thread status per hole diameter (session-only UI state) ----
   const [threadByDia, setThreadByDia] = useState<Record<string, string>>({});
+  const [quoteOpen, setQuoteOpen] = useState(false);
 
   async function fetchWeldment(file: File) {
     setWmLoading(true);
@@ -1954,7 +1956,16 @@ export default function App() {
             <button className="btn" onClick={() => fileRef.current?.click()}>
               Upload STEP
             </button>
-            {analysis && <button className="btn primary">Prepare Quote</button>}
+            {analysis && (
+              <button className="btn primary" onClick={() => setQuoteOpen(true)}>Prepare Quote</button>
+            )}
+            {analysis && (
+              <QuoteModal
+                open={quoteOpen}
+                onClose={() => setQuoteOpen(false)}
+                quote={{ partName: analysis.filename, qty: 1, unitAmount: routeCalc?.total ?? 0 }}
+              />
+            )}
           </div>
           <input
             ref={fileRef}
