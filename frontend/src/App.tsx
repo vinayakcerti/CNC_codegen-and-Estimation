@@ -1405,38 +1405,46 @@ export default function App() {
   // plan currently on screen (scoped body or whole assembly).
   const pickFeatures = useMemo(() => {
     const sp = selectedGroup && scopedStrategy ? scopedStrategy : strategy;
-    const out: { id: string; opId: string; hl: Highlight; faces: Mesh[] }[] = [];
-    if (!sp) return out;
-    const seen = new Set<string>();
+    type PF = { id: string; opId: string; hl: Highlight; faces: Mesh[] };
+    if (!sp) return [] as PF[];
+    const byId = new Map<string, PF>();
+    const order: string[] = [];
     for (const su of sp.setups)
       for (const op of su.ops) {
         const g = op.geo;
         if (!g || g.x == null || g.y == null || g.z == null) continue;
         const id = opFeatureKey(op);
-        if (seen.has(id)) continue;
-        seen.add(id);
-        // Exact tessellated faces (same source as the blue selection highlight)
-        // so an excluded feature can be filled on its REAL shape, not a box.
-        let faces = normalizeFaceMeshes(g.face_mesh_data);
-        if (!faces.length && g.candidate_id && analysis) {
-          const cand = analysis.candidates.find((c) => c.candidate_id === g.candidate_id);
-          if (cand) faces = normalizeFaceMeshes(cand.face_mesh_data);
+        let entry = byId.get(id);
+        if (!entry) {
+          entry = {
+            id,
+            opId: `${su.setup_label}-${op.op_num}`,
+            hl: {
+              x: g.x, y: g.y, z: g.z,
+              diameter: g.diameter ?? 0,
+              length: g.length ?? 0,
+              width: g.width ?? 0,
+              depth: g.depth ?? 0,
+              feature_type: g.feature_type || op.operation || "",
+            },
+            faces: [],
+          };
+          byId.set(id, entry);
+          order.push(id);
         }
-        out.push({
-          id,
-          opId: `${su.setup_label}-${op.op_num}`,
-          hl: {
-            x: g.x, y: g.y, z: g.z,
-            diameter: g.diameter ?? 0,
-            length: g.length ?? 0,
-            width: g.width ?? 0,
-            depth: g.depth ?? 0,
-            feature_type: g.feature_type || op.operation || "",
-          },
-          faces,
-        });
+        // A feature spans several ops (rough/finish); grab the exact faces from
+        // whichever op carries them so the excluded fill sits on the REAL shape,
+        // not an axis-aligned box.
+        if (!entry.faces.length) {
+          let faces = normalizeFaceMeshes(g.face_mesh_data);
+          if (!faces.length && g.candidate_id && analysis) {
+            const cand = analysis.candidates.find((c) => c.candidate_id === g.candidate_id);
+            if (cand) faces = normalizeFaceMeshes(cand.face_mesh_data);
+          }
+          if (faces.length) entry.faces = faces;
+        }
       }
-    return out;
+    return order.map((id) => byId.get(id)!);
   }, [selectedGroup, scopedStrategy, strategy, analysis]);
 
   // ---- Route rollup: block times/costs + routed grand total ----
@@ -2297,6 +2305,7 @@ export default function App() {
                     setSelOp(pf.opId);
                     setHighlight(pf.hl);
                   }}
+                  selectedId={selOpData ? opFeatureKey(selOpData) : null}
                   layers={layers}
                   stockAllowance={analysis.stock?.allowance_mm ?? 5}
                 />

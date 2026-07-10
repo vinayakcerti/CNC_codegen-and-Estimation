@@ -614,6 +614,7 @@ export function PartViewer({
   excludedSet = null,
   onToggleExcluded = null,
   onSelectFeature = null,
+  selectedId = null,
   layers,
   stockAllowance = 5,
 }: {
@@ -643,6 +644,9 @@ export function PartViewer({
   excludedSet?: Set<string> | null;
   onToggleExcluded?: ((id: string) => void) | null;
   onSelectFeature?: ((id: string) => void) | null;
+  // Exclusion key of the currently selected feature, so its own highlight can
+  // go red when excluded (instead of stacking a second red marker on it).
+  selectedId?: string | null;
   // Toggleable scene layers (operator-controlled render settings)
   layers?: { grid: boolean; dims: boolean; stock: boolean; fixture: boolean; select?: boolean };
   // Per-side stock allowance (mm) for the translucent stock envelope
@@ -746,6 +750,10 @@ export function PartViewer({
         }
       : null;
 
+  // The selected feature's highlight is red when it's excluded, blue otherwise
+  // — so right-clicking a selected feature just recolours it, no second marker.
+  const selColor = selectedId && excludedSet?.has(selectedId) ? "#ff8f8f" : "#4a9eff";
+
   return (
     <Canvas
       camera={{ position: [420, -520, 380], up: UP, fov: 45, near: 1, far: 20000 }}
@@ -786,26 +794,31 @@ export function PartViewer({
           />
         )}
         {/* Exact faces win; the marker is the fallback for ops without them. */}
-        {mesh && faceMeshes && faceMeshes.length > 0 && <FaceMeshOverlay meshes={faceMeshes} />}
+        {mesh && faceMeshes && faceMeshes.length > 0 && <FaceMeshOverlay meshes={faceMeshes} color={selColor} />}
         {mesh && highlight && !(faceMeshes && faceMeshes.length > 0) && (
-          <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} />
+          <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} color={selColor} />
         )}
         {mesh && approach && <ApproachCone approach={approach} partSize={partSize} />}
-        {/* WS-B: excluded features stay coloured red on the part (same marker
-            style as the blue selection highlight) so what's skipped reads at a
-            glance. Right-click a feature on the part toggles it. */}
+        {/* WS-B: excluded features fill their REAL shape in solid pastel red —
+            exact faces when we have them (aligned), else a solid slab. The
+            SELECTED feature is skipped here; its own highlight goes red via
+            selColor so we never stack two markers on it. */}
         {pickFeatures &&
           pickFeatures
-            .filter((pf) => excludedSet?.has(pf.id))
-            .map((pf) => (
-              <HighlightMarker
-                key={pf.id}
-                hl={pf.hl}
-                meshTopZ={meshTopZ}
-                partSize={partSize}
-                color="#ff8f8f"
-              />
-            ))}
+            .filter((pf) => excludedSet?.has(pf.id) && pf.id !== selectedId)
+            .map((pf) =>
+              pf.faces.length > 0 ? (
+                <FaceMeshOverlay key={pf.id} meshes={pf.faces} color="#ff8f8f" />
+              ) : (
+                <HighlightMarker
+                  key={pf.id}
+                  hl={pf.hl}
+                  meshTopZ={meshTopZ}
+                  partSize={partSize}
+                  color="#ff8f8f"
+                />
+              ),
+            )}
       </group>
       <CameraRig dir={camDir} center={camCenter} dist={Math.max(partSize * 1.8, 50)} />
       {/* Free arcball rotation (like Toolpath): no up-axis pole, so the part
