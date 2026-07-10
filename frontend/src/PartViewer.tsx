@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { TrackballControls, Bounds, GizmoHelper, GizmoViewcube, Grid, Html, Line, Edges } from "@react-three/drei";
 import * as THREE from "three";
@@ -435,12 +435,37 @@ function PartMesh({
   mesh,
   light,
   opacity,
+  pick,
 }: {
   mesh: Mesh;
   light: boolean;
   opacity: number;
+  // WS-B: click the part to select the nearest feature / right-click to
+  // exclude it. Picking runs in the mesh's own CAD frame so it works through
+  // the per-setup rotation.
+  pick?: {
+    features: { id: string; x: number; y: number; z: number }[];
+    onSelect: (id: string) => void;
+    onExclude: (id: string) => void;
+    partSize: number;
+  } | null;
 }) {
   const geometry = useMemo(() => buildGeometry(mesh), [mesh]);
+  const ref = useRef<THREE.Mesh>(null);
+
+  function nearest(point: THREE.Vector3): string | null {
+    if (!pick || !ref.current) return null;
+    const lp = ref.current.worldToLocal(point.clone());
+    let bestId: string | null = null;
+    let bestD = Infinity;
+    for (const f of pick.features) {
+      const dx = lp.x - f.x, dy = lp.y - f.y, dz = lp.z - f.z;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < bestD) { bestD = d; bestId = f.id; }
+    }
+    const thr = Math.max(pick.partSize * 0.05, 14);
+    return bestId && bestD <= thr * thr ? bestId : null;
+  }
 
   // The opacity slider is the single source of truth: the part stays SOLID at
   // 100% even while a feature/op is highlighted (the highlight draws on top).
@@ -449,7 +474,26 @@ function PartMesh({
   const effOpacity = opacity;
   const isTransparent = effOpacity < 0.999;
   return (
-    <mesh geometry={geometry}>
+    <mesh
+      ref={ref}
+      geometry={geometry}
+      onClick={
+        pick
+          ? (e) => {
+              const id = nearest(e.point);
+              if (id) { e.stopPropagation(); pick.onSelect(id); }
+            }
+          : undefined
+      }
+      onContextMenu={
+        pick
+          ? (e) => {
+              const id = nearest(e.point);
+              if (id) { e.stopPropagation(); e.nativeEvent.preventDefault(); pick.onExclude(id); }
+            }
+          : undefined
+      }
+    >
       <meshStandardMaterial
         // key remounts the material when transparency mode flips — three.js
         // does not re-sort/re-compile on a `transparent` prop change alone,
@@ -476,7 +520,7 @@ function PartMesh({
   );
 }
 
-function HighlightMarker({ hl, meshTopZ, partSize }: { hl: Highlight; meshTopZ: number; partSize: number }) {
+function HighlightMarker({ hl, meshTopZ, partSize, color = "#4a9eff" }: { hl: Highlight; meshTopZ: number; partSize: number; color?: string }) {
   const num = (v: number | null | undefined, fallback: number) =>
     Number.isFinite(v as number) ? (v as number) : fallback;
   const x = num(hl.x, 0);
@@ -493,25 +537,15 @@ function HighlightMarker({ hl, meshTopZ, partSize }: { hl: Highlight; meshTopZ: 
   return (
     <group position={[x, y, z]} renderOrder={10}>
       {isArea ? (
-        // Area feature (facing / step / pocket) with no exact faces: a filled
-        // slab sized to the machined region + a bright wireframe outline so it
-        // reads as "this surface/area", NOT a hole ring.
-        <group renderOrder={10}>
-          <mesh>
-            <boxGeometry args={[L, W, depth]} />
-            <meshStandardMaterial
-              color="#4a9eff" emissive="#4a9eff" emissiveIntensity={0.5}
-              transparent opacity={0.32} depthWrite={false} depthTest={false}
-            />
-          </mesh>
-          <mesh>
-            <boxGeometry args={[L, W, depth]} />
-            <meshBasicMaterial
-              color="#8fc4ff" wireframe
-              transparent opacity={0.9} depthWrite={false} depthTest={false}
-            />
-          </mesh>
-        </group>
+        // Area feature (facing / step / pocket) with no exact faces: a SOLID
+        // filled slab sized to the machined region (no wireframe criss-cross).
+        <mesh renderOrder={10}>
+          <boxGeometry args={[L, W, depth]} />
+          <meshStandardMaterial
+            color={color} emissive={color} emissiveIntensity={0.5}
+            transparent opacity={0.55} depthWrite={false} depthTest={false}
+          />
+        </mesh>
       ) : (
         // Hole / drill: short cylinder down the bore + a locator ring (the
         // ring is intuitive for round holes; kept for this case only).
@@ -519,14 +553,14 @@ function HighlightMarker({ hl, meshTopZ, partSize }: { hl: Highlight; meshTopZ: 
           <mesh rotation={[Math.PI / 2, 0, 0]} renderOrder={10}>
             <cylinderGeometry args={[r, r, depth + 6, 32]} />
             <meshStandardMaterial
-              color="#4a9eff" emissive="#4a9eff" emissiveIntensity={0.6}
+              color={color} emissive={color} emissiveIntensity={0.6}
               transparent opacity={0.6} depthWrite={false} depthTest={false}
             />
           </mesh>
           <mesh renderOrder={11}>
             <ringGeometry args={[ringR, ringR * 1.18, 48]} />
             <meshBasicMaterial
-              color="#4a9eff" side={THREE.DoubleSide}
+              color={color} side={THREE.DoubleSide}
               transparent opacity={0.95} depthWrite={false} depthTest={false}
             />
           </mesh>
@@ -540,7 +574,7 @@ function HighlightMarker({ hl, meshTopZ, partSize }: { hl: Highlight; meshTopZ: 
 // These faces lie ON the part skin, so depthTest stays TRUE (depthTest:false
 // would bleed them through the whole body) and polygonOffset pulls them just
 // in front of the coincident part triangles so they win the depth tie.
-function FaceMeshOverlay({ meshes }: { meshes: Mesh[] }) {
+function FaceMeshOverlay({ meshes, color = "#4a9eff" }: { meshes: Mesh[]; color?: string }) {
   const geoms = useMemo(() => meshes.map(buildGeometry), [meshes]);
   // Face overlays churn with every op click — free the GPU buffers.
   useEffect(() => () => geoms.forEach((g) => g.dispose()), [geoms]);
@@ -549,8 +583,8 @@ function FaceMeshOverlay({ meshes }: { meshes: Mesh[] }) {
       {geoms.map((g, n) => (
         <mesh key={n} geometry={g} renderOrder={9}>
           <meshStandardMaterial
-            color="#4a9eff"
-            emissive="#4a9eff"
+            color={color}
+            emissive={color}
             emissiveIntensity={0.7}
             transparent
             opacity={0.85}
@@ -579,6 +613,7 @@ export function PartViewer({
   pickFeatures = null,
   excludedSet = null,
   onToggleExcluded = null,
+  onSelectFeature = null,
   layers,
   stockAllowance = 5,
 }: {
@@ -604,15 +639,16 @@ export function PartViewer({
   workholding?: { flip: boolean; toolAxis?: Vec3 | null; method?: string | null } | null;
   // WS-B: pickable feature handles for the 3D right-click deselect. Each dot
   // sits at a feature's position; right-click toggles its exclusion.
-  pickFeatures?: { id: string; x: number; y: number; z: number; type: string }[] | null;
+  pickFeatures?: { id: string; hl: Highlight; faces: Mesh[] }[] | null;
   excludedSet?: Set<string> | null;
   onToggleExcluded?: ((id: string) => void) | null;
+  onSelectFeature?: ((id: string) => void) | null;
   // Toggleable scene layers (operator-controlled render settings)
-  layers?: { grid: boolean; dims: boolean; stock: boolean; fixture: boolean };
+  layers?: { grid: boolean; dims: boolean; stock: boolean; fixture: boolean; select?: boolean };
   // Per-side stock allowance (mm) for the translucent stock envelope
   stockAllowance?: number;
 }) {
-  const L = layers ?? { grid: true, dims: true, stock: false, fixture: false };
+  const L = layers ?? { grid: true, dims: true, stock: false, fixture: false, select: false };
   const light = theme === "light";
   const { meshTopZ, partSize, center, bbox } = useMemo(() => {
     const none = {
@@ -698,6 +734,18 @@ export function PartViewer({
       ]
     : center;
 
+  const pickForMesh =
+    pickFeatures && onSelectFeature && onToggleExcluded
+      ? {
+          features: pickFeatures
+            .filter((p) => p.hl.x != null && p.hl.y != null && p.hl.z != null)
+            .map((p) => ({ id: p.id, x: p.hl.x as number, y: p.hl.y as number, z: p.hl.z as number })),
+          onSelect: onSelectFeature,
+          onExclude: onToggleExcluded,
+          partSize,
+        }
+      : null;
+
   return (
     <Canvas
       camera={{ position: [420, -520, 380], up: UP, fov: 45, near: 1, far: 20000 }}
@@ -710,7 +758,7 @@ export function PartViewer({
       {mesh && (
         <Bounds fit clip observe margin={1.25}>
           <group {...groupProps}>
-            <PartMesh mesh={mesh} light={light} opacity={opacity} />
+            <PartMesh mesh={mesh} light={light} opacity={opacity} pick={pickForMesh} />
           </group>
         </Bounds>
       )}
@@ -743,39 +791,21 @@ export function PartViewer({
           <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} />
         )}
         {mesh && approach && <ApproachCone approach={approach} partSize={partSize} />}
-        {/* WS-B: right-click a feature dot to exclude it (red) / re-include it.
-            Included dots stay faint so they don't crowd the part. */}
-        {pickFeatures && onToggleExcluded && pickFeatures.map((f) => {
-          const ex = !!excludedSet?.has(f.id);
-          const r = Math.max(partSize * 0.013, 2.5);
-          return (
-            <mesh
-              key={f.id}
-              position={[f.x, f.y, f.z]}
-              renderOrder={13}
-              onContextMenu={(e) => {
-                e.stopPropagation();
-                e.nativeEvent.preventDefault();
-                onToggleExcluded(f.id);
-              }}
-              onPointerOver={() => {
-                document.body.style.cursor = "pointer";
-              }}
-              onPointerOut={() => {
-                document.body.style.cursor = "";
-              }}
-            >
-              <sphereGeometry args={[ex ? r * 1.25 : r, 16, 16]} />
-              <meshBasicMaterial
-                color={ex ? "#e05a5a" : "#7fd0ff"}
-                transparent
-                opacity={ex ? 0.9 : 0.32}
-                depthTest={false}
-                depthWrite={false}
+        {/* WS-B: excluded features stay coloured red on the part (same marker
+            style as the blue selection highlight) so what's skipped reads at a
+            glance. Right-click a feature on the part toggles it. */}
+        {pickFeatures &&
+          pickFeatures
+            .filter((pf) => excludedSet?.has(pf.id))
+            .map((pf) => (
+              <HighlightMarker
+                key={pf.id}
+                hl={pf.hl}
+                meshTopZ={meshTopZ}
+                partSize={partSize}
+                color="#ff8f8f"
               />
-            </mesh>
-          );
-        })}
+            ))}
       </group>
       <CameraRig dir={camDir} center={camCenter} dist={Math.max(partSize * 1.8, 50)} />
       {/* Free arcball rotation (like Toolpath): no up-axis pole, so the part

@@ -7,7 +7,7 @@ import type {
   FeatureGeometry, FeatureCounts, Candidate,
 } from "./api";
 import { PartViewer } from "./PartViewer";
-import type { Vec3, Approach } from "./PartViewer";
+import type { Vec3, Approach, Highlight } from "./PartViewer";
 import { MaterialSelect } from "./MaterialSelect";
 import { MachineSelect } from "./MachineSelect";
 import type { CustomMachine } from "./MachineSelect";
@@ -79,8 +79,11 @@ export interface ViewerLayers {
   dims: boolean;
   stock: boolean;
   fixture: boolean;
+  // WS-B: show pickable feature dots for the 3D right-click deselect. Off by
+  // default so the part isn't covered in markers.
+  select: boolean;
 }
-const DEFAULT_LAYERS: ViewerLayers = { grid: true, dims: true, stock: false, fixture: false };
+const DEFAULT_LAYERS: ViewerLayers = { grid: true, dims: true, stock: false, fixture: false, select: false };
 function loadLayers(): ViewerLayers {
   try {
     const raw = lsGet("cnc.viewerLayers");
@@ -91,6 +94,7 @@ function loadLayers(): ViewerLayers {
       dims: o.dims ?? true,
       stock: o.stock ?? false,
       fixture: o.fixture ?? false,
+      select: o.select ?? false,
     };
   } catch {
     return DEFAULT_LAYERS;
@@ -1401,7 +1405,7 @@ export default function App() {
   // plan currently on screen (scoped body or whole assembly).
   const pickFeatures = useMemo(() => {
     const sp = selectedGroup && scopedStrategy ? scopedStrategy : strategy;
-    const out: { id: string; x: number; y: number; z: number; type: string }[] = [];
+    const out: { id: string; opId: string; hl: Highlight; faces: Mesh[] }[] = [];
     if (!sp) return out;
     const seen = new Set<string>();
     for (const su of sp.setups)
@@ -1411,10 +1415,29 @@ export default function App() {
         const id = opFeatureKey(op);
         if (seen.has(id)) continue;
         seen.add(id);
-        out.push({ id, x: g.x, y: g.y, z: g.z, type: g.feature_type || op.operation || "" });
+        // Exact tessellated faces (same source as the blue selection highlight)
+        // so an excluded feature can be filled on its REAL shape, not a box.
+        let faces = normalizeFaceMeshes(g.face_mesh_data);
+        if (!faces.length && g.candidate_id && analysis) {
+          const cand = analysis.candidates.find((c) => c.candidate_id === g.candidate_id);
+          if (cand) faces = normalizeFaceMeshes(cand.face_mesh_data);
+        }
+        out.push({
+          id,
+          opId: `${su.setup_label}-${op.op_num}`,
+          hl: {
+            x: g.x, y: g.y, z: g.z,
+            diameter: g.diameter ?? 0,
+            length: g.length ?? 0,
+            width: g.width ?? 0,
+            depth: g.depth ?? 0,
+            feature_type: g.feature_type || op.operation || "",
+          },
+          faces,
+        });
       }
     return out;
-  }, [selectedGroup, scopedStrategy, strategy]);
+  }, [selectedGroup, scopedStrategy, strategy, analysis]);
 
   // ---- Route rollup: block times/costs + routed grand total ----
   // Computed at top level (not in the Route tab) because the Estimate tab
@@ -2268,6 +2291,12 @@ export default function App() {
                   pickFeatures={pickFeatures}
                   excludedSet={excluded}
                   onToggleExcluded={toggleFeatureExcluded}
+                  onSelectFeature={(id) => {
+                    const pf = pickFeatures.find((p) => p.id === id);
+                    if (!pf) return;
+                    setSelOp(pf.opId);
+                    setHighlight(pf.hl);
+                  }}
                   layers={layers}
                   stockAllowance={analysis.stock?.allowance_mm ?? 5}
                 />
