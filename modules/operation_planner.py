@@ -52,18 +52,22 @@ OPERATION_RULES = {
     "Chamfer": [
         {"op": "Chamfer", "notes": "Chamfer top edges"},
     ],
-    # Turned regions (Story 19-2 detection). Lathe operation planning is the
-    # turning module's job — on a VMC plan these are surfaced for routing,
-    # not silently dropped or mis-planned as milling.
+    # Turned regions (Story 19-2 detection). Lathe operation planning lives
+    # in modules/turning_planner.py (Epic 20), not here — on a VMC-only plan
+    # these are surfaced as a routing signal so they are never silently
+    # dropped or mis-planned as milling ops. This rule only fires on a path
+    # that skips the mill/turn split backend/main.py applies before calling
+    # plan_operations(); when that split runs, turning_planner.py already
+    # produced the real lathe plan for these features.
     "OD Turning": [
         {"op": "Manual Review",
-         "notes": "Lathe OD region — quote via Route > CNC Turning "
-                  "(turning module in development)"},
+         "notes": "Lathe OD region — plan via modules/turning_planner.py "
+                  "(Route > CNC Turning), not milling"},
     ],
     "ID Turning / Bore": [
         {"op": "Manual Review",
-         "notes": "Lathe ID/bore region — quote via Route > CNC Turning "
-                  "(turning module in development)"},
+         "notes": "Lathe ID/bore region — plan via modules/turning_planner.py "
+                  "(Route > CNC Turning), not milling"},
     ],
     "ID Groove": [
         {"op": "Manual Review",

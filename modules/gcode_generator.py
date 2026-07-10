@@ -1,8 +1,236 @@
 import math
 
+from modules.turning_planner import TURNING_TOOLS, _LATHE_MAX_RPM
+
 
 def _format_coord(v):
     return f"{v:.3f}"
+
+
+def _parse_feature_dims(feature_name):
+    """Pull (diameter_mm, length_mm) out of a turning_planner feature label.
+
+    turning_planner.py names turned candidates "<label> Øxx.xx mm x yy.y mm"
+    (see step_parser.py Section 19-2/19-3 candidate naming). Returns
+    (None, None) for either value the string doesn't carry rather than
+    guessing — callers fall back to part-envelope values explicitly so the
+    "no data" case is never silently indistinguishable from "real zero".
+    """
+    dia = length = None
+    if "Ø" in feature_name:
+        try:
+            after = feature_name.split("Ø", 1)[1]
+            dia = float(after.split(" ")[0].replace("mm", "").strip())
+        except (ValueError, IndexError):
+            dia = None
+    if "×" in feature_name:
+        try:
+            after = feature_name.rsplit("×", 1)[1]
+            length = float(after.replace("mm", "").replace("wide", "").strip())
+        except (ValueError, IndexError):
+            length = None
+    return dia, length
+
+
+def _turning_tool_slot(tool_name):
+    """Map a turning tool's display name to a numeric turret station.
+
+    modules/turning_planner.py TURNING_TOOLS is fixed and ordered (library
+    slots L1..L6, used as internal ids); op dicts carry only the human-
+    readable tool_name string. G-code T-addresses must be numeric (Fanuc
+    lathe convention T<station><offset>, e.g. T0101), so this returns the
+    tool's 1-based position in TURNING_TOOLS as the station number — NOT
+    the "L#" label, which is not valid inside a T-address.
+    Falls back to station 0 (UNRESOLVED) for anything not in the library
+    rather than guessing a number.
+    """
+    for _idx, _t in enumerate(TURNING_TOOLS, start=1):
+        if _t["tool_name"] == tool_name:
+            return _idx, _t
+    return 0, None
+
+
+def generate_turning_gcode(turning_ops, machine, part_length_mm=0.0,
+                            part_max_od_mm=0.0):
+    """Generate draft Fanuc-style lathe G-code from a turning_planner.py plan.
+
+    Consumes the op dicts produced by modules.turning_planner.plan_turning_
+    operations() directly (op, feature, tool, rpm, feed_mm_rev, path_mm,
+    cut_min, setup, notes) — these already carry a real Vc/feed-per-rev
+    derived rpm and feed, so this function does not invent any cutting
+    parameters; it only turns them into move blocks.
+
+    Lathe programming conventions used (distinct from the mill generator):
+      - G18 XZ plane (vs G17 XY on the mill)
+      - X programmed on DIAMETER (lathe convention), Z along the turning
+        axis from a Z0 datum at the finished right-face of the part
+      - G97 constant-RPM mode + G99 feed-per-rev — the planner already
+        resolves a single representative rpm per op (surface-speed-derived,
+        capped at the machine's max rpm), so G97 with that value is the
+        honest choice: it doesn't require the controller to hold constant
+        surface speed across a diameter change this function has no
+        per-pass profile for.
+
+    NOTE ON FIDELITY: turning_planner op dicts store path_mm/cut_min as
+    totals across all passes for an operation (e.g. rough pass count folded
+    into path_mm), not a discrete per-pass list. Emitting a literal G-code
+    line per physical pass would require inventing per-pass stepdown
+    geometry this module was never given. Each op therefore emits ONE
+    representative cutting move plus a comment carrying the planner's own
+    pass-count note verbatim — consistent with turning_planner's own
+    docstring: "planning estimates for quoting — not CAM toolpaths."
+    """
+    controller = machine.get("controller", "Fanuc")
+    machine_name = machine.get("machine_name", "CNC Machine")
+    safe_x = (part_max_od_mm or 100.0) + 20.0
+    safe_z = 5.0
+    clearance_x = (part_max_od_mm or 100.0) + 5.0
+
+    lines = []
+    lines.append("; ============================================================")
+    lines.append("; DO NOT RUN THIS PROGRAM DIRECTLY ON A MACHINE.")
+    lines.append("; THIS IS DRAFT PLANNING CODE ONLY.")
+    lines.append("; VERIFY IN CAM/SIMULATOR AND BY A QUALIFIED CNC PROGRAMMER")
+    lines.append("; BEFORE RUNNING ON ANY REAL MACHINE.")
+    lines.append("; Tool numbers, offsets, speeds, and feeds MUST be verified.")
+    lines.append("; Each cutting move below is ONE representative pass per")
+    lines.append("; operation — see the inline note for the planner's actual")
+    lines.append("; pass count. This is not a multi-pass CAM toolpath.")
+    lines.append("; ============================================================")
+    lines.append(";")
+    lines.append(f"; Machine   : {machine_name}  ({controller})")
+    lines.append(f"; Part      : L={part_length_mm:g} mm  max OD={part_max_od_mm:g} mm")
+    lines.append(f"; Operations: {len(turning_ops)}")
+    lines.append(";")
+
+    if not turning_ops:
+        lines.append("; No turning operations planned — nothing to emit.")
+        return "\n".join(lines)
+
+    lines.append("O0002  (CNC PROCESS PLANNER - DRAFT LATHE PROGRAM)")
+    lines.append(";")
+    lines.append("; --- SAFETY SETUP ---")
+    lines.append("G21        (Metric mode)")
+    lines.append("G18        (XZ plane selection — lathe)")
+    lines.append("G90        (Absolute positioning, X on diameter)")
+    lines.append("G99        (Feed per revolution)")
+    lines.append("G54        (Work coordinate system)")
+    lines.append("G80        (Cancel canned cycles)")
+    lines.append("G40        (Cancel tool nose radius comp)")
+    lines.append(f"G50 S{int(_LATHE_MAX_RPM)}   (Spindle speed clamp — machine max rpm)")
+    lines.append(f"G0 X{_format_coord(safe_x)} Z{_format_coord(safe_z)}  "
+                  "(Move to safe position, clear of chuck/tailstock)")
+    lines.append(";")
+
+    current_tool_slot = None
+    current_setup = None
+
+    for i, op in enumerate(turning_ops, start=1):
+        op_type = op.get("op", "")
+        tool_name = op.get("tool", "")
+        rpm = op.get("rpm") or 0
+        feed = op.get("feed_mm_rev") or 0.0
+        feature = op.get("feature", "")
+        notes = op.get("notes", "")
+        setup = op.get("setup", "Lathe Chuck")
+
+        if setup != current_setup:
+            lines.append(";")
+            lines.append("; ============================================================")
+            lines.append(f"; SETUP — {setup.upper()}")
+            if current_setup is not None:
+                lines.append("; Re-fixture as required; re-indicate and re-zero.")
+            lines.append("; ============================================================")
+            lines.append(";")
+            current_setup = setup
+
+        tool_slot, tool_meta = _turning_tool_slot(tool_name)
+        if tool_slot != current_tool_slot:
+            if current_tool_slot is not None:
+                lines.append("; --- END OF PREVIOUS TOOL ---")
+                lines.append("M9         (Coolant OFF)")
+                lines.append("M5         (Spindle STOP)")
+                lines.append(f"G0 X{_format_coord(safe_x)} Z{_format_coord(safe_z)}  (Retract to safe position)")
+                lines.append(";")
+            lines.append(f"; === TOOL CHANGE: T{tool_slot:02d} - {tool_name} ===")
+            lines.append(f"T{tool_slot:02d}{tool_slot:02d}  (Tool change: station {tool_slot:02d}, offset {tool_slot:02d} — {tool_name})")
+            lines.append(f"G97 S{int(rpm)} M3   (Constant RPM, spindle ON CW, {int(rpm)} rpm)")
+            lines.append("M8         (Coolant ON)")
+            lines.append(";")
+            current_tool_slot = tool_slot
+
+        lines.append(f"; -- [{i:02d}] {feature} : {op_type} --")
+        if notes:
+            lines.append(f"; {notes}")
+
+        if op_type == "Face":
+            # Facing pass: rapid clear of the OD, feed in from OD to centreline
+            # at Z0 (finished-length datum), retract clear.
+            lines.append(f"G0 X{_format_coord(clearance_x)} Z{_format_coord(safe_z)}  (Rapid to facing start)")
+            lines.append(f"G0 Z0.000  (Approach Z0 — finished face datum)")
+            lines.append(f"G1 X0.000 F{feed:g}  (Face to centreline)")
+            lines.append(f"G0 X{_format_coord(clearance_x)}  (Retract X)")
+
+        elif op_type in ("OD Rough Turn", "OD Finish Turn"):
+            # Prefer the feature's OWN axial span (parsed from its label);
+            # only fall back to the whole-part length when the label carries
+            # no length. Using part_length_mm unconditionally is wrong for
+            # any OD region shorter than the full part (a shoulder/journal).
+            _parsed_dia, _parsed_len = _parse_feature_dims(feature)
+            length = _parsed_len if _parsed_len is not None else (part_length_mm or 0.0)
+            target_dia = _parsed_dia if _parsed_dia is not None else (part_max_od_mm or 0.0)
+            lines.append(f"G0 X{_format_coord(clearance_x)} Z{_format_coord(safe_z)}  (Rapid to OD start)")
+            lines.append(f"G0 Z0.000  (Approach right face)")
+            lines.append(f"G1 X{_format_coord(target_dia)} F{feed:g}  (Feed to diameter)")
+            lines.append(f"G1 Z-{_format_coord(length)} F{feed:g}  (Turn pass along Z)")
+            lines.append(f"G0 X{_format_coord(clearance_x)}  (Retract X clear of part)")
+            lines.append(f"G0 Z{_format_coord(safe_z)}  (Retract Z)")
+
+        elif op_type in ("ID Rough Bore", "ID Finish Bore"):
+            # Same fix as OD above: a bore's own axial extent (e.g. T07's
+            # Ø40 x 30mm central bore inside a 150mm-long flange) is almost
+            # always shorter than the whole part — never assume full length.
+            _parsed_dia, _parsed_len = _parse_feature_dims(feature)
+            length = _parsed_len if _parsed_len is not None else (part_length_mm or 0.0)
+            bore_dia = _parsed_dia if _parsed_dia is not None else 0.0
+            if feed <= 0:
+                lines.append("; SKIPPED — no boring bar fits this bore per the plan (see note above).")
+            else:
+                lines.append(f"G0 X0.000 Z{_format_coord(safe_z)}  (Rapid, bar centred on axis)")
+                lines.append(f"G0 Z0.000  (Approach right face)")
+                lines.append(f"G1 X{_format_coord(bore_dia)} F{feed:g}  (Feed bar to bore diameter)")
+                lines.append(f"G1 Z-{_format_coord(length)} F{feed:g}  (Bore pass along Z)")
+                lines.append(f"G0 X0.000  (Retract bar to centreline)")
+                lines.append(f"G0 Z{_format_coord(safe_z)}  (Retract Z)")
+
+        elif op_type == "ID Groove":
+            _parsed_dia, _ = _parse_feature_dims(feature)
+            groove_dia = _parsed_dia if _parsed_dia is not None else 0.0
+            # Groove Z position is NOT in the planner's op dict (only diameter
+            # and axial width are known — see turning_planner.py plan_turning_
+            # operations) — do not fabricate an axial position from part
+            # length. Z is left as an explicit placeholder the programmer
+            # must fill in from the drawing/model before this is usable.
+            lines.append(f"G0 X0.000 Z{_format_coord(safe_z)}  (Rapid, groove tool on axis)")
+            lines.append("G0 Z-[GROOVE_Z]  (Z NOT COMPUTED BY PLANNER — set from drawing before use)")
+            lines.append(f"G1 X{_format_coord(groove_dia)} F{feed:g}  (Plunge to groove diameter)")
+            lines.append("G4 P500    (Dwell at groove floor)")
+            lines.append("G0 X0.000  (Retract tool to centreline)")
+            lines.append(f"G0 Z{_format_coord(safe_z)}  (Retract Z)")
+
+        else:
+            lines.append(f"; UNRECOGNISED TURNING OP TYPE '{op_type}' — no move emitted; verify manually.")
+
+        lines.append(";")
+
+    lines.append("; --- END OF PROGRAM ---")
+    lines.append("M9         (Coolant OFF)")
+    lines.append("M5         (Spindle STOP)")
+    lines.append(f"G0 X{_format_coord(safe_x)} Z{_format_coord(safe_z)}  (Retract to safe position)")
+    lines.append("M30        (End of program)")
+    lines.append("%")
+
+    return "\n".join(lines)
 
 
 def generate_gcode(operations, machine, stock):
