@@ -394,6 +394,7 @@ function baseFeatureName(name: string): string {
     .replace(/\s*\((?:Rough|Finish)\)\s*$/i, "")
     .replace(/\s*-\s*(?:wall|floor)\s*finish\s*$/i, "")
     .replace(/\s*-\s*(?:rough|finish)\s*bore\s*$/i, "")
+    .replace(/\s*-\s*facing\s*(?:rough|finish)\s*$/i, "")
     .trim();
 }
 
@@ -1294,18 +1295,62 @@ export default function App() {
       }
       return n;
     });
-  const sumExcludedCut = (sus: StrategySetup[]): number =>
-    sus.reduce(
-      (s, su) => s + su.ops.reduce((a, op) => a + (isOpExcluded(op) ? op.cut_min || 0 : 0), 0),
-      0,
-    );
+  // Exclusion-aware totals. Cutting time drops EXACTLY (sum of surviving
+  // cut_min); overheads SCALE instead of sticking: a setup left with zero ops
+  // stops charging setup time, tool changes are recounted from the surviving
+  // tool sequence, rapid scales with the surviving cutting fraction. With
+  // nothing excluded the original totals pass through untouched, so the
+  // no-exclusion baseline (and every gate) is byte-identical.
+  const exclusionAdjusted = (
+    sus: StrategySetup[],
+    totals: StrategyResult["totals"],
+  ) => {
+    const machineMin = totals.total_machine_time_min ?? 0;
+    const rapidMin = totals.rapid_time_min ?? 0;
+    const tcMin = totals.tool_change_time_min ?? 0;
+    const setupMin = totals.setup_time_min ?? 0;
+    const tcCount = totals.num_tool_changes ?? 0;
+    let cutAll = 0, cutInc = 0, tcNew = 0, setupsInc = 0;
+    let anyExcluded = false;
+    for (const su of sus) {
+      let prevTool: string | null = null;
+      let any = false;
+      for (const op of su.ops) {
+        const c = op.cut_min || 0;
+        cutAll += c;
+        if (isOpExcluded(op)) { anyExcluded = true; continue; }
+        cutInc += c;
+        any = true;
+        const t = op.tool_display || op.tool || "";
+        if (prevTool !== null && t !== prevTool) tcNew++;
+        prevTool = t;
+      }
+      if (any) setupsInc++;
+    }
+    if (!anyExcluded) {
+      return { machineMin, rapidMin, tcMin, setupMin, tcCount, includedSetups: sus.length };
+    }
+    const frac = cutAll > 0 ? cutInc / cutAll : 0;
+    const cutAuth = Math.max(machineMin - rapidMin - tcMin - setupMin, 0);
+    const perTc = tcCount > 0 ? tcMin / tcCount : 0;
+    const tcCount2 = Math.min(tcCount, tcNew);
+    const tcMin2 = Math.min(tcMin, tcNew * perTc);
+    const rapid2 = rapidMin * frac;
+    const setup2 = sus.length > 0 ? setupMin * (setupsInc / sus.length) : setupMin;
+    return {
+      machineMin: cutAuth * frac + rapid2 + tcMin2 + setup2,
+      rapidMin: rapid2,
+      tcMin: tcMin2,
+      setupMin: setup2,
+      tcCount: tcCount2,
+      includedSetups: setupsInc,
+    };
+  };
 
   const estCore = useMemo(() => {
     if (!analysis || !strategy) return null;
-    const machineMin = Math.max(
-      (strategy.totals.total_machine_time_min ?? 0) - sumExcludedCut(strategy.setups),
-      0,
-    );
+    const adj = exclusionAdjusted(strategy.setups, strategy.totals);
+    const machineMin = adj.machineMin;
     // Operator-controlled machining multiplier: quote preset × complexity ×
     // tolerance. Applies ONLY to machining-time cost lines — never to
     // material or setup charges.
@@ -1331,7 +1376,9 @@ export default function App() {
       : (analysis.volumes_cm3.stock ?? 0); // legacy fallback: no stock block
     const massKg = (stockVolCm3 * density) / 1000;
     const materialCost = massKg * matPriceKg;
-    const setupsCost = strategy.setups.length * setupCharge;
+    // Setup charges follow the SURVIVING setups — excluding every feature of a
+    // setup removes that setup's charge too.
+    const setupsCost = adj.includedSetups * setupCharge;
     return {
       machineMin, presetMult, tolMult, complexity, machMult, machining,
       stockSize, massKg, materialCost, setupsCost,
@@ -1350,10 +1397,8 @@ export default function App() {
     if (!analysis || !selectedGroup) return null;
     const sp = scopedStrategy;
     if (!sp || sp.scoped_body_index !== scopedBodyIndex) return null;
-    const machineMin = Math.max(
-      (sp.totals.total_machine_time_min ?? 0) - sumExcludedCut(sp.setups),
-      0,
-    );
+    const adj = exclusionAdjusted(sp.setups, sp.totals);
+    const machineMin = adj.machineMin;
     const presetMult = PRESET_MULT[estPreset];
     const tolMult = TOLERANCE_MULT[estTolerance];
     const complexity = Number.isFinite(estComplexity)
@@ -1376,7 +1421,7 @@ export default function App() {
       (stockSize.length * stockSize.width * stockSize.height) / 1000;
     const massKg = (stockVolCm3 * density) / 1000;
     const materialCost = massKg * matPriceKg;
-    const setupsCost = sp.setups.length * setupCharge;
+    const setupsCost = adj.includedSetups * setupCharge;
     return {
       machineMin, presetMult, tolMult, complexity, machMult, machining,
       stockSize, massKg, materialCost, setupsCost,
@@ -2718,11 +2763,8 @@ export default function App() {
                             <div className="row" style={{ borderBottom: "none" }}>
                               <span className="k">Total machine time</span>
                               <span className="v">
-                                {Math.max(
-                                  (stratForView.totals.total_machine_time_min ?? 0) -
-                                    sumExcludedCut(stratForView.setups),
-                                  0,
-                                ).toFixed(0)}{" "}
+                                {exclusionAdjusted(stratForView.setups, stratForView.totals)
+                                  .machineMin.toFixed(0)}{" "}
                                 min
                               </span>
                             </div>
@@ -2814,20 +2856,26 @@ export default function App() {
                       // reduce the machine total by their cutting time so the
                       // breakdown reconciles to the (already reduced) machining
                       // cost. Downstream rows/downloads reuse this filtered list.
-                      const ledgerSetups = ledgerSetupsRaw.map((su) => {
-                        const ops = su.ops.filter((op) => !isOpExcluded(op));
-                        return {
-                          ...su,
-                          ops,
-                          subtotal_min: ops.reduce((a, op) => a + (op.cut_min || 0), 0),
-                        };
-                      });
+                      const adjT = exclusionAdjusted(ledgerSetupsRaw, totalsRaw);
+                      const ledgerSetups = ledgerSetupsRaw
+                        .map((su) => {
+                          const ops = su.ops.filter((op) => !isOpExcluded(op));
+                          return {
+                            ...su,
+                            ops,
+                            subtotal_min: ops.reduce((a, op) => a + (op.cut_min || 0), 0),
+                          };
+                        })
+                        // A fully-excluded setup vanishes from the ledger, the
+                        // effort estimate and the G-code — and stops charging.
+                        .filter((su) => su.ops.length > 0);
                       const totalsForView = {
                         ...totalsRaw,
-                        total_machine_time_min: Math.max(
-                          (totalsRaw.total_machine_time_min ?? 0) - sumExcludedCut(ledgerSetupsRaw),
-                          0,
-                        ),
+                        total_machine_time_min: adjT.machineMin,
+                        rapid_time_min: adjT.rapidMin,
+                        tool_change_time_min: adjT.tcMin,
+                        setup_time_min: adjT.setupMin,
+                        num_tool_changes: adjT.tcCount,
                       };
                       // Toolpath-style: where the machining minutes go, by feature
                       // category + a tool-change line. Reconciles to `machining`.

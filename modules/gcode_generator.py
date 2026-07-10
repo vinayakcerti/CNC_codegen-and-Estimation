@@ -77,7 +77,7 @@ def generate_gcode(operations, machine, stock):
             _announced_setup_labels.add(setup_label)
 
         # ── Setup 2 separator ──────────────────────────────────────────
-        if (op_type == "Face Mill"
+        if (op_type in ("Face Mill", "Face Mill Rough", "Face Mill Finish")
                 and "bottom" in feature_name.lower()
                 and not _setup2_announced):
             lines.append(";")
@@ -179,7 +179,7 @@ def generate_gcode(operations, machine, stock):
             lines.append(f"G0 Z{_format_coord(clearance_z)}  (Retract)")
 
         # ── Face Milling ─────────────────────────────────────────────────
-        elif op_type == "Face Mill":
+        elif op_type in ("Face Mill", "Face Mill Rough", "Face Mill Finish"):
             sx = stock_x
             sy = stock_y
             step_y = 40.0

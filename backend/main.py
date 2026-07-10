@@ -1158,7 +1158,8 @@ async def strategy(
 
     def _base_feature(name: str) -> str:
         for suf in (" (Rough)", " (Finish)", " - wall finish",
-                    " - floor finish", " - rough bore", " - finish bore"):
+                    " - floor finish", " - rough bore", " - finish bore",
+                    " - facing rough", " - facing finish"):
             name = name.replace(suf, "")
         return name
 

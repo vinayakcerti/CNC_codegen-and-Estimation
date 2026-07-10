@@ -113,6 +113,7 @@ function WorkholdingScene({
   toolAxis,
   method,
   flip,
+  avoid = null,
 }: {
   bbox: Bbox;
   partSize: number;
@@ -123,6 +124,9 @@ function WorkholdingScene({
   // Recommended workholding method — chooses vise vs fixture-plate + clamps.
   method: string | null;
   flip: boolean;
+  // Feature positions (part frame) the clamps must stay clear of — a toe
+  // clamp on a cut region can't hold the part while that cut runs (Pic-3).
+  avoid?: Vec3[] | null;
 }) {
   const mins = bbox.mins;
   const maxs = bbox.maxs;
@@ -173,12 +177,36 @@ function WorkholdingScene({
   // onto it); along clampAx it sits beyond each end.
   const clampM = faceM + tSign * (cw / 2 - toe);
   const clampSize = triple((a) => (a === clampAx ? clampLenC : a === mAx ? cw : cw * 1.7));
-  const clampPosA = triple((a) =>
-    a === clampAx ? mins[clampAx] - clampLenC / 2 + toe : a === mAx ? clampM : c[a],
-  );
-  const clampPosB = triple((a) =>
-    a === clampAx ? maxs[clampAx] + clampLenC / 2 - toe : a === mAx ? clampM : c[a],
-  );
+  // CLAMP-COL: slide each clamp along the free edge (otherAx) to the spot with
+  // the most clearance from features near the machined face — a clamp must
+  // hold the part, never sit on a region the tool has to cut. Deterministic
+  // best-of-candidates so the same part always clamps the same way.
+  const avoidPts = (avoid ?? []).filter((p) => p.length >= 3 && p.every(Number.isFinite));
+  const nearFace = avoidPts.filter((p) => Math.abs(p[mAx] - faceM) <= span[mAx] * 0.35 + cw);
+  const ptsFor = nearFace.length ? nearFace : avoidPts;
+  const bestOther = (endC: number): number => {
+    const cands = [0, 0.18, -0.18, 0.32, -0.32].map((f) => c[otherAx] + f * span[otherAx]);
+    const halfC = clampLenC / 2 + cw * 0.4;
+    const halfO = (cw * 1.7) / 2 + cw * 0.4;
+    let best = cands[0];
+    let bestScore = -Infinity;
+    for (const cand of cands) {
+      let score = Infinity;
+      for (const p of ptsFor) {
+        const dC = Math.abs(p[clampAx] - endC) / halfC;
+        const dO = Math.abs(p[otherAx] - cand) / halfO;
+        score = Math.min(score, Math.max(dC, dO)); // normalized clearance; >1 = clear
+      }
+      if (score > bestScore + 1e-6) { bestScore = score; best = cand; }
+    }
+    return best;
+  };
+  const endA = mins[clampAx] - clampLenC / 2 + toe;
+  const endB = maxs[clampAx] + clampLenC / 2 - toe;
+  const otherA = ptsFor.length ? bestOther(endA) : c[otherAx];
+  const otherB = ptsFor.length ? bestOther(endB) : c[otherAx];
+  const clampPosA = triple((a) => (a === clampAx ? endA : a === mAx ? clampM : otherA));
+  const clampPosB = triple((a) => (a === clampAx ? endB : a === mAx ? clampM : otherB));
 
   // Vise style: two soft jaws on the ±clamp-axis faces, biased to the
   // tool-opposite portion so the machined face stays clear.
@@ -791,6 +819,13 @@ export function PartViewer({
             toolAxis={workholding.toolAxis ?? null}
             method={workholding.method ?? null}
             flip={workholding.flip}
+            avoid={
+              pickFeatures
+                ? pickFeatures
+                    .filter((p) => p.hl.x != null && p.hl.y != null && p.hl.z != null)
+                    .map((p) => [p.hl.x as number, p.hl.y as number, p.hl.z as number] as Vec3)
+                : null
+            }
           />
         )}
         {/* Exact faces win; the marker is the fallback for ops without them. */}

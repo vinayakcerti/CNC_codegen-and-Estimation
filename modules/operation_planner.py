@@ -34,8 +34,14 @@ OPERATION_RULES = {
         {"op": "Finish End Mill", "notes": "Finish step floor", "feature_name_suffix": " - floor finish"},
         {"op": "Finish End Mill", "notes": "Finish shoulder wall", "feature_name_suffix": " - wall finish"},
     ],
+    # Gap-v5 A4: facing splits into Roughing + Finishing classes (Toolpath
+    # parity) — rough clears the stock allowance, finish is a lighter skim at
+    # higher engagement for the final surface.
     "Face Milling": [
-        {"op": "Face Mill", "notes": "Face mill stock surface"},
+        {"op": "Face Mill Rough", "notes": "Rough facing — clear stock allowance",
+         "feature_name_suffix": " - facing rough"},
+        {"op": "Face Mill Finish", "notes": "Finish skim to final surface",
+         "feature_name_suffix": " - facing finish"},
     ],
     "Edge Milling": [
         {"op": "End Mill", "notes": "Mill side/edge stock allowance"},
@@ -178,9 +184,10 @@ def estimate_path_length(feature, operation_type, tool=None, variant=""):
         if length > 0 and width > 0:
             # Raster estimate: passes across the face width, each pass = face length
             # plus one tool-diameter approach/exit.
-            # Stepover = 0.75 × D (standard face milling overlap).
+            # Roughing stepover = 0.75 × D (standard overlap); the finish skim
+            # runs a single level at 0.9 × D engagement (gap-v5 A4 split).
             dia      = tool_dia if tool_dia > 0 else 50.0   # default: T8 50 mm
-            stepover = dia * 0.75
+            stepover = dia * (0.9 if operation_type == "Face Mill Finish" else 0.75)
             passes   = max(1, math.ceil(width / stepover))
             return passes * (length + dia) * qty
         return 300.0

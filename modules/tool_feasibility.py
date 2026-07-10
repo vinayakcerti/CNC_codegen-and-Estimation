@@ -58,7 +58,8 @@ def assess_tool_feasibility(
     flute_length = float(tool.get("flute_length_mm") or 0.0)
     holder_diameter = float(tool.get("holder_diameter_mm") or 0.0)
 
-    if operation_type not in ("Face Mill", "Spot Drill", "Chamfer"):
+    if operation_type not in ("Face Mill", "Face Mill Rough", "Face Mill Finish",
+                              "Spot Drill", "Chamfer"):
         if flute_length > 0 and depth > flute_length:
             blocked = True
             warnings.append(

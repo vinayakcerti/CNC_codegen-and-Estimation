@@ -12,6 +12,8 @@ def select_tool_for_operation(operation_type, feature, tools):
         "Finish End Mill": ["End Mill"],
         "End Mill": ["End Mill"],
         "Face Mill": ["Face Mill"],
+        "Face Mill Rough": ["Face Mill"],
+        "Face Mill Finish": ["Face Mill"],
         "Chamfer": ["Chamfer"],
     }
 
