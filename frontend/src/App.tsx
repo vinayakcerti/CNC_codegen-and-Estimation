@@ -4,7 +4,7 @@ import { api, SAMPLE_NAME } from "./api";
 import type {
   AnalyzeResult, StrategyResult, StrategyOp, StrategySetup, Material, OpGeo, Mesh,
   WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts, MaterialOpts, PlanBasis,
-  FeatureGeometry, FeatureCounts, Candidate,
+  FeatureGeometry, FeatureCounts, Candidate, AssistantContext,
 } from "./api";
 import { PartViewer } from "./PartViewer";
 import type { Vec3, Approach, Highlight } from "./PartViewer";
@@ -13,6 +13,7 @@ import { MachineSelect } from "./MachineSelect";
 import type { CustomMachine } from "./MachineSelect";
 import { BottomPanel } from "./BottomPanel";
 import { QuoteModal } from "./QuoteModal";
+import { AssistantPanel } from "./AssistantPanel";
 import { lsGet, lsSet } from "./storage";
 
 type Tab = "overview" | "strategy" | "estimate" | "route";
@@ -1589,6 +1590,38 @@ export default function App() {
   const [threadByDia, setThreadByDia] = useState<Record<string, string>>({});
   const [quoteOpen, setQuoteOpen] = useState(false);
 
+  // ---- AI Assistant panel (paid tier) ----
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  // Compact plan summary sent with every question — a summary dict, not raw
+  // meshes/candidates. Mirrors the whole-assembly Estimate tab ledger
+  // (estCore), so the numbers the assistant cites match what's on screen.
+  const assistantContext = useMemo((): AssistantContext | null => {
+    if (!analysis || !strategy || !estCore) return null;
+    return {
+      filename: analysis.filename,
+      material: analysis.material,
+      machine: machineSel || strategy.machine || analysis.machine || null,
+      setups: strategy.setups.map((su) => ({
+        label: su.setup_label,
+        op_count: su.ops.length,
+        subtotal_min: su.subtotal_min,
+        workholding: su.workholding?.method ?? null,
+      })),
+      totals: {
+        machine_time_min: Math.round(estCore.machineMin * 10) / 10,
+        tool_changes: strategy.totals.num_tool_changes ?? 0,
+        setup_count: strategy.setups.length,
+      },
+      estimate: {
+        material: Math.round(estCore.materialCost),
+        machining: Math.round(estCore.machining),
+        setups: Math.round(estCore.setupsCost),
+        total: Math.round(estCore.materialCost + estCore.machining + estCore.setupsCost),
+      },
+      excluded_count: excluded.size,
+    };
+  }, [analysis, strategy, estCore, machineSel, excluded]);
+
   async function fetchWeldment(file: File) {
     setWmLoading(true);
     setWmError(null);
@@ -2162,6 +2195,15 @@ export default function App() {
                   </button>
                 )}
               </span>
+            )}
+            {analysis && (
+              <button
+                className={`btn ${assistantOpen ? "primary" : ""}`}
+                title="Ask about the current plan"
+                onClick={() => setAssistantOpen((o) => !o)}
+              >
+                Assistant
+              </button>
             )}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -3467,6 +3509,12 @@ export default function App() {
               )}
             </div>
           )}
+          <AssistantPanel
+            open={assistantOpen}
+            onToggle={() => setAssistantOpen((o) => !o)}
+            context={assistantContext}
+            contextKey={analysis?.filename ?? null}
+          />
         </div>
         )}
       </div>
