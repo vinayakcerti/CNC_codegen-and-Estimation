@@ -298,7 +298,97 @@ def _setup_from_dir(direction, signed: bool = False) -> str:
     return [("Right", "Left"), ("Front", "Back"), ("Top", "Bottom")][k][0 if pos else 1]
 
 
-def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
+def _tool_axis_k(v) -> int:
+    a = [abs(v[0]), abs(v[1]), abs(v[2])]
+    return a.index(max(a))
+
+
+def _extent_along(bbox: dict, k: int):
+    lo = [bbox["xmin"], bbox["ymin"], bbox["zmin"]][k]
+    hi = [bbox["xmax"], bbox["ymax"], bbox["zmax"]][k]
+    return lo, hi
+
+
+def _label_k(k: int, sign: int) -> str:
+    d = [0.0, 0.0, 0.0]
+    d[k] = float(sign)
+    return _setup_from_dir(d, signed=True)
+
+
+def _nearest_extreme(pos, bbox: dict):
+    """Infer a planar face's outward normal: the axis whose centroid sits
+    closest (normalised) to a bbox face, and which side it faces."""
+    best_k, best_sign, best_frac = 2, 1, 9.0
+    for k in range(3):
+        lo, hi = _extent_along(bbox, k)
+        ext = max(hi - lo, 1e-6)
+        dmin, dmax = (pos[k] - lo) / ext, (hi - pos[k]) / ext
+        frac = min(dmin, dmax)
+        if frac < best_frac:
+            best_frac, best_k = frac, k
+            best_sign = 1 if dmax <= dmin else -1
+    return best_k, best_sign, best_frac
+
+
+def _orient_setups(features: list, bbox: dict | None) -> None:
+    """Gap-v6 orientation-first setup routing: replace the per-feature six-way
+    axis buckets with fixturing-based grouping. Each feature routes to its
+    outward tool-approach face; a THROUGH hole (reachable from either side)
+    joins the coaxial setup that already holds the milling work rather than
+    spawning its own, and deep holes mis-flagged blind (depth >= 0.9 x wall)
+    are treated as through. Matches Toolpath's 'one clamping = all reachable
+    features'. No-op without a body bbox (inline six-way labels stand)."""
+    if not bbox:
+        return
+    from collections import Counter
+    anchored: list = []   # (k, sign, kind) — one-sided features that define setups
+    deferred: list = []   # (feature, k) — through holes, resolved after counting
+    for f in features:
+        g = f.get("_geometry") or {}
+        kind = g.get("kind")
+        if kind == "hole":
+            axis = g.get("axis_dir") or g.get("entry_dir") or (0, 0, 1)
+            k = _tool_axis_k(axis)
+            lo, hi = _extent_along(bbox, k)
+            thick = hi - lo
+            depth = g.get("depth_mm") or f.get("depth") or 0
+            through = bool(g.get("through")) or (thick > 0 and depth >= 0.9 * thick)
+            if through:
+                deferred.append((f, k))
+                continue
+            e = g.get("entry_dir") or g.get("axis_dir") or (0, 0, 1)
+            sign = 1 if e[k] >= 0 else -1
+            f["setup_label"] = _label_k(k, sign)
+            anchored.append((k, sign, "hole"))
+        elif kind == "slot":
+            ex = f.get("_exact") or {}
+            pos = [ex.get("x") or 0, ex.get("y") or 0, ex.get("z") or 0]
+            axis = g.get("axis_dir") or g.get("entry_dir") or (0, 0, 1)
+            k = _tool_axis_k(axis)
+            lo, hi = _extent_along(bbox, k)
+            p = pos[k]
+            sign = 1 if (hi - p) <= (p - lo) else -1
+            f["setup_label"] = _label_k(k, sign)
+            anchored.append((k, sign, "slot"))
+        else:
+            c = f.get("_candidate") or {}
+            pos = [_cand_float(c, "x_pos", "center_x"),
+                   _cand_float(c, "y_pos", "center_y"),
+                   _cand_float(c, "z_pos", "center_z")]
+            k, sign, frac = _nearest_extreme(pos, bbox)
+            if frac < 0.15:
+                f["setup_label"] = _label_k(k, sign)
+                anchored.append((k, sign, "face"))
+    mill = Counter((k, s) for (k, s, kind) in anchored if kind in ("slot", "face"))
+    anyc = Counter((k, s) for (k, s, kind) in anchored)
+    for (f, k) in deferred:
+        plus = (mill.get((k, 1), 0), anyc.get((k, 1), 0))
+        minus = (mill.get((k, -1), 0), anyc.get((k, -1), 0))
+        sign = 1 if plus >= minus else -1
+        f["setup_label"] = _label_k(k, sign)
+
+
+def _exact_body_features(cls: dict, scoped_candidates: list, bbox: dict | None = None) -> list:
     """Feature list for planning built from VALIDATED cylinder geometry.
 
     The billet-path detector on fabricated assemblies emits many phantom
@@ -418,6 +508,7 @@ def _exact_body_features(cls: dict, scoped_candidates: list) -> list:
             "setup_label": c.get("setup") or c.get("setup_label") or "Top",
             "_candidate": c,
         })
+    _orient_setups(features, bbox)
     return features
 
 
@@ -912,7 +1003,7 @@ async def strategy(
         # detector on weldments plans phantom slots and misses seam-split
         # holes). basis=raw keeps the old path for comparison.
         if basis == "grouped" and body_cls and body_cls.get("available"):
-            exact_features = _exact_body_features(body_cls, candidates)
+            exact_features = _exact_body_features(body_cls, candidates, bbox)
             feature_source = "exact_classifier"
 
     features = []

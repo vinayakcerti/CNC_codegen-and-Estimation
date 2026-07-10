@@ -29,7 +29,19 @@ function loadPanelHeight(): number {
 const fmt = (v: unknown, digits = 1): string =>
   typeof v === "number" && Number.isFinite(v) ? v.toFixed(digits) : "—";
 
-export function BottomPanel({ candidates }: { candidates: Candidate[] }) {
+export function BottomPanel({
+  candidates,
+  excluded,
+  onToggleExcluded,
+  onBulkExcluded,
+}: {
+  candidates: Candidate[];
+  // WS-B feature selection (optional — omit for a read-only table). Keyed by
+  // candidate_id so it matches the Strategy list's per-op exclude toggle.
+  excluded?: Set<string>;
+  onToggleExcluded?: (key: string) => void;
+  onBulkExcluded?: (keys: string[], exclude: boolean) => void;
+}) {
   const [open, setOpen] = useState(() => lsGet("cnc.bottomPanel.open") !== "0");
   const [view, setView] = useState<PanelView>(() =>
     lsGet("cnc.bottomPanel.view") === "features" ? "features" : "tools",
@@ -190,36 +202,129 @@ export function BottomPanel({ candidates }: { candidates: Candidate[] }) {
 
           {view === "features" &&
             (candidates.length ? (
-              <table className="dense-table">
-                <thead>
-                  <tr>
-                    <th>Type</th>
-                    <th>Name</th>
-                    <th>Ø (mm)</th>
-                    <th>L (mm)</th>
-                    <th>W (mm)</th>
-                    <th>Depth (mm)</th>
-                    <th>Confidence</th>
-                    <th>Thread</th>
-                    <th>Setup</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {candidates.map((c, i) => (
-                    <tr key={c.candidate_id ?? i}>
-                      <td>{c.feature_type || "—"}</td>
-                      <td>{c.feature_name || "—"}</td>
-                      <td>{fmt(c.diameter, 2)}</td>
-                      <td>{fmt(c.length)}</td>
-                      <td>{fmt(c.width)}</td>
-                      <td>{fmt(c.depth)}</td>
-                      <td>{c.confidence || "—"}</td>
-                      <td>{c.thread || "—"}</td>
-                      <td>{c.setup || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              (() => {
+                const sel = !!onToggleExcluded;
+                const ex = excluded ?? new Set<string>();
+                const keyed = candidates.map((c, i) => ({ c, k: c.candidate_id ?? String(i) }));
+                const keys = keyed.map((x) => x.k);
+                const includedN = keys.filter((k) => !ex.has(k)).length;
+                const allSel = includedN === candidates.length;
+                const types = Array.from(new Set(candidates.map((c) => c.feature_type || "—")));
+                const keysOfType = (t: string) =>
+                  keyed.filter((x) => (x.c.feature_type || "—") === t).map((x) => x.k);
+                const btnS = {
+                  fontSize: 11,
+                  padding: "1px 7px",
+                  borderRadius: 4,
+                  border: "1px solid var(--border, #3a4048)",
+                  background: "transparent",
+                  color: "var(--text-2)",
+                  cursor: "pointer",
+                } as const;
+                return (
+                  <>
+                    {sel && (
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 6,
+                          alignItems: "center",
+                          flexWrap: "wrap",
+                          padding: "5px 10px",
+                          fontSize: 12,
+                          borderBottom: "1px solid var(--border, #2a2f36)",
+                        }}
+                      >
+                        <span style={{ color: "var(--text-2)" }}>
+                          {includedN} / {candidates.length} to machine
+                        </span>
+                        <button type="button" style={btnS} onClick={() => onBulkExcluded?.(keys, false)}>
+                          All
+                        </button>
+                        <button type="button" style={btnS} onClick={() => onBulkExcluded?.(keys, true)}>
+                          None
+                        </button>
+                        <span style={{ width: 1, alignSelf: "stretch", background: "var(--border, #2a2f36)", margin: "0 2px" }} />
+                        {types.map((t) => {
+                          const tk = keysOfType(t);
+                          const allEx = tk.length > 0 && tk.every((k) => ex.has(k));
+                          return (
+                            <button
+                              key={t}
+                              type="button"
+                              style={btnS}
+                              title={allEx ? `Re-include all ${t}` : `Exclude all ${t}`}
+                              onClick={() => onBulkExcluded?.(tk, !allEx)}
+                            >
+                              {t} {allEx ? "↺" : "⊘"}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <table className="dense-table">
+                      <thead>
+                        <tr>
+                          {sel && (
+                            <th style={{ width: 28 }}>
+                              <input
+                                type="checkbox"
+                                checked={allSel}
+                                ref={(el) => {
+                                  if (el) el.indeterminate = includedN > 0 && !allSel;
+                                }}
+                                onChange={() => onBulkExcluded?.(keys, allSel)}
+                                title="Select all / none"
+                              />
+                            </th>
+                          )}
+                          <th>Type</th>
+                          <th>Name</th>
+                          <th>Ø (mm)</th>
+                          <th>L (mm)</th>
+                          <th>W (mm)</th>
+                          <th>Depth (mm)</th>
+                          <th>Confidence</th>
+                          <th>Thread</th>
+                          <th>Setup</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {keyed.map(({ c, k }, i) => {
+                          const isEx = ex.has(k);
+                          return (
+                            <tr
+                              key={c.candidate_id ?? i}
+                              className={isEx ? "row-excluded" : ""}
+                              style={isEx ? { opacity: 0.45 } : undefined}
+                            >
+                              {sel && (
+                                <td>
+                                  <input
+                                    type="checkbox"
+                                    checked={!isEx}
+                                    onChange={() => onToggleExcluded?.(k)}
+                                    title={isEx ? "Excluded — click to machine" : "Click to exclude"}
+                                  />
+                                </td>
+                              )}
+                              <td>{c.feature_type || "—"}</td>
+                              <td>{c.feature_name || "—"}</td>
+                              <td>{fmt(c.diameter, 2)}</td>
+                              <td>{fmt(c.length)}</td>
+                              <td>{fmt(c.width)}</td>
+                              <td>{fmt(c.depth)}</td>
+                              <td>{c.confidence || "—"}</td>
+                              <td>{c.thread || "—"}</td>
+                              <td>{c.setup || "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </>
+                );
+              })()
             ) : (
               <div className="bp-msg">No detected features</div>
             ))}

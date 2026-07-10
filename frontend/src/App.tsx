@@ -27,8 +27,8 @@ const INSPECTOR_DEFAULT = 320;
 const SETUP_DIRS: Record<string, Vec3> = {
   top: [0, 0, 1],
   bottom: [0, 0, -1],
-  front: [0, -1, 0],
-  back: [0, 1, 0],
+  front: [0, 1, 0],
+  back: [0, -1, 0],
   left: [-1, 0, 0],
   right: [1, 0, 0],
 };
@@ -1001,6 +1001,13 @@ export default function App() {
   const [selOp, setSelOp] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<OpGeo | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // Strategy accordion: which setup cards are dropped down. Defaults to the
+  // first setup open (si===0); clicking a setup header toggles it so the panel
+  // isn't crowded with every setup's ops at once.
+  const [openSetups, setOpenSetups] = useState<Record<string, boolean>>({});
+  // WS-B: features the user deselected (won't be machined). Keyed by
+  // candidate_id (part-agnostic); loaded/persisted per part below.
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [rateHr, setRateHr] = useState(800);
   const [setupCharge, setSetupCharge] = useState(500);
   const [matPriceKg, setMatPriceKg] = useState(650);
@@ -1242,9 +1249,59 @@ export default function App() {
   // One source of truth for the machining multiplier, material mass/cost and
   // setup charges, so the routed grand total is an exact superset of the
   // milling-only estimate.
+  // WS-B: load/persist the deselected feature set per part (localStorage,
+  // keyed by filename). Excluded features drop out of the estimate, quote and
+  // G-code, and grey out in the plan. Nothing here is part-specific.
+  useEffect(() => {
+    const fn = analysis?.filename;
+    if (!fn) return;
+    try {
+      const raw = localStorage.getItem(`cnc.excluded.${fn}`);
+      setExcluded(new Set(raw ? (JSON.parse(raw) as string[]) : []));
+    } catch {
+      setExcluded(new Set());
+    }
+  }, [analysis?.filename]);
+  useEffect(() => {
+    const fn = analysis?.filename;
+    if (!fn) return;
+    try {
+      localStorage.setItem(`cnc.excluded.${fn}`, JSON.stringify([...excluded]));
+    } catch {
+      /* storage disabled — keep session state only */
+    }
+  }, [excluded, analysis?.filename]);
+  const opFeatureKey = (op: StrategyOp): string =>
+    op.geo?.candidate_id || baseFeatureName(op.feature || "") || op.feature || "";
+  const isOpExcluded = (op: StrategyOp): boolean => excluded.has(opFeatureKey(op));
+  const toggleFeatureExcluded = (key: string) =>
+    setExcluded((prev) => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
+      return n;
+    });
+  const bulkExcluded = (keys: string[], exclude: boolean) =>
+    setExcluded((prev) => {
+      const n = new Set(prev);
+      for (const k of keys) {
+        if (exclude) n.add(k);
+        else n.delete(k);
+      }
+      return n;
+    });
+  const sumExcludedCut = (sus: StrategySetup[]): number =>
+    sus.reduce(
+      (s, su) => s + su.ops.reduce((a, op) => a + (isOpExcluded(op) ? op.cut_min || 0 : 0), 0),
+      0,
+    );
+
   const estCore = useMemo(() => {
     if (!analysis || !strategy) return null;
-    const machineMin = strategy.totals.total_machine_time_min ?? 0;
+    const machineMin = Math.max(
+      (strategy.totals.total_machine_time_min ?? 0) - sumExcludedCut(strategy.setups),
+      0,
+    );
     // Operator-controlled machining multiplier: quote preset × complexity ×
     // tolerance. Applies ONLY to machining-time cost lines — never to
     // material or setup charges.
@@ -1276,7 +1333,7 @@ export default function App() {
       stockSize, massKg, materialCost, setupsCost,
     };
   }, [
-    analysis, strategy, estPreset, estTolerance, estComplexity,
+    analysis, strategy, estPreset, estTolerance, estComplexity, excluded,
     customMaterials, materials, stockMode, manualStock, matPriceKg, setupCharge, rateHr,
   ]);
 
@@ -1289,7 +1346,10 @@ export default function App() {
     if (!analysis || !selectedGroup) return null;
     const sp = scopedStrategy;
     if (!sp || sp.scoped_body_index !== scopedBodyIndex) return null;
-    const machineMin = sp.totals.total_machine_time_min ?? 0;
+    const machineMin = Math.max(
+      (sp.totals.total_machine_time_min ?? 0) - sumExcludedCut(sp.setups),
+      0,
+    );
     const presetMult = PRESET_MULT[estPreset];
     const tolMult = TOLERANCE_MULT[estTolerance];
     const complexity = Number.isFinite(estComplexity)
@@ -1319,7 +1379,7 @@ export default function App() {
     };
   }, [
     analysis, selectedGroup, scopedStrategy, scopedBodyIndex, estPreset,
-    estTolerance, estComplexity, customMaterials, materials, matPriceKg,
+    estTolerance, estComplexity, excluded, customMaterials, materials, matPriceKg,
     setupCharge, rateHr,
   ]);
 
@@ -1335,6 +1395,26 @@ export default function App() {
     }
     return analysis?.candidates ?? [];
   }, [analysis, selectedGroup, scopedStrategy, scopedBodyIndex]);
+
+  // WS-B: pickable feature handles for the 3D right-click deselect. One per
+  // physical feature (deduped by exclusion key) at its geo position, from the
+  // plan currently on screen (scoped body or whole assembly).
+  const pickFeatures = useMemo(() => {
+    const sp = selectedGroup && scopedStrategy ? scopedStrategy : strategy;
+    const out: { id: string; x: number; y: number; z: number; type: string }[] = [];
+    if (!sp) return out;
+    const seen = new Set<string>();
+    for (const su of sp.setups)
+      for (const op of su.ops) {
+        const g = op.geo;
+        if (!g || g.x == null || g.y == null || g.z == null) continue;
+        const id = opFeatureKey(op);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push({ id, x: g.x, y: g.y, z: g.z, type: g.feature_type || op.operation || "" });
+      }
+    return out;
+  }, [selectedGroup, scopedStrategy, strategy]);
 
   // ---- Route rollup: block times/costs + routed grand total ----
   // Computed at top level (not in the Route tab) because the Estimate tab
@@ -1429,10 +1509,10 @@ export default function App() {
     // Open slots: the tool enters through the OPENING (open_dir); holes and
     // closed slots enter along entry_dir. Both are OUTWARD vectors, so the
     // tool travels into the part along the negated direction below.
-    const ed =
-      gg.kind === "slot" && gg.open_dir && gg.open_dir.length >= 3
-        ? gg.open_dir
-        : gg.entry_dir;
+    // The cutter plunges along the feature's tool axis (entry_dir = outward
+    // normal of the machined face), NOT a slot's horizontal open_dir — the
+    // real cut comes from the floor-normal face, matching the setup routing.
+    const ed = gg.entry_dir;
     if (!ed || ed.length < 3) return null;
     const n = Math.hypot(ed[0], ed[1], ed[2]);
     if (n < 1e-6) return null;
@@ -1938,10 +2018,14 @@ export default function App() {
 
   function renderOpRow(setupLabel: string, op: StrategyOp, child: boolean) {
     const id = `${setupLabel}-${op.op_num}`;
+    const fkey = opFeatureKey(op);
+    const ex = excluded.has(fkey);
+    const strike = ex ? { textDecoration: "line-through" as const } : undefined;
     return (
       <div
         key={id}
-        className={`op-row ${child ? "child" : ""} ${selOp === id ? "sel" : ""}`}
+        className={`op-row ${child ? "child" : ""} ${selOp === id ? "sel" : ""} ${ex ? "excluded" : ""}`}
+        style={ex ? { opacity: 0.45 } : undefined}
         onClick={() => {
           if (selOp === id) {
             setSelOp(null);
@@ -1958,10 +2042,30 @@ export default function App() {
         />
         <span className="seq">{op.op_num}</span>
         <div className="main">
-          <div>{child ? op.feature || op.operation : op.operation}</div>
+          <div style={strike}>{child ? op.feature || op.operation : op.operation}</div>
           {!child && <div className="tool">{op.tool_display || op.tool}</div>}
         </div>
-        <span className="t">{op.cut_min.toFixed(1)}m</span>
+        <span className="t" style={strike}>{op.cut_min.toFixed(1)}m</span>
+        <button
+          className="op-skip"
+          title={ex ? "Re-include this feature (machine it)" : "Exclude this feature — don't machine (e.g. already done)"}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleFeatureExcluded(fkey);
+          }}
+          style={{
+            marginLeft: 6,
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            color: ex ? "#4a9eff" : "var(--text-2)",
+            fontSize: 13,
+            lineHeight: 1,
+            padding: "0 2px",
+          }}
+        >
+          {ex ? "↺" : "⊘"}
+        </button>
       </div>
     );
   }
@@ -2138,6 +2242,10 @@ export default function App() {
                   // Setup orientation applies to the whole-assembly view only
                   // (the Setups list is a whole-assembly analysis).
                   cameraDir={selectedGroup ? null : setupView.dir}
+                  // Re-orient the part so the active setup's machined face
+                  // points up (cutter from the top) — like Toolpath. Applies
+                  // to the scoped body view too (where the user works).
+                  orientTo={selOpData || activeSetup ? fixtureCtx.toolAxis : null}
                   // Per-op cone (from the op's real entry direction) wins; the
                   // setup-level cone is the fallback for the whole-assembly
                   // Setups view when no single op is selected.
@@ -2157,6 +2265,9 @@ export default function App() {
                         }
                       : null
                   }
+                  pickFeatures={pickFeatures}
+                  excludedSet={excluded}
+                  onToggleExcluded={toggleFeatureExcluded}
                   layers={layers}
                   stockAllowance={analysis.stock?.allowance_mm ?? 5}
                 />
@@ -2224,7 +2335,14 @@ export default function App() {
                 />
               )}
             </div>
-            {analysis && <BottomPanel candidates={featureTableRows} />}
+            {analysis && (
+              <BottomPanel
+                candidates={featureTableRows}
+                excluded={excluded}
+                onToggleExcluded={toggleFeatureExcluded}
+                onBulkExcluded={bulkExcluded}
+              />
+            )}
           </div>
 
           {analysis && (
@@ -2561,54 +2679,78 @@ export default function App() {
                             ) : null}
                             <div className="row" style={{ borderBottom: "none" }}>
                               <span className="k">Total machine time</span>
-                              <span className="v">{stratForView.totals.total_machine_time_min?.toFixed(0)} min</span>
+                              <span className="v">
+                                {Math.max(
+                                  (stratForView.totals.total_machine_time_min ?? 0) -
+                                    sumExcludedCut(stratForView.setups),
+                                  0,
+                                ).toFixed(0)}{" "}
+                                min
+                              </span>
                             </div>
                             {rollupsBySetup.length === 0 && (
                               <div style={{ fontSize: 12, color: "var(--text-2)", padding: "6px 0" }}>
                                 No machinable candidates in this scope
                               </div>
                             )}
-                            {rollupsBySetup.map((su, si) => (
+                            {rollupsBySetup.map((su, si) => {
+                              const isSetupOpen = openSetups[su.label] ?? (si === 0);
+                              return (
                               <div
                                 key={su.label}
                                 className="setup-group"
                                 style={{ borderLeft: `3px solid ${setupColorAt(si)}` }}
                               >
-                                <div className="section-title">
+                                <div
+                                  className="section-title setup-head"
+                                  style={{ cursor: "pointer" }}
+                                  onClick={() =>
+                                    setOpenSetups((p) => ({
+                                      ...p,
+                                      [su.label]: !(p[su.label] ?? (si === 0)),
+                                    }))
+                                  }
+                                >
+                                  <span className="seq">{isSetupOpen ? "▾" : "▸"}</span>
                                   <span
                                     className="setup-swatch"
                                     style={{ background: setupColorAt(si) }}
                                   />
                                   Setup {si + 1} · {su.label} — {su.opCount} ops · {su.subtotal.toFixed(1)} min
                                 </div>
-                                {su.workholding && (
-                                  <div className="setup-wh" title={su.workholding.reason}>
-                                    {su.workholding.method} · {su.workholding.jaw_mode}
-                                  </div>
-                                )}
-                                {su.rollups.map((r) => {
-                                  if (r.ops.length === 1) return renderOpRow(su.label, r.ops[0], false);
-                                  const isOpen = !!expanded[r.key];
-                                  return (
-                                    <div key={r.key}>
-                                      <div className="op-row rollup" onClick={() => toggleRollup(r.key)}>
-                                        <span
-                                          className={`op-dot ${r.ops.some((o) => o.blocked) ? "red" : "green"}`}
-                                          title={r.ops.some((o) => o.blocked) ? "Contains blocked ops" : "Plannable"}
-                                        />
-                                        <span className="seq">{isOpen ? "▾" : "▸"}</span>
-                                        <div className="main">
-                                          <div>{r.operation} ×{r.ops.length}</div>
-                                          <div className="tool">{r.toolDisplay}</div>
-                                        </div>
-                                        <span className="t">{r.totalMin.toFixed(1)}m</span>
+                                {isSetupOpen && (
+                                  <>
+                                    {su.workholding && (
+                                      <div className="setup-wh" title={su.workholding.reason}>
+                                        {su.workholding.method} · {su.workholding.jaw_mode}
                                       </div>
-                                      {isOpen && r.ops.map((op) => renderOpRow(su.label, op, true))}
-                                    </div>
-                                  );
-                                })}
+                                    )}
+                                    {su.rollups.map((r) => {
+                                      if (r.ops.length === 1) return renderOpRow(su.label, r.ops[0], false);
+                                      const isOpen = !!expanded[r.key];
+                                      return (
+                                        <div key={r.key}>
+                                          <div className="op-row rollup" onClick={() => toggleRollup(r.key)}>
+                                            <span
+                                              className={`op-dot ${r.ops.some((o) => o.blocked) ? "red" : "green"}`}
+                                              title={r.ops.some((o) => o.blocked) ? "Contains blocked ops" : "Plannable"}
+                                            />
+                                            <span className="seq">{isOpen ? "▾" : "▸"}</span>
+                                            <div className="main">
+                                              <div>{r.operation} ×{r.ops.length}</div>
+                                              <div className="tool">{r.toolDisplay}</div>
+                                            </div>
+                                            <span className="t">{r.totalMin.toFixed(1)}m</span>
+                                          </div>
+                                          {isOpen && r.ops.map((op) => renderOpRow(su.label, op, true))}
+                                        </div>
+                                      );
+                                    })}
+                                  </>
+                                )}
                               </div>
-                            ))}
+                              );
+                            })}
                           </>
                         )}
                       </>
@@ -2626,10 +2768,29 @@ export default function App() {
                       } = scoped ? scopedEstCore! : estCore;
                       // Itemised rows must come from the SAME plan as the
                       // totals — scoped plan under a body scope.
-                      const ledgerSetups =
+                      const ledgerSetupsRaw =
                         scoped && scopedStrategy ? scopedStrategy.setups : strategy.setups;
-                      const totalsForView =
+                      const totalsRaw =
                         scoped && scopedStrategy ? scopedStrategy.totals : strategy.totals;
+                      // WS-B: drop deselected features from the itemised rows and
+                      // reduce the machine total by their cutting time so the
+                      // breakdown reconciles to the (already reduced) machining
+                      // cost. Downstream rows/downloads reuse this filtered list.
+                      const ledgerSetups = ledgerSetupsRaw.map((su) => {
+                        const ops = su.ops.filter((op) => !isOpExcluded(op));
+                        return {
+                          ...su,
+                          ops,
+                          subtotal_min: ops.reduce((a, op) => a + (op.cut_min || 0), 0),
+                        };
+                      });
+                      const totalsForView = {
+                        ...totalsRaw,
+                        total_machine_time_min: Math.max(
+                          (totalsRaw.total_machine_time_min ?? 0) - sumExcludedCut(ledgerSetupsRaw),
+                          0,
+                        ),
+                      };
                       // Toolpath-style: where the machining minutes go, by feature
                       // category + a tool-change line. Reconciles to `machining`.
                       const machBreakdown = buildMachiningBreakdown(

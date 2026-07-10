@@ -9,6 +9,11 @@ import type { Mesh } from "./api";
 // part couldn't be flipped bottom-to-top. Everything here assumes Z-up.
 const UP: Vec3 = [0, 0, 1];
 
+// When a setup is active the part is rotated so the machined face points up
+// (+Z); this fixed front-right-above iso then shows that face on top with the
+// cutter coming down — the Toolpath "faced-up setup" view.
+const ORIENT_CAM: Vec3 = [0.5, -0.72, 0.48];
+
 export type Vec3 = [number, number, number];
 
 export interface Approach {
@@ -567,9 +572,13 @@ export function PartViewer({
   faceMeshes = null,
   theme = "dark",
   cameraDir = null,
+  orientTo = null,
   approach = null,
   opacity = 1,
   workholding = null,
+  pickFeatures = null,
+  excludedSet = null,
+  onToggleExcluded = null,
   layers,
   stockAllowance = 5,
 }: {
@@ -581,6 +590,10 @@ export function PartViewer({
   theme?: "dark" | "light";
   // Direction from part center to camera — set to re-orient the view (setup click)
   cameraDir?: Vec3 | null;
+  // Outward normal of the active setup's machined face (raw-CAD frame). When
+  // set, the part is rotated so this axis points UP (+Z) — the setup is shown
+  // "faced up" with the cutter coming from the top, like Toolpath.
+  orientTo?: Vec3 | null;
   // Tool-approach cone: origin on the part face, dir pointing into the part
   approach?: Approach | null;
   // Part opacity (0.2–1); multiplies the dim-on-highlight factor
@@ -589,6 +602,11 @@ export function PartViewer({
   // the fixture clamps clear of it; method picks vise vs fixture-plate; flip =
   // secondary face re-fixture hint.
   workholding?: { flip: boolean; toolAxis?: Vec3 | null; method?: string | null } | null;
+  // WS-B: pickable feature handles for the 3D right-click deselect. Each dot
+  // sits at a feature's position; right-click toggles its exclusion.
+  pickFeatures?: { id: string; x: number; y: number; z: number; type: string }[] | null;
+  excludedSet?: Set<string> | null;
+  onToggleExcluded?: ((id: string) => void) | null;
   // Toggleable scene layers (operator-controlled render settings)
   layers?: { grid: boolean; dims: boolean; stock: boolean; fixture: boolean };
   // Per-side stock allowance (mm) for the translucent stock envelope
@@ -632,6 +650,54 @@ export function PartViewer({
     };
   }, [mesh]);
 
+  // When a setup face axis is given, rotate the part so that face points UP
+  // (+Z) and sits on the bed. Everything attached to the part (overlays, cone,
+  // fixture, stock) shares this transform; the grid/dims use the rotated bbox
+  // so the bed stays horizontal under the re-oriented part.
+  const oriented = useMemo(() => {
+    if (!orientTo || !bbox) return null;
+    const t = new THREE.Vector3(orientTo[0], orientTo[1], orientTo[2]);
+    if (t.lengthSq() < 1e-9) return null;
+    t.normalize();
+    const q = new THREE.Quaternion().setFromUnitVectors(t, new THREE.Vector3(0, 0, 1));
+    const mn = bbox.mins;
+    const mx = bbox.maxs;
+    let rmn: Vec3 = [Infinity, Infinity, Infinity];
+    let rmx: Vec3 = [-Infinity, -Infinity, -Infinity];
+    for (let xi = 0; xi < 2; xi++)
+      for (let yi = 0; yi < 2; yi++)
+        for (let zi = 0; zi < 2; zi++) {
+          const v = new THREE.Vector3(
+            xi ? mx[0] : mn[0],
+            yi ? mx[1] : mn[1],
+            zi ? mx[2] : mn[2],
+          ).applyQuaternion(q);
+          rmn = [Math.min(rmn[0], v.x), Math.min(rmn[1], v.y), Math.min(rmn[2], v.z)];
+          rmx = [Math.max(rmx[0], v.x), Math.max(rmx[1], v.y), Math.max(rmx[2], v.z)];
+        }
+    const offset: Vec3 = [
+      -(rmn[0] + rmx[0]) / 2,
+      -(rmn[1] + rmx[1]) / 2,
+      -rmn[2],
+    ];
+    const rbbox: Bbox = {
+      mins: [rmn[0] + offset[0], rmn[1] + offset[1], 0],
+      maxs: [rmx[0] + offset[0], rmx[1] + offset[1], rmx[2] - rmn[2]],
+    };
+    return { q, offset, rbbox };
+  }, [orientTo, bbox]);
+
+  const fbbox = oriented ? oriented.rbbox : bbox;
+  const groupProps = oriented ? { quaternion: oriented.q, position: oriented.offset } : {};
+  const camDir = oriented ? ORIENT_CAM : cameraDir;
+  const camCenter: Vec3 = fbbox
+    ? [
+        (fbbox.mins[0] + fbbox.maxs[0]) / 2,
+        (fbbox.mins[1] + fbbox.maxs[1]) / 2,
+        (fbbox.mins[2] + fbbox.maxs[2]) / 2,
+      ]
+    : center;
+
   return (
     <Canvas
       camera={{ position: [420, -520, 380], up: UP, fov: 45, near: 1, far: 20000 }}
@@ -643,35 +709,75 @@ export function PartViewer({
       <directionalLight position={[-200, -300, -100]} intensity={0.55} />
       {mesh && (
         <Bounds fit clip observe margin={1.25}>
-          <PartMesh mesh={mesh} light={light} opacity={opacity} />
+          <group {...groupProps}>
+            <PartMesh mesh={mesh} light={light} opacity={opacity} />
+          </group>
         </Bounds>
       )}
-      {mesh && bbox && (
-        <SceneFloor bbox={bbox} partSize={partSize} light={light} showGrid={L.grid} showDims={L.dims} />
+      {/* Bed + dimensions use the rotated bbox so the grid stays horizontal
+          under the re-oriented (faced-up) part. */}
+      {mesh && fbbox && (
+        <SceneFloor bbox={fbbox} partSize={partSize} light={light} showGrid={L.grid} showDims={L.dims} />
       )}
-      {mesh && bbox && L.grid && <AxisTriad bbox={bbox} partSize={partSize} />}
-      {mesh && bbox && L.stock && (
-        <StockBox bbox={bbox} allowance={stockAllowance} light={light} />
-      )}
-      {/* Fixture: App decides visibility (Fixture layer or an active setup)
-          and passes the machined-face axis so it clamps clear of it. */}
-      {mesh && bbox && workholding && (
-        <WorkholdingScene
-          bbox={bbox}
-          partSize={partSize}
-          toolAxis={workholding.toolAxis ?? null}
-          method={workholding.method ?? null}
-          flip={workholding.flip}
-        />
-      )}
-      {/* Exact faces win; the marker is the fallback for ops without them.
-          Both render OUTSIDE <Bounds> so selection never re-fits the camera. */}
-      {mesh && faceMeshes && faceMeshes.length > 0 && <FaceMeshOverlay meshes={faceMeshes} />}
-      {mesh && highlight && !(faceMeshes && faceMeshes.length > 0) && (
-        <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} />
-      )}
-      {mesh && approach && <ApproachCone approach={approach} partSize={partSize} />}
-      <CameraRig dir={cameraDir} center={center} dist={Math.max(partSize * 1.8, 50)} />
+      {mesh && fbbox && L.grid && <AxisTriad bbox={fbbox} partSize={partSize} />}
+      {/* Part-frame visuals share the part's orientation so overlays, cone and
+          clamps stay locked to the workpiece as it re-orients per setup. */}
+      <group {...groupProps}>
+        {mesh && bbox && L.stock && (
+          <StockBox bbox={bbox} allowance={stockAllowance} light={light} />
+        )}
+        {/* Fixture: App decides visibility (Fixture layer or an active setup)
+            and passes the machined-face axis so it clamps clear of it. */}
+        {mesh && bbox && workholding && (
+          <WorkholdingScene
+            bbox={bbox}
+            partSize={partSize}
+            toolAxis={workholding.toolAxis ?? null}
+            method={workholding.method ?? null}
+            flip={workholding.flip}
+          />
+        )}
+        {/* Exact faces win; the marker is the fallback for ops without them. */}
+        {mesh && faceMeshes && faceMeshes.length > 0 && <FaceMeshOverlay meshes={faceMeshes} />}
+        {mesh && highlight && !(faceMeshes && faceMeshes.length > 0) && (
+          <HighlightMarker hl={highlight} meshTopZ={meshTopZ} partSize={partSize} />
+        )}
+        {mesh && approach && <ApproachCone approach={approach} partSize={partSize} />}
+        {/* WS-B: right-click a feature dot to exclude it (red) / re-include it.
+            Included dots stay faint so they don't crowd the part. */}
+        {pickFeatures && onToggleExcluded && pickFeatures.map((f) => {
+          const ex = !!excludedSet?.has(f.id);
+          const r = Math.max(partSize * 0.013, 2.5);
+          return (
+            <mesh
+              key={f.id}
+              position={[f.x, f.y, f.z]}
+              renderOrder={13}
+              onContextMenu={(e) => {
+                e.stopPropagation();
+                e.nativeEvent.preventDefault();
+                onToggleExcluded(f.id);
+              }}
+              onPointerOver={() => {
+                document.body.style.cursor = "pointer";
+              }}
+              onPointerOut={() => {
+                document.body.style.cursor = "";
+              }}
+            >
+              <sphereGeometry args={[ex ? r * 1.25 : r, 16, 16]} />
+              <meshBasicMaterial
+                color={ex ? "#e05a5a" : "#7fd0ff"}
+                transparent
+                opacity={ex ? 0.9 : 0.32}
+                depthTest={false}
+                depthWrite={false}
+              />
+            </mesh>
+          );
+        })}
+      </group>
+      <CameraRig dir={camDir} center={camCenter} dist={Math.max(partSize * 1.8, 50)} />
       {/* Free arcball rotation (like Toolpath): no up-axis pole, so the part
           turns in ANY direction — fixes the "can't rotate horizontally at the
           edge-on/top view" pole lock that OrbitControls can't escape. */}

@@ -18,6 +18,7 @@ export interface QuoteInput {
 
 interface Party {
   name: string;
+  company: string;
   address: string;
   gstin: string;
   email: string;
@@ -161,7 +162,7 @@ export function QuoteModal({
   const [customers, setCustomers] = useState<Party[]>(() =>
     load("cnc.quote.customers", [] as Party[]));
   const [customer, setCustomer] = useState<Party>({
-    name: "", address: "", gstin: "", email: "", phone: "",
+    name: "", company: "", address: "", gstin: "", email: "", phone: "",
   });
   const [currencies, setCurrencies] = useState<CurrencyPreset[]>(() =>
     load("cnc.quote.currencies", BASE_CURRENCIES));
