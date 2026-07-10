@@ -37,8 +37,12 @@ def main():
         get_default_tools(),
         get_default_materials()[0],
     )
-    if len(operations) != 2:
-        raise AssertionError(f"expected pocket rough and finish operations, got {len(operations)}")
+    # GAP-2: pocket finishing split into wall + floor passes → 3 ops
+    # (Rough End Mill, Finish End Mill - wall finish, Finish End Mill - floor finish).
+    if len(operations) != 3:
+        raise AssertionError(
+            f"expected pocket rough + wall/floor finish operations (3), got {len(operations)}"
+        )
 
     required_columns = {
         "operation_id",

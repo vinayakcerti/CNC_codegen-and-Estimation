@@ -19,17 +19,19 @@ from modules.stock_allowance import apply_stock_allowance_to_candidates
 
 
 _SAMPLES = {
+    # Casing follows the canonical planner label ("Face Milling"), matching the
+    # 17b entry below — the adjusted-candidate path relabels to canonical form.
     "M01_vmc_basic_plate_holes.step": {
-        "counts": {"Face milling": 2, "Hole": 4},
+        "counts": {"Face Milling": 2, "Hole": 4},
     },
     "M02_vmc_slot_plate.step": {
-        "counts": {"Face milling": 2, "Slot": 1},
+        "counts": {"Face Milling": 2, "Slot": 1},
     },
     "M03_vmc_blind_rectangular_pocket.step": {
-        "counts": {"Face milling": 2, "Pocket": 1},
+        "counts": {"Face Milling": 2, "Pocket": 1},
     },
     "M07_vmc_chamfered_plate.step": {
-        "counts": {"Face milling": 2, "Hole": 4, "Chamfer": 1},
+        "counts": {"Face Milling": 2, "Hole": 4, "Chamfer": 1},
     },
     "17b_top_milled_step_shoulder-Body.step": {
         "counts": {"Face Milling": 2, "Step": 1},
