@@ -510,6 +510,10 @@ function buildMachiningBreakdown(
 interface EffortEstimateParams {
   filename: string;
   scopeLabel: string;
+  // The USER's letterhead (shop that owns the tool) — same company block +
+  // logo they save in the Quote modal. Our product stays a small credit line;
+  // the document is THEIR branded paper.
+  company?: { name?: string; address?: string; logo?: string } | null;
   machine: string;
   materialLine: string;
   machineMin: number;
@@ -570,6 +574,17 @@ function effortEstimateHtml(p: EffortEstimateParams): string {
   .note{margin-top:22px;color:var(--mut);font-size:11px;border-top:1px solid var(--line);padding-top:8px}
   @media print{body{padding:0}}
 </style></head><body>
+${(() => {
+  const co = p.company;
+  if (!co || (!co.logo && !co.name)) return "";
+  const mark = co.logo
+    ? `<img src="${co.logo}" alt="logo" style="max-height:52px;max-width:180px;object-fit:contain">`
+    : `<div style="font-size:17px;font-weight:700">${esc(co.name || "")}</div>`;
+  const addr = co.address
+    ? `<div style="font-size:11px;color:var(--mut);white-space:pre-line;margin-top:3px">${esc(co.address)}</div>`
+    : "";
+  return `<div style="margin-bottom:14px">${mark}${addr}</div>`;
+})()}
 <h1>Effort Estimate</h1>
 <p class="sub">Internal machining-effort sheet for quoting — not a customer quote. &nbsp;${esc(p.filename)} <span class="badge">${esc(p.scopeLabel)}</span> <span class="badge">${date}</span></p>
 
@@ -2924,6 +2939,19 @@ export default function App() {
                                 openPrintDoc(
                                   effortEstimateHtml({
                                     filename: analysis.filename,
+                                    // Shop letterhead — the same company block +
+                                    // logo saved from the Quote modal, so the
+                                    // user uploads once and both documents
+                                    // carry THEIR branding.
+                                    company: (() => {
+                                      try {
+                                        return JSON.parse(
+                                          lsGet("cnc.quote.company") || "null",
+                                        ) as EffortEstimateParams["company"];
+                                      } catch {
+                                        return null;
+                                      }
+                                    })(),
                                     scopeLabel:
                                       scoped && selectedGroup
                                         ? scopeLabel(selectedGroup)
