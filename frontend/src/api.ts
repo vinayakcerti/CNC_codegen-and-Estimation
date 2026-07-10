@@ -368,6 +368,43 @@ export interface StrategyResult {
   body_feature_counts?: FeatureCounts | null;
 }
 
+// ---- AI Assistant panel (paid tier) ----
+export interface AssistantChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+// Compact plan summary sent with every question — never raw meshes/candidates.
+export interface AssistantContext {
+  filename: string;
+  material: string;
+  machine: string | null;
+  setups: {
+    label: string;
+    op_count: number;
+    subtotal_min: number;
+    workholding: string | null;
+  }[];
+  totals: {
+    machine_time_min: number;
+    tool_changes: number;
+    setup_count: number;
+  };
+  estimate: {
+    material: number;
+    machining: number;
+    setups: number;
+    total: number;
+  };
+  excluded_count: number;
+}
+
+export interface AssistantResult {
+  available: boolean;
+  answer?: string;
+  message?: string;
+}
+
 async function postFile<T>(
   path: string,
   file: File,
@@ -389,6 +426,19 @@ async function postFile<T>(
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
   if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail ?? `Request failed: ${res.status}`);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -433,5 +483,7 @@ export const api = {
     if (opts?.basis) query.basis = opts.basis;
     return postFile<StrategyResult>("/api/strategy", file, query, form);
   },
+  assistant: (question: string, context: AssistantContext, history?: AssistantChatMessage[]) =>
+    postJson<AssistantResult>("/api/assistant", { question, context, history }),
   sampleFile,
 };

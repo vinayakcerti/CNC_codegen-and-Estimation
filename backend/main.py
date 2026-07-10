@@ -25,6 +25,14 @@ import json
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+# Optional — the AI Assistant panel degrades to a "set your API key" message
+# when either the package or ANTHROPIC_API_KEY is missing (see /api/assistant).
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
 
 from modules.machine_capability import normalize_machine_capabilities
 
@@ -1287,3 +1295,111 @@ async def strategy(
             else None
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# AI Assistant panel (paid-tier). Additive, optional: with no ANTHROPIC_API_KEY
+# the endpoint still returns 200 so the frontend can show a "set your key"
+# message instead of crashing. The assistant only ever sees the compact plan
+# context the frontend sends — no file re-upload, no server-side plan re-run.
+# ---------------------------------------------------------------------------
+
+_ANTHROPIC_MODEL_DEFAULT = "claude-sonnet-5"
+
+_ASSISTANT_SYSTEM_PROMPT = """You are a CNC process-planning copilot embedded in \
+CNC Plan & Process Pro, a quoting tool. A machinist or shop owner is asking you \
+about the plan currently on screen for ONE part.
+
+You will receive a JSON "context" object with the part's setups, operation \
+counts, machining times, estimate line items, and any features the user has \
+excluded from machining. Answer using ONLY the numbers in that context — do not \
+invent tool numbers, feed rates, cycle times, or capabilities the context does \
+not mention. If the context does not contain what you need to answer precisely, \
+say so plainly rather than guessing.
+
+Ground rules:
+- Talk like a practical machinist-adviser, not a generic chatbot: concrete, \
+numbers-first, shop-floor language.
+- Cite actual figures from the context (setup counts, minutes, currency amounts) \
+when they support your point.
+- All costs and times in the context are ESTIMATES from an analytical time model \
+— say so if the user seems to be treating a number as guaranteed.
+- Keep answers short by default (a few sentences or a short list). Only go long \
+if the question genuinely requires it (e.g. "explain to my customer").
+- You cannot change the plan, re-run analysis, or access anything outside the \
+provided context. If asked to do something outside that (e.g. "email this to my \
+customer", "re-quote with a different machine"), say what you can't do and \
+suggest the in-app action instead.
+- Do not fabricate machine capabilities, tool libraries, or shop rates beyond \
+what's in the context."""
+
+
+class AssistantMessage(BaseModel):
+    role: str
+    content: str
+
+
+class AssistantRequest(BaseModel):
+    question: str
+    context: dict
+    history: list[AssistantMessage] | None = None
+
+
+@app.post("/api/assistant")
+async def assistant(body: AssistantRequest):
+    """Answer a question about the CURRENT plan context. Never raises for a
+    missing/misconfigured key — the panel degrades to a static message."""
+    if anthropic is None:
+        return {
+            "available": False,
+            "message": "The assistant package is not installed on the server. "
+                       "Run `pip install anthropic` in the server environment.",
+        }
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {
+            "available": False,
+            "message": "Set ANTHROPIC_API_KEY on the server to enable the assistant.",
+        }
+    if not body.question or not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question is required.")
+
+    model = os.environ.get("ANTHROPIC_MODEL") or _ANTHROPIC_MODEL_DEFAULT
+    messages = []
+    for m in (body.history or [])[-12:]:  # bounded — keep the request small
+        role = "assistant" if m.role == "assistant" else "user"
+        if m.content and m.content.strip():
+            messages.append({"role": role, "content": m.content})
+    messages.append({
+        "role": "user",
+        "content": (
+            f"Plan context (JSON):\n{json.dumps(body.context, default=str)}\n\n"
+            f"Question: {body.question.strip()}"
+        ),
+    })
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model=model,
+            max_tokens=1000,
+            temperature=0.3,
+            system=_ASSISTANT_SYSTEM_PROMPT,
+            messages=messages,
+        )
+    except anthropic.AuthenticationError:
+        return {
+            "available": False,
+            "message": "ANTHROPIC_API_KEY on the server was rejected. Check the key.",
+        }
+    except anthropic.APIStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Assistant request failed: {e.message}")
+    except Exception as e:  # network errors, etc. — never crash the app
+        raise HTTPException(status_code=502, detail=f"Assistant request failed: {e}")
+
+    answer = "".join(
+        block.text for block in resp.content if getattr(block, "type", None) == "text"
+    ).strip()
+    if not answer:
+        answer = "I couldn't generate a response for that — try rephrasing the question."
+    return {"available": True, "answer": answer}
