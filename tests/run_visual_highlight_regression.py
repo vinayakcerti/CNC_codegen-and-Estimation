@@ -186,7 +186,8 @@ def _run_slide_base_highlight_check():
 
 
 def _run_slide_base_grouping_check(candidates):
-    import app
+    # Grouping logic moved out of the retired Streamlit app.py into a module.
+    from modules import review_grouping as app
 
     groups = app._build_candidate_groups(candidates, "Weldment / Fabricated Part")
     slot_candidates = [c for c in candidates if c.get("feature_type") == "Slot"]

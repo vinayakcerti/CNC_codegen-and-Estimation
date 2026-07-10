@@ -176,7 +176,8 @@ def _run_sample(entry):
 
     grouping = entry.get("grouping")
     if grouping:
-        import app
+        # Grouping logic moved out of the retired Streamlit app.py into a module.
+        from modules import review_grouping as app
         groups = app._build_candidate_groups(adjusted, grouping["starting_part_type"])
         locations = sum(
             group.get("count", 0)

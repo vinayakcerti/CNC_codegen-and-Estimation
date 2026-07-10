@@ -1,4 +1,10 @@
-streamlit>=1.32.0
+# Python backend requirements. NOTE: cadquery/OCCT comes from the conda env
+# `cnc-cadquery` (conda-forge), not pip — run the backend via
+#   conda run -n cnc-cadquery python -m uvicorn backend.main:app --port 8000
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-multipart>=0.0.9
 pandas>=2.0.0
 plotly>=5.18.0
 python-pptx>=1.0.0
+python-docx>=1.1.0

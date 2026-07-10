@@ -1,7 +1,12 @@
-# CNC Process Planner
+# CNC Plan & Process Pro
 
-A Python Streamlit application for Indian SME CNC workshops.
-Covers the full process from CAD import through G-code export and job documentation.
+CNC process planning & quoting for Indian SME machine shops — FastAPI backend +
+React 3D web app. Covers the full flow: STEP import → feature detection →
+fixturing-based setups → operation strategy → cycle time → estimate → branded
+quote / effort estimate / draft G-code.
+
+*(The original Streamlit UI was retired in July 2026; the planning modules it
+pioneered live on under `modules/` and power the API.)*
 
 ## Features
 
@@ -19,14 +24,18 @@ Covers the full process from CAD import through G-code export and job documentat
 ## Quick Start
 
 ```bash
-pip install -r requirements.txt
-streamlit run app.py
+# Backend (CadQuery/OCCT needs the conda env)
+conda run -n cnc-cadquery python -m uvicorn backend.main:app --port 8000
+
+# Frontend (separate terminal)
+cd frontend && npm install && npm run dev   # http://localhost:5173
 ```
 
 ## Project Structure
 
 ```
-app.py                  # Main Streamlit application (10 screens)
+backend/main.py         # FastAPI API (analyze, strategy, estimate, weldment)
+frontend/               # React 19 + Vite + three.js web app
 modules/
   data_store.py         # SQLite persistence, defaults loader
   operation_planner.py  # Feature → operation rule engine
