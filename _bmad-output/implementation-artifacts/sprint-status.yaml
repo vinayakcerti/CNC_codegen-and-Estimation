@@ -1,12 +1,14 @@
 # generated: 2026-06-11
-# last_updated: 2026-06-19 (v3-lathe-turning branch created)
+# last_updated: 2026-07-11 (v4-web-ui era: epics 9-18 done; ongoing work is
+#   tracked in the Claude session task list, not BMAD stories. Remaining BMAD
+#   scope = Epic 19 stories 19-3..19-10 + Epic 20 (lathe/turning-mill).)
 # project: CNC Process Planner
 # project_key: NOKEY
 # tracking_system: file-system
 # story_location: _bmad-output/implementation-artifacts
 
 generated: 2026-06-11
-last_updated: 2026-06-19
+last_updated: 2026-07-11
 project: CNC Process Planner
 project_key: NOKEY
 tracking_system: file-system
