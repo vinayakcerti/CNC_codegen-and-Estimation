@@ -1323,6 +1323,64 @@ export default function App() {
     return meshes.length ? meshes : null;
   }, [selOpData, analysis]);
 
+  // Exclusion helpers — declared ABOVE everything that calls them during
+  // render (the assembly rollup memo below runs at its position in the body;
+  // a later `const` would be a temporal-dead-zone crash, invisible to tsc).
+  const opFeatureKey = (op: StrategyOp): string =>
+    op.geo?.candidate_id || baseFeatureName(op.feature || "") || op.feature || "";
+  const isOpExcluded = (op: StrategyOp): boolean => excluded.has(opFeatureKey(op));
+  // Exclusion-aware totals. Cutting time drops EXACTLY (sum of surviving
+  // cut_min); overheads SCALE instead of sticking: a setup left with zero ops
+  // stops charging setup time, tool changes are recounted from the surviving
+  // tool sequence, rapid scales with the surviving cutting fraction. With
+  // nothing excluded the original totals pass through untouched, so the
+  // no-exclusion baseline (and every gate) is byte-identical.
+  const exclusionAdjusted = (
+    sus: StrategySetup[],
+    totals: StrategyResult["totals"],
+  ) => {
+    const machineMin = totals.total_machine_time_min ?? 0;
+    const rapidMin = totals.rapid_time_min ?? 0;
+    const tcMin = totals.tool_change_time_min ?? 0;
+    const setupMin = totals.setup_time_min ?? 0;
+    const tcCount = totals.num_tool_changes ?? 0;
+    let cutAll = 0, cutInc = 0, tcNew = 0, setupsInc = 0;
+    let anyExcluded = false;
+    for (const su of sus) {
+      let prevTool: string | null = null;
+      let any = false;
+      for (const op of su.ops) {
+        const c = op.cut_min || 0;
+        cutAll += c;
+        if (isOpExcluded(op)) { anyExcluded = true; continue; }
+        cutInc += c;
+        any = true;
+        const t = op.tool_display || op.tool || "";
+        if (prevTool !== null && t !== prevTool) tcNew++;
+        prevTool = t;
+      }
+      if (any) setupsInc++;
+    }
+    if (!anyExcluded) {
+      return { machineMin, rapidMin, tcMin, setupMin, tcCount, includedSetups: sus.length };
+    }
+    const frac = cutAll > 0 ? cutInc / cutAll : 0;
+    const cutAuth = Math.max(machineMin - rapidMin - tcMin - setupMin, 0);
+    const perTc = tcCount > 0 ? tcMin / tcCount : 0;
+    const tcCount2 = Math.min(tcCount, tcNew);
+    const tcMin2 = Math.min(tcMin, tcNew * perTc);
+    const rapid2 = rapidMin * frac;
+    const setup2 = sus.length > 0 ? setupMin * (setupsInc / sus.length) : setupMin;
+    return {
+      machineMin: cutAuth * frac + rapid2 + tcMin2 + setup2,
+      rapidMin: rapid2,
+      tcMin: tcMin2,
+      setupMin: setup2,
+      tcCount: tcCount2,
+      includedSetups: setupsInc,
+    };
+  };
+
   // ---- ASSY-ROLLUP: the weldment job ledger --------------------------------
   // A welded assembly is NOT machined as one billet: each body is machined
   // individually (exact per-body plans), then welded, then optionally machined
@@ -1509,9 +1567,6 @@ export default function App() {
       /* storage disabled — keep session state only */
     }
   }, [excluded, analysis?.filename]);
-  const opFeatureKey = (op: StrategyOp): string =>
-    op.geo?.candidate_id || baseFeatureName(op.feature || "") || op.feature || "";
-  const isOpExcluded = (op: StrategyOp): boolean => excluded.has(opFeatureKey(op));
   const toggleFeatureExcluded = (key: string) =>
     setExcluded((prev) => {
       const n = new Set(prev);
@@ -1528,58 +1583,6 @@ export default function App() {
       }
       return n;
     });
-  // Exclusion-aware totals. Cutting time drops EXACTLY (sum of surviving
-  // cut_min); overheads SCALE instead of sticking: a setup left with zero ops
-  // stops charging setup time, tool changes are recounted from the surviving
-  // tool sequence, rapid scales with the surviving cutting fraction. With
-  // nothing excluded the original totals pass through untouched, so the
-  // no-exclusion baseline (and every gate) is byte-identical.
-  const exclusionAdjusted = (
-    sus: StrategySetup[],
-    totals: StrategyResult["totals"],
-  ) => {
-    const machineMin = totals.total_machine_time_min ?? 0;
-    const rapidMin = totals.rapid_time_min ?? 0;
-    const tcMin = totals.tool_change_time_min ?? 0;
-    const setupMin = totals.setup_time_min ?? 0;
-    const tcCount = totals.num_tool_changes ?? 0;
-    let cutAll = 0, cutInc = 0, tcNew = 0, setupsInc = 0;
-    let anyExcluded = false;
-    for (const su of sus) {
-      let prevTool: string | null = null;
-      let any = false;
-      for (const op of su.ops) {
-        const c = op.cut_min || 0;
-        cutAll += c;
-        if (isOpExcluded(op)) { anyExcluded = true; continue; }
-        cutInc += c;
-        any = true;
-        const t = op.tool_display || op.tool || "";
-        if (prevTool !== null && t !== prevTool) tcNew++;
-        prevTool = t;
-      }
-      if (any) setupsInc++;
-    }
-    if (!anyExcluded) {
-      return { machineMin, rapidMin, tcMin, setupMin, tcCount, includedSetups: sus.length };
-    }
-    const frac = cutAll > 0 ? cutInc / cutAll : 0;
-    const cutAuth = Math.max(machineMin - rapidMin - tcMin - setupMin, 0);
-    const perTc = tcCount > 0 ? tcMin / tcCount : 0;
-    const tcCount2 = Math.min(tcCount, tcNew);
-    const tcMin2 = Math.min(tcMin, tcNew * perTc);
-    const rapid2 = rapidMin * frac;
-    const setup2 = sus.length > 0 ? setupMin * (setupsInc / sus.length) : setupMin;
-    return {
-      machineMin: cutAuth * frac + rapid2 + tcMin2 + setup2,
-      rapidMin: rapid2,
-      tcMin: tcMin2,
-      setupMin: setup2,
-      tcCount: tcCount2,
-      includedSetups: setupsInc,
-    };
-  };
-
   const estCore = useMemo(() => {
     if (!analysis || !strategy) return null;
     const adj = exclusionAdjusted(strategy.setups, strategy.totals);
