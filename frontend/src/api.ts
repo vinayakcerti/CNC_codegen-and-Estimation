@@ -316,6 +316,8 @@ export interface StrategyOp {
   feed_mm_min: number;
   path_mm: number;
   cut_min: number;
+  // ARD R2: machined surface (cm²) this op touches — rate-card costing input.
+  machined_area_cm2?: number;
   blocked: boolean;
   geo: OpGeo | null;
   // Catalog-style tool name ("6mm Drill 135°") — presentation only

@@ -217,6 +217,62 @@ def estimate_path_length(feature, operation_type, tool=None, variant=""):
     return 50.0 * qty
 
 
+def estimate_machined_area(feature, operation_type, variant=""):
+    """Machined surface area for one op, in cm² (ARD R2 — rate-card costing).
+
+    Planning approximations from feature envelope geometry — not CAM surface
+    integrals. Each op reports the surface IT touches; a rough + finish pair on
+    the same face both report that face (the pricing layer counts a physical
+    surface once — see the rate-card engine).
+    """
+    ftype    = normalize_feature_type(feature.get("feature_type", ""))
+    length   = float(feature.get("length",   0) or 0)
+    width    = float(feature.get("width",    0) or 0)
+    depth    = float(feature.get("depth",    0) or 0)
+    diameter = float(feature.get("diameter", 0) or 0)
+    qty      = int(feature.get("quantity", 1) or 1)
+    name     = (feature.get("feature_name") or "").lower()
+
+    area_mm2 = 0.0
+    if ftype == "Face Milling":
+        area_mm2 = length * width
+    elif ftype == "Pocket":
+        floor = length * width
+        walls = 2 * (length + width) * depth
+        if operation_type == "Finish End Mill":
+            area_mm2 = walls if "wall" in variant else floor
+        else:
+            area_mm2 = floor + walls
+    elif ftype == "Slot":
+        is_open = "(open)" in name or "open" in name
+        floor = length * width
+        walls = 2 * length * depth + (0 if is_open else 2 * width * depth)
+        if operation_type == "Finish End Mill":
+            area_mm2 = walls if "wall" in variant else floor
+        else:
+            area_mm2 = floor + walls
+    elif ftype == "Step":
+        floor = length * width
+        wall = length * depth
+        if operation_type == "Finish End Mill":
+            area_mm2 = wall if "wall" in variant else floor
+        else:
+            area_mm2 = floor + wall
+    elif ftype == "Edge Milling":
+        area_mm2 = (length or 50) * (width or depth or 10)
+    elif ftype == "Outer Profile":
+        area_mm2 = 2 * (length + width) * max(depth, 1)
+    elif ftype == "Chamfer":
+        area_mm2 = (diameter or 10) * 3.14 * max(depth or 2, 1)
+    elif ftype in ("Hole", "Large Hole / Boring"):
+        # Lateral (bore) surface — informational; holes are priced from the
+        # hole cost library in rate-card mode, not by area.
+        if operation_type != "Spot Drill":
+            area_mm2 = 3.1416 * diameter * depth
+    # Turned regions (Manual Review rows) report 0 — lathe pricing is separate.
+    return round(area_mm2 * qty / 100.0, 2)
+
+
 def _context_note(ftype, feature_name, diameter, op_type):
     """Return an additional note string for a specific feature/operation context.
 
@@ -598,6 +654,10 @@ def plan_operations(features, tools, material, machine=None):
                 "spindle_rpm": spindle,
                 "feed_rate_mm_min": feed,
                 "est_path_length_mm": round(path_len, 1),
+                # ARD R2: machined surface per op (cm²) for rate-card costing.
+                "machined_area_cm2": estimate_machined_area(
+                    feature, op_type, variant=rule.get("feature_name_suffix", "")
+                ),
                 "tool_warning": tool_warning,
                 "tool_feasibility_status": tool_assessment["status"],
                 "planning_blocked": bool(tool_assessment["blocked"]),

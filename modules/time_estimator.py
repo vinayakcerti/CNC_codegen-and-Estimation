@@ -135,6 +135,8 @@ def estimate_time_per_operation(operations, machine, material):
             "feed_mm_min": feed,
             "path_mm": path,
             "cut_min": round(cut_min, 2),
+            # ARD R2: machined surface (cm²) for rate-card costing + export.
+            "machined_area_cm2": op.get("machined_area_cm2", 0.0),
             "blocked": bool(op.get("planning_blocked")),
         })
     rows.sort(key=lambda r: r["op_num"])
