@@ -537,6 +537,15 @@ interface EffortEstimateParams {
   breakdown: MachiningBreakdown;
   // Batch pricing (qty > 1): setup paid once, unit price amortized.
   batch?: { qty: number; unit: number; total: number; setupOnce: number } | null;
+  // Weldment job rollup (multi-body): parts × qty + welding + post-weld.
+  job?: {
+    mode: "parts" | "assembled";
+    assemblies: number;
+    rows: { label: string; pieces: number; min: number; cost: number; ready: boolean }[];
+    weldMin: number; weldCost: number;
+    pwMin: number; pwCost: number;
+    subtotal: number; margin: number; total: number;
+  } | null;
   setups: { label: string; ops: number; min: number }[];
   cost: {
     material: number; machining: number; setups: number;
@@ -642,6 +651,23 @@ ${p.batch && p.batch.qty > 1 ? `
   <tr class="tot"><td>Indicative total</td><td>${inr(p.cost.total)}</td></tr>
 </table>
 
+${p.job ? `
+<h2>${p.job.mode === "assembled"
+    ? "Weldment job — post-weld machining only (arrives welded)"
+    : "Weldment job — parts × quantity + welding + post-weld"}</h2>
+<table>
+  <thead><tr><th>Item</th><th class="n">Time</th><th class="n">Cost</th></tr></thead>
+  <tbody>
+  ${p.job.mode === "assembled" ? "" : p.job.rows.map((r) =>
+    `<tr><td>${esc(r.label)} — ${r.pieces} pcs${r.ready ? "" : " (NOT PLANNED)"}</td><td class="n">${r.ready ? fmtMin(r.min) : "—"}</td><td class="n">${r.ready ? inr(r.cost) : "—"}</td></tr>`,
+  ).join("")}
+  ${p.job.mode === "assembled" ? "" :
+    `<tr><td>Welding / assembly${p.job.assemblies > 1 ? ` × ${p.job.assemblies}` : ""}</td><td class="n">${fmtMin(p.job.weldMin)}</td><td class="n">${inr(p.job.weldCost)}</td></tr>`}
+  <tr><td>Post-weld machining${p.job.assemblies > 1 ? ` × ${p.job.assemblies}` : ""}</td><td class="n">${fmtMin(p.job.pwMin)}</td><td class="n">${inr(p.job.pwCost)}</td></tr>
+  <tr><td>Margin</td><td class="n"></td><td class="n">${inr(p.job.margin)}</td></tr>
+  <tr class="tot"><td>Job total${p.job.assemblies > 1 ? ` (${p.job.assemblies} assemblies)` : ""}</td><td class="n"></td><td class="n">${inr(p.job.total)}</td></tr>
+  </tbody>
+</table>` : ""}
 <p class="note">Times are analytical estimates (feed × path-length with a material safety factor); verify against shop actuals. Prepared by CNC Plan &amp; Process Pro.</p>
 </body></html>`;
 }
@@ -2532,6 +2558,23 @@ export default function App() {
                 open={quoteOpen}
                 onClose={() => setQuoteOpen(false)}
                 quote={(() => {
+                  // Weldment job: quote the Assembly job ledger — only when it
+                  // is COMPLETE (all part groups planned) or post-weld-only,
+                  // never a misleadingly low partial sum.
+                  if (rollup && assemblyMode === "assembled") {
+                    return {
+                      partName: analysis.filename,
+                      qty: rollup.NA,
+                      unitAmount: rollup.assembledTotal / rollup.NA,
+                    };
+                  }
+                  if (rollup && assemblyMode === "parts" && rollup.ready) {
+                    return {
+                      partName: analysis.filename,
+                      qty: rollup.NA,
+                      unitAmount: rollup.total / rollup.NA,
+                    };
+                  }
                   // Batch-aware quote: setup components (setup time cost +
                   // per-setup charges) are amortized over the batch quantity;
                   // at qty 1 this is exactly the legacy routed total.
@@ -3553,6 +3596,39 @@ export default function App() {
                                     batch: N > 1
                                       ? { qty: N, unit: unitCost, total: batchTotal, setupOnce }
                                       : null,
+                                    // Weldment job section — mirrors the
+                                    // Assembly job ledger (parts × qty +
+                                    // welding + post-weld, or post-weld only).
+                                    job:
+                                      !scoped && rollup && assemblyMode
+                                        ? {
+                                            mode: assemblyMode,
+                                            assemblies: rollup.NA,
+                                            rows: rollup.rows.map((r) => ({
+                                              label: titleCase(r.g.classification) + ` ×${r.g.quantity}`,
+                                              pieces: r.pieces,
+                                              min: r.minBatch,
+                                              cost: r.costBatch,
+                                              ready: r.ready,
+                                            })),
+                                            weldMin: rollup.weldMin,
+                                            weldCost: rollup.weldCost,
+                                            pwMin: rollup.pwTotalMin,
+                                            pwCost: rollup.pwCost,
+                                            subtotal:
+                                              assemblyMode === "assembled"
+                                                ? rollup.assembledSubtotal
+                                                : rollup.subtotal,
+                                            margin:
+                                              assemblyMode === "assembled"
+                                                ? rollup.assembledTotal - rollup.assembledSubtotal
+                                                : rollup.total - rollup.subtotal,
+                                            total:
+                                              assemblyMode === "assembled"
+                                                ? rollup.assembledTotal
+                                                : rollup.total,
+                                          }
+                                        : null,
                                     setups: ledgerSetups.map((su) => ({
                                       label: su.setup_label,
                                       ops: su.ops.length,
