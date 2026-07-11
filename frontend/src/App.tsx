@@ -1805,6 +1805,21 @@ export default function App() {
     };
   }, [selOpData]);
 
+  // Auto-focus target for the selected op: the camera flies to the feature
+  // along its outward tool direction (fallback: the setup face, else iso).
+  const opFocus = useMemo((): { point: Vec3; dir: Vec3 } | null => {
+    const g = selOpData?.geo;
+    if (!g || g.x == null || g.y == null || g.z == null) return null;
+    if (opApproach) {
+      return {
+        point: opApproach.origin,
+        dir: [-opApproach.dir[0], -opApproach.dir[1], -opApproach.dir[2]] as Vec3,
+      };
+    }
+    const d = SETUP_DIRS[normalizeSetupLabel(selOpData?.setup ?? "")] ?? ISO_DIR;
+    return { point: [g.x, g.y, g.z] as Vec3, dir: d };
+  }, [selOpData, opApproach]);
+
   // Fixture context: the active machined-face normal (tool axis) + the
   // recommended workholding method, so the 3D fixture clamps CLEAR of the
   // face being cut and matches vise-vs-fixture-plate. Sourced from the
@@ -2156,9 +2171,19 @@ export default function App() {
   // Rollups for whichever plan the Strategy tab is showing (scoped or whole).
   const rollupsBySetup = useMemo(() => {
     let setups = stratForView?.setups ?? [];
-    // "Already welded" intent: the assembly-level plan keeps only SURFACE
-    // operations (facing, chamfer/edge cleanup) — you can't pocket or drill a
-    // part that's already buried in the weldment. Select/deselect as usual.
+    // "Already welded" intent: parts buried in the weldment can't be machined
+    // individually at all — a scoped body shows no ops (banner explains).
+    if (
+      selectedGroup &&
+      assemblyMode === "assembled" &&
+      wmResult &&
+      wmResult.groups.length > 1
+    ) {
+      return [];
+    }
+    // …and the assembly-level plan keeps only SURFACE operations (facing,
+    // chamfer/edge cleanup) — you can't pocket or drill inside a weldment.
+    // Select/deselect as usual.
     if (
       !selectedGroup &&
       assemblyMode === "assembled" &&
@@ -2257,7 +2282,11 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <span className="t">{fmtNum(g.machining_min_per_pc)} min/pc</span>
+                <span className="t">
+                  {assemblyMode === "assembled"
+                    ? "view only"
+                    : `${fmtNum(g.machining_min_per_pc)} min/pc`}
+                </span>
               </div>
             ))}
           </>
@@ -2612,6 +2641,7 @@ export default function App() {
                   // points up (cutter from the top) — like Toolpath. Applies
                   // to the scoped body view too (where the user works).
                   orientTo={selOpData || activeSetup ? fixtureCtx.toolAxis : null}
+                  focus={opFocus}
                   // Per-op cone (from the op's real entry direction) wins; the
                   // setup-level cone is the fallback for the whole-assembly
                   // Setups view when no single op is selected.
@@ -3100,6 +3130,16 @@ export default function App() {
                                 {assemblyMode === "assembled"
                                   ? "Already-welded intent: showing SURFACE operations only (facing, chamfer/edge cleanup) — select/deselect as needed; pockets and holes inside the weldment are hidden. Change the intent on the Overview tab."
                                   : "Weldment: the plan below treats the welded assembly as ONE block — machine each part individually (click a body under Bodies) and price with the Assembly job ledger on the Estimate tab. Only post-weld ops (e.g. facing) happen at assembly level."}
+                              </div>
+                            )}
+                            {selectedGroup && assemblyMode === "assembled" &&
+                              wmResult && wmResult.groups.length > 1 && (
+                              <div className="scope-note" style={{ margin: "6px 0 8px" }}>
+                                Already-welded intent: this part sits inside the weldment —
+                                it can't be machined individually anymore, so no operations
+                                are planned for it (3D view is for inspection). Switch the
+                                intent to “Build part-by-part” on the Overview tab to plan
+                                this part.
                               </div>
                             )}
                             {rollupsBySetup.length === 0 && (

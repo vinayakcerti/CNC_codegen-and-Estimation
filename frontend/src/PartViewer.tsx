@@ -635,6 +635,7 @@ export function PartViewer({
   theme = "dark",
   cameraDir = null,
   orientTo = null,
+  focus = null,
   approach = null,
   opacity = 1,
   workholding = null,
@@ -658,6 +659,9 @@ export function PartViewer({
   // set, the part is rotated so this axis points UP (+Z) — the setup is shown
   // "faced up" with the cutter coming from the top, like Toolpath.
   orientTo?: Vec3 | null;
+  // Selected operation's feature (raw-CAD frame): the camera flies to it and
+  // zooms in along its outward tool direction — no manual hunting/rotating.
+  focus?: { point: Vec3; dir: Vec3 } | null;
   // Tool-approach cone: origin on the part face, dir pointing into the part
   approach?: Approach | null;
   // Part opacity (0.2–1); multiplies the dim-on-highlight factor
@@ -782,6 +786,30 @@ export function PartViewer({
   // — so right-clicking a selected feature just recolours it, no second marker.
   const selColor = selectedId && excludedSet?.has(selectedId) ? "#ff8f8f" : "#4a9eff";
 
+  // Auto-focus: with an op selected, aim at the FEATURE (transformed into the
+  // oriented frame) from just off its outward tool direction, and come in
+  // closer — the user never has to rotate around hunting for the highlight.
+  let vDir = camDir;
+  let vCenter = camCenter;
+  let vDist = Math.max(partSize * 1.8, 50);
+  if (focus) {
+    const p = new THREE.Vector3(focus.point[0], focus.point[1], focus.point[2]);
+    const d = new THREE.Vector3(focus.dir[0], focus.dir[1], focus.dir[2]);
+    if (d.lengthSq() < 1e-9) d.set(0.577, -0.577, 0.577);
+    d.normalize();
+    if (oriented) {
+      p.applyQuaternion(oriented.q).add(
+        new THREE.Vector3(oriented.offset[0], oriented.offset[1], oriented.offset[2]),
+      );
+      d.applyQuaternion(oriented.q);
+    }
+    // Tilt slightly off the exact normal so the feature reads with depth.
+    d.add(new THREE.Vector3(0.28, -0.22, 0.3)).normalize();
+    vCenter = [p.x, p.y, p.z];
+    vDir = [d.x, d.y, d.z];
+    vDist = Math.max(partSize * 0.55, 40);
+  }
+
   return (
     <Canvas
       camera={{ position: [420, -520, 380], up: UP, fov: 45, near: 1, far: 20000 }}
@@ -855,7 +883,7 @@ export function PartViewer({
               ),
             )}
       </group>
-      <CameraRig dir={camDir} center={camCenter} dist={Math.max(partSize * 1.8, 50)} />
+      <CameraRig dir={vDir} center={vCenter} dist={vDist} />
       {/* Free arcball rotation (like Toolpath): no up-axis pole, so the part
           turns in ANY direction — fixes the "can't rotate horizontally at the
           edge-on/top view" pole lock that OrbitControls can't escape. */}
