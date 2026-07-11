@@ -271,6 +271,9 @@ export interface RateCardBreakdown {
   millingAreaCm2: number;
   millingRate: number;
   millingCost: number;
+  // Per physical surface (deduped feature) — feeds the per-op cost split in
+  // the Excel Ops sheet: the feature's first milling op carries the cost.
+  millingByFeature: { feature: string; areaCm2: number; cost: number }[];
   holes: {
     feature: string;
     dia: number;
@@ -289,7 +292,9 @@ export interface RateCardBreakdown {
 
 const HOLE_OPS = new Set(["Spot Drill", "Drill", "Pilot Drill", "Boring", "Tap"]);
 
-function baseName(name: string): string {
+// Exported so the Excel export can attribute per-op costs to the same
+// physical-feature keys this breakdown dedupes on.
+export function baseName(name: string): string {
   return (name || "")
     .replace(/\s*\((?:Rough|Finish)\)\s*$/i, "")
     .replace(/\s*-\s*(?:wall|floor)\s*finish\s*$/i, "")
@@ -343,6 +348,11 @@ export function rateCardBreakdown(
   const millingAreaCm2 =
     Math.round([...areaByFeature.values()].reduce((s, a) => s + a, 0) * 100) / 100;
   const millingCost = millingAreaCm2 * rate;
+  const millingByFeature = [...areaByFeature.entries()].map(([feature, a]) => ({
+    feature,
+    areaCm2: a,
+    cost: a * rate,
+  }));
 
   const holes: RateCardBreakdown["holes"] = [];
   let holeCost = 0;
@@ -366,6 +376,7 @@ export function rateCardBreakdown(
     millingAreaCm2,
     millingRate: rate,
     millingCost,
+    millingByFeature,
     holes,
     holeCost,
     estimatedCount,

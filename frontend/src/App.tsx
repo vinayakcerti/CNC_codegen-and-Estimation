@@ -8,10 +8,12 @@ import type {
 } from "./api";
 import { PartViewer } from "./PartViewer";
 import {
-  profileForMachine, rateCardBreakdown, updateProfile, audit,
+  profileForMachine, rateCardBreakdown, updateProfile, audit, baseName,
+  inferTolerance,
   type RateCardBreakdown,
 } from "./costing";
 import { CostLibraryPanel } from "./CostLibraryPanel";
+import { buildWorkbook, type WorkbookPayload } from "./excelExport";
 import type { Vec3, Approach, Highlight } from "./PartViewer";
 import { MaterialSelect } from "./MaterialSelect";
 import { MachineSelect } from "./MachineSelect";
@@ -556,6 +558,8 @@ interface EffortEstimateParams {
     material: number; machining: number; setups: number;
     subtotal: number; margin: number; marginPct: number; total: number;
   };
+  // ARD R4 add-on processes (grinding/plating/hardening/powder) — per piece.
+  addons?: { name: string; cost: number }[];
 }
 
 function effortLabel(min: number): string {
@@ -651,6 +655,9 @@ ${p.batch && p.batch.qty > 1 ? `
   <tr><td>Material</td><td>${inr(p.cost.material)}</td></tr>
   <tr><td>Machining</td><td>${inr(p.cost.machining)}</td></tr>
   <tr><td>Setup charges</td><td>${inr(p.cost.setups)}</td></tr>
+${(p.addons ?? [])
+  .map((a) => `  <tr><td>${esc(a.name)} — add-on</td><td>${inr(a.cost)}</td></tr>`)
+  .join("\n")}
   <tr><td>Subtotal</td><td>${inr(p.cost.subtotal)}</td></tr>
   <tr><td>Margin (${p.cost.marginPct}%)</td><td>${inr(p.cost.margin)}</td></tr>
   <tr class="tot"><td>Indicative total</td><td>${inr(p.cost.total)}</td></tr>
@@ -1128,6 +1135,21 @@ export default function App() {
   // Surface grinding flag (ARD R2/R4 link): flips ₹0.60 → ₹0.80 per cm².
   const [grindingSel, setGrindingSel] = useState(false);
   const [costPanelOpen, setCostPanelOpen] = useState(false);
+  // ARD R4: optional add-on processes (per part; empty = off).
+  const [platingSel, setPlatingSel] = useState<"" | "Ni" | "Cr" | "Zn" | "Cd">("");
+  const [hardeningSel, setHardeningSel] = useState(""); // spec, e.g. "45HRC"
+  const [powderSel, setPowderSel] = useState("");       // RAL code
+  // Bodies excluded from machining (purchased parts / bolts), per part file.
+  const [excludedBodies, setExcludedBodies] = useState<Set<string>>(new Set());
+  const toggleBodyExcluded = (groupId: string) =>
+    setExcludedBodies((prev) => {
+      const n = new Set(prev);
+      if (n.has(groupId)) n.delete(groupId);
+      else n.add(groupId);
+      const fn = analysis?.filename;
+      if (fn) lsSet(`cnc.excludedBodies.${fn}`, JSON.stringify([...n]));
+      return n;
+    });
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Uploaded part is retained so material changes can re-run analysis
@@ -1459,14 +1481,18 @@ export default function App() {
   const [pwFormName, setPwFormName] = useState("");
   const [pwFormMin, setPwFormMin] = useState("");
 
-  async function buildRollup() {
-    if (!partFile || !wmResult) return;
+  // Returns the completed plans record so callers (Excel export) can use it
+  // immediately instead of waiting a render for the rollup memo to catch up.
+  async function buildRollup(): Promise<Record<string, StrategyResult> | null> {
+    if (!partFile || !wmResult) return null;
     setRollupErr(null);
     const plans: Record<string, StrategyResult> = { ...rollupPlans };
     try {
       for (let i = 0; i < wmResult.groups.length; i++) {
         const g = wmResult.groups[i];
         if (plans[g.group_id]) continue;
+        // EST-7: purchased parts need no machining plan.
+        if (excludedBodies.has(g.group_id)) continue;
         setRollupBusy(
           `Planning ${titleCase(g.classification)} (${i + 1}/${wmResult.groups.length})…`,
         );
@@ -1479,8 +1505,10 @@ export default function App() {
         plans[g.group_id] = r;
         setRollupPlans({ ...plans });
       }
+      return plans;
     } catch (e) {
       setRollupErr(e instanceof Error ? e.message : "Assembly rollup failed");
+      return null;
     } finally {
       setRollupBusy(null);
     }
@@ -1528,6 +1556,14 @@ export default function App() {
     let ready = true;
     const rows = wmResult.groups.map((g) => {
       const pieces = g.quantity * NA;
+      // EST-7: purchased parts (bolts, standard hardware) stay in the ledger
+      // for the piece count but carry no machining plan and no cost.
+      if (excludedBodies.has(g.group_id)) {
+        return {
+          g, ready: true as const, purchased: true, pieces,
+          minBatch: 0, costBatch: 0,
+        };
+      }
       const plan = rollupPlans[g.group_id];
       if (!plan) {
         ready = false;
@@ -1590,7 +1626,7 @@ export default function App() {
     analysis, wmResult, rollupPlans, excluded, estPreset, estTolerance,
     estComplexity, rateHr, matPriceKg, setupCharge, marginPct, weldRate,
     postWeld, materials, customMaterials, qty, weldMinOverride,
-    rateCardActive, costingProfile, grindingSel,
+    rateCardActive, costingProfile, grindingSel, excludedBodies,
   ]);
 
   // ---- Shared estimate core (Estimate tab ledger + Route tab blocks) ----
@@ -1615,7 +1651,16 @@ export default function App() {
     setPostWeldInit(false);
     setRollupErr(null);
     setWeldMinOverride(null);
-    setGrindingSel(false); // grinding is a per-part decision (ARD R2/R4)
+    setGrindingSel(false); // add-ons are per-part decisions (ARD R2/R4)
+    setPlatingSel("");
+    setHardeningSel("");
+    setPowderSel("");
+    try {
+      const rawB = localStorage.getItem(`cnc.excludedBodies.${fn}`);
+      setExcludedBodies(new Set(rawB ? (JSON.parse(rawB) as string[]) : []));
+    } catch {
+      setExcludedBodies(new Set());
+    }
     const m = lsGet(`cnc.assyMode.${fn}`);
     setAssemblyModeState(m === "parts" || m === "assembled" ? m : null);
   }, [analysis?.filename]);
@@ -1686,14 +1731,55 @@ export default function App() {
     // Setup charges follow the SURVIVING setups — excluding every feature of a
     // setup removes that setup's charge too.
     const setupsCost = adj.includedSetups * setupCharge;
+    // ARD R4 add-ons — priced from the profile's rates in BOTH costing models
+    // (outsourced processes are independent of the machining model). Plating/
+    // powder approximate external area with the stock envelope; grinding uses
+    // machined area; hardening the part weight.
+    const rcInfo =
+      rc ??
+      rateCardBreakdown(strategy.setups, costingProfile, {
+        grinding: grindingSel,
+        isOpExcluded,
+      });
+    const envAreaCm2 = stockSize
+      ? (2 *
+          (stockSize.length * stockSize.width +
+            stockSize.length * stockSize.height +
+            stockSize.width * stockSize.height)) /
+        100
+      : 0;
+    const addons: { name: string; cost: number }[] = [];
+    // Rate-card mode already prices grinding via the flipped milling rate
+    // (0.60 → 0.80 /cm², ARD R2) — the addon line applies in time mode only.
+    if (grindingSel && !rc)
+      addons.push({
+        name: "Surface grinding",
+        cost: costingProfile.addon_rates.grinding_per_cm2 * rcInfo.millingAreaCm2,
+      });
+    if (platingSel)
+      addons.push({
+        name: `Electroplating (${platingSel})`,
+        cost: costingProfile.addon_rates.plating_per_cm2 * envAreaCm2,
+      });
+    if (hardeningSel.trim())
+      addons.push({
+        name: `Hardening (${hardeningSel.trim()})`,
+        cost: costingProfile.addon_rates.hardening_per_kg * massKg,
+      });
+    if (powderSel.trim())
+      addons.push({
+        name: `Powder coating (RAL ${powderSel.trim()})`,
+        cost: costingProfile.addon_rates.powder_per_cm2 * envAreaCm2,
+      });
+    const addonCost = addons.reduce((a, x) => a + x.cost, 0);
     return {
       machineMin, presetMult, tolMult, complexity, machMult, machining,
-      stockSize, massKg, materialCost, setupsCost, rc,
+      stockSize, massKg, materialCost, setupsCost, rc, rcInfo, addons, addonCost,
     };
   }, [
     analysis, strategy, estPreset, estTolerance, estComplexity, excluded,
     customMaterials, materials, stockMode, manualStock, matPriceKg, setupCharge, rateHr,
-    rateCardActive, costingProfile, grindingSel,
+    rateCardActive, costingProfile, grindingSel, platingSel, hardeningSel, powderSel,
   ]);
 
   // Per-body estimate (scoped): same ledger math as estCore but from the
@@ -1736,15 +1822,396 @@ export default function App() {
     const massKg = (stockVolCm3 * density) / 1000;
     const materialCost = massKg * matPriceKg;
     const setupsCost = adj.includedSetups * setupCharge;
+    // ARD R4 add-ons — same model as estCore, scoped to this body.
+    const rcInfo =
+      rc ??
+      rateCardBreakdown(sp.setups, costingProfile, {
+        grinding: grindingSel,
+        isOpExcluded,
+      });
+    const envAreaCm2 =
+      (2 *
+        (stockSize.length * stockSize.width +
+          stockSize.length * stockSize.height +
+          stockSize.width * stockSize.height)) /
+      100;
+    const addons: { name: string; cost: number }[] = [];
+    // Rate-card mode already prices grinding via the flipped milling rate
+    // (0.60 → 0.80 /cm², ARD R2) — the addon line applies in time mode only.
+    if (grindingSel && !rc)
+      addons.push({
+        name: "Surface grinding",
+        cost: costingProfile.addon_rates.grinding_per_cm2 * rcInfo.millingAreaCm2,
+      });
+    if (platingSel)
+      addons.push({
+        name: `Electroplating (${platingSel})`,
+        cost: costingProfile.addon_rates.plating_per_cm2 * envAreaCm2,
+      });
+    if (hardeningSel.trim())
+      addons.push({
+        name: `Hardening (${hardeningSel.trim()})`,
+        cost: costingProfile.addon_rates.hardening_per_kg * massKg,
+      });
+    if (powderSel.trim())
+      addons.push({
+        name: `Powder coating (RAL ${powderSel.trim()})`,
+        cost: costingProfile.addon_rates.powder_per_cm2 * envAreaCm2,
+      });
+    const addonCost = addons.reduce((a, x) => a + x.cost, 0);
     return {
       machineMin, presetMult, tolMult, complexity, machMult, machining,
-      stockSize, massKg, materialCost, setupsCost, rc,
+      stockSize, massKg, materialCost, setupsCost, rc, rcInfo, addons, addonCost,
     };
   }, [
     analysis, selectedGroup, scopedStrategy, scopedBodyIndex, estPreset,
     estTolerance, estComplexity, excluded, customMaterials, materials, matPriceKg,
     setupCharge, rateHr, rateCardActive, costingProfile, grindingSel,
+    platingSel, hardeningSel, powderSel,
   ]);
+
+  // ---- EST-4 (ARD R1): per-part Excel export with cost split ------------
+  // Client-side workbook (excelExport.ts; exceljs lazy-loads on click).
+  // Weldment jobs export one part per body group — missing per-part plans
+  // are computed on first click (same fetch as "Compute exact per-part
+  // plans"). Synthetic Welding / Post-weld / Margin rows keep the Summary
+  // TOTAL reconciled to the on-screen grand total.
+  const [excelBusy, setExcelBusy] = useState(false);
+  async function exportExcel() {
+    if (!analysis || !strategy || excelBusy) return;
+    setExcelBusy(true);
+    try {
+      const profile = costingProfile;
+      const N = Math.max(1, Math.floor(qty) || 1);
+      const density =
+        customMaterials.find((m) => m.name === analysis.material)?.density ??
+        materials.find((m) => m.name === analysis.material)?.density ??
+        2.7;
+      const machMult = estCore ? estCore.machMult : 1;
+
+      type XPart = WorkbookPayload["parts"][number];
+      const syntheticPart = (name: string, cost: number, min: number): XPart => ({
+        name, bodyIndex: -1, material: "—", quantity: 1, weightKg: null,
+        machinedAreaCm2: 0, holeCount: 0, addons: [], costInr: cost,
+        cycleMin: min, ops: [], holes: [], features: [],
+      });
+
+      const partFromPlan = (
+        name: string,
+        bodyIndex: number,
+        plan: StrategyResult | null,
+        base: {
+          quantity: number; weightKg: number | null; costInr: number;
+          cycleMin: number; purchased?: boolean; addons?: string[];
+          features?: Candidate[];
+        },
+      ): XPart => {
+        // Rate-card split for the per-op cost column; also computed in time
+        // mode purely for the informational machined-area number.
+        const rcInfoP = plan
+          ? rateCardBreakdown(plan.setups, profile, {
+              grinding: grindingSel, isOpExcluded,
+            })
+          : null;
+        const rcp = rateCardActive ? rcInfoP : null;
+        const ops: XPart["ops"] = [];
+        const featureCostUsed = new Set<string>();
+        if (plan && !base.purchased) {
+          for (const su of plan.setups)
+            for (const op of su.ops) {
+              if (isOpExcluded(op)) continue;
+              const key = baseName(op.feature || op.operation || "");
+              let costInr: number | null = null;
+              let costNote: string | undefined;
+              if (rcp) {
+                // The feature's FIRST op carries the rate-card price —
+                // rough + finish passes are included in the shop's rate.
+                const hole = rcp.holes.find((h) => h.feature === key);
+                const mill = hole
+                  ? null
+                  : rcp.millingByFeature.find((m) => m.feature === key);
+                if (hole) {
+                  if (!featureCostUsed.has(key)) {
+                    featureCostUsed.add(key);
+                    costInr = hole.cost;
+                    costNote = hole.note;
+                  } else {
+                    costInr = 0;
+                    costNote = "per-hole price carried by the first op";
+                  }
+                } else if (mill) {
+                  if (!featureCostUsed.has(key)) {
+                    featureCostUsed.add(key);
+                    costInr = mill.cost;
+                    costNote = `${mill.areaCm2.toFixed(1)} cm² @ ${rcp.millingRate.toFixed(2)}/cm²`;
+                  } else {
+                    costInr = 0;
+                    costNote = "surface priced once — rough+finish in the rate";
+                  }
+                } else {
+                  costInr = 0;
+                  costNote = "not separately priced";
+                }
+              } else {
+                costInr = (op.cut_min / 60) * rateHr * machMult;
+              }
+              ops.push({
+                opNum: op.op_num,
+                setup: su.setup_label,
+                opType: op.operation,
+                tool: op.tool_display || op.tool,
+                feature: op.feature || "—",
+                depthMm: op.geo?.depth ?? null,
+                cutLenMm: op.path_mm ?? null,
+                cycleMin: op.cut_min || 0,
+                areaCm2: op.machined_area_cm2 ?? 0,
+                costInr,
+                costNote,
+              });
+            }
+        }
+        // One row per physical hole feature, from validated geometry.
+        const holes: XPart["holes"] = [];
+        const holeSeen = new Set<string>();
+        if (plan && !base.purchased) {
+          for (const su of plan.setups)
+            for (const op of su.ops) {
+              const g = op.geo?.geometry;
+              if (!g || g.kind !== "hole") continue;
+              const key = baseName(op.feature || "");
+              if (holeSeen.has(key)) continue;
+              holeSeen.add(key);
+              const rch = rcp?.holes.find((h) => h.feature === key) ?? null;
+              holes.push({
+                id: key || `hole-${holes.length + 1}`,
+                diaMm: g.diameter_mm,
+                tolerance: rch?.tolerance ?? inferTolerance(g),
+                thicknessMm: g.depth_mm ?? null,
+                thread: g.thread_likely || "—",
+                through:
+                  g.through == null ? "unknown" : g.through ? "through" : "blind",
+                costInr: rch ? rch.cost : null,
+                fallback: rch ? rch.method === "fallback" : false,
+                counterDiaMm: g.cbore_diameter_mm ?? null,
+                counterDepthMm: null,
+              });
+            }
+        }
+        const features: XPart["features"] = (base.features ?? []).map((c) => ({
+          type: String(c.feature_type ?? "—"),
+          name: String(c.feature_name ?? "—"),
+          dia: c.diameter ?? null,
+          l: c.length ?? null,
+          w: c.width ?? null,
+          depth: c.depth ?? null,
+          confidence: String(c.confidence ?? "—"),
+          setup: String(c.setup ?? "—"),
+        }));
+        return {
+          name,
+          bodyIndex,
+          material: analysis.material,
+          quantity: base.quantity,
+          weightKg: base.weightKg,
+          machinedAreaCm2: rcInfoP?.millingAreaCm2 ?? 0,
+          holeCount: holes.length,
+          addons: base.addons ?? [],
+          costInr: base.costInr,
+          cycleMin: base.cycleMin,
+          purchased: base.purchased,
+          ops,
+          holes,
+          features,
+        };
+      };
+
+      const parts: XPart[] = [];
+      let estimatorTotal = 0;
+      const multiBody = !!(
+        wmResult && wmResult.groups.length > 1 && !selectedGroup && rollup
+      );
+
+      if (multiBody && wmResult && rollup) {
+        // Assembly job — make sure every non-purchased group has a plan
+        // (decision: first click waits for the rollup computation).
+        let plans = rollupPlans;
+        if (!rollup.ready) {
+          const done = await buildRollup();
+          if (!done) return; // planning failed — rollupErr shows on screen
+          plans = done;
+        }
+        const allow = 5.0;
+        for (const g of wmResult.groups) {
+          const purchased = excludedBodies.has(g.group_id);
+          const plan = plans[g.group_id] ?? null;
+          const pieces = g.quantity * N;
+          const stockVolCm3 =
+            ((g.dims_mm.length + 2 * allow) *
+              (g.dims_mm.width + 2 * allow) *
+              (g.dims_mm.height + 2 * allow)) /
+            1000;
+          const weightKg = (stockVolCm3 * density) / 1000;
+          // Same batch math as the rollup memo — keep in lockstep.
+          let costBatch = 0;
+          let minBatch = 0;
+          if (!purchased && plan && assemblyMode !== "assembled") {
+            const adj = exclusionAdjusted(plan.setups, plan.totals);
+            const cutPcMin = Math.max(adj.machineMin - adj.setupMin, 0);
+            minBatch = cutPcMin * pieces + adj.setupMin;
+            const setupTimeCost = (adj.setupMin / 60) * rateHr * machMult;
+            const runCostPc = (cutPcMin / 60) * rateHr * machMult;
+            const matPc = weightKg * matPriceKg;
+            const setupsCharge = adj.includedSetups * setupCharge;
+            const rcG = rateCardActive
+              ? rateCardBreakdown(plan.setups, profile, {
+                  grinding: grindingSel, isOpExcluded,
+                })
+              : null;
+            costBatch = rcG
+              ? (matPc + rcG.total) * pieces + setupsCharge
+              : (matPc + runCostPc) * pieces + setupTimeCost + setupsCharge;
+          }
+          parts.push(
+            partFromPlan(
+              `${titleCase(g.classification)} ×${g.quantity}`,
+              g.body_indices[0],
+              plan,
+              {
+                quantity: pieces,
+                weightKg,
+                costInr: costBatch,
+                cycleMin: minBatch,
+                purchased,
+                features: plan ? buildScopedFeatureRows(plan) : [],
+              },
+            ),
+          );
+        }
+        // Welding / post-weld / margin — the rollup memo's own numbers
+        // (plan-independent, so valid even while plans were pending).
+        if (assemblyMode === "assembled") {
+          const sub = rollup.pwCost;
+          const marginAmt = sub * (marginPct / 100);
+          parts.push(
+            syntheticPart("Post-weld machining", rollup.pwCost, rollup.pwTotalMin),
+          );
+          parts.push(syntheticPart(`Margin (${marginPct}%)`, marginAmt, 0));
+          estimatorTotal = sub + marginAmt;
+        } else {
+          const machSubtotal = parts.reduce((a, p) => a + p.costInr, 0);
+          const sub = machSubtotal + rollup.weldCost + rollup.pwCost;
+          const marginAmt = sub * (marginPct / 100);
+          parts.push(syntheticPart("Welding", rollup.weldCost, rollup.weldMin));
+          if (rollup.pwCost > 0)
+            parts.push(
+              syntheticPart("Post-weld machining", rollup.pwCost, rollup.pwTotalMin),
+            );
+          parts.push(syntheticPart(`Margin (${marginPct}%)`, marginAmt, 0));
+          estimatorTotal = sub + marginAmt;
+        }
+      } else {
+        // Single part (or scoped body) — mirror the on-screen batch ledger.
+        const core = selectedGroup && scopedEstCore ? scopedEstCore : estCore;
+        const sp =
+          selectedGroup && scopedStrategy && scopedEstCore
+            ? scopedStrategy
+            : strategy;
+        if (!core || !sp) return;
+        const adjX = exclusionAdjusted(sp.setups, sp.totals);
+        const setupTimeCost = core.rc
+          ? 0
+          : (adjX.setupMin / 60) * rateHr * core.machMult;
+        const runCostPc =
+          Math.max(core.machining - setupTimeCost, 0) +
+          core.materialCost +
+          core.addonCost;
+        const setupOnce = setupTimeCost + core.setupsCost;
+        const batchSubtotal = runCostPc * N + setupOnce;
+        const batchTotal = batchSubtotal * (1 + marginPct / 100);
+        const cutPcMin = Math.max(adjX.machineMin - adjX.setupMin, 0);
+        parts.push(
+          partFromPlan(
+            selectedGroup
+              ? `${titleCase(selectedGroup.classification)} (scoped)`
+              : analysis.filename,
+            selectedGroup ? selectedGroup.body_indices[0] : 0,
+            sp,
+            {
+              quantity: N,
+              weightKg: core.massKg,
+              costInr: batchSubtotal,
+              cycleMin: cutPcMin * N + adjX.setupMin,
+              addons: core.addons.map((a) => a.name),
+              features: featureTableRows,
+            },
+          ),
+        );
+        const marginAmt = batchTotal - batchSubtotal;
+        parts.push(syntheticPart(`Margin (${marginPct}%)`, marginAmt, 0));
+        estimatorTotal = batchTotal;
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const library: WorkbookPayload["library"] = [
+        {
+          category: "Milling", sub: "Machined surface", unit: `${sym}/cm²`,
+          rate: profile.milling_rate_per_cm2, effectiveFrom: today,
+          source: "rate card", confirmed: true,
+        },
+        {
+          category: "Milling", sub: "With surface grinding", unit: `${sym}/cm²`,
+          rate: profile.milling_rate_grinding_per_cm2, effectiveFrom: today,
+          source: "rate card", confirmed: true,
+        },
+        {
+          category: "Add-on", sub: "Surface grinding", unit: `${sym}/cm²`,
+          rate: profile.addon_rates.grinding_per_cm2, effectiveFrom: today,
+          source: "rate card (placeholder)", confirmed: false,
+        },
+        {
+          category: "Add-on", sub: "Electroplating", unit: `${sym}/cm²`,
+          rate: profile.addon_rates.plating_per_cm2, effectiveFrom: today,
+          source: "rate card (placeholder)", confirmed: false,
+        },
+        {
+          category: "Add-on", sub: "Hardening", unit: `${sym}/kg`,
+          rate: profile.addon_rates.hardening_per_kg, effectiveFrom: today,
+          source: "rate card (placeholder)", confirmed: false,
+        },
+        {
+          category: "Add-on", sub: "Powder coating", unit: `${sym}/cm²`,
+          rate: profile.addon_rates.powder_per_cm2, effectiveFrom: today,
+          source: "rate card (placeholder)", confirmed: false,
+        },
+        ...profile.holeLibrary.map((r) => ({
+          category: "Hole",
+          sub: `Ø${r.diameter_mm} ${r.tolerance} × ${r.thickness_mm} mm — ${r.operation}`,
+          unit: `${sym}/hole`,
+          rate: r.cost_inr,
+          effectiveFrom: r.effective_from,
+          source: r.source,
+          confirmed: r.confirmed,
+        })),
+      ];
+
+      const blob = await buildWorkbook({
+        filename: analysis.filename,
+        currencySymbol: sym,
+        costingModel: rateCardActive ? "ratecard" : "time",
+        library,
+        parts,
+        totals: { estimatorTotal },
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${analysis.filename.replace(/\.[^.]+$/, "")}_cost_split.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExcelBusy(false);
+    }
+  }
 
   // Feature Table source: under a body scope, use the classifier's
   // de-duplicated features (with setup labels) instead of the raw whole-part
@@ -2378,16 +2845,32 @@ export default function App() {
               </div>
               <span className="t">{fmtNum(wmResult.total_machining_time_min)} min</span>
             </div>
-            {wmResult.groups.map((g) => (
+            {wmResult.groups.map((g) => {
+              // EST-7: purchased parts (bolts, standard hardware) are viewed
+              // but never machined or costed.
+              const purchased = excludedBodies.has(g.group_id);
+              return (
               <div
                 key={g.group_id}
                 className={`body-row ${selectedGroupId === g.group_id ? "sel" : ""}`}
+                style={purchased ? { opacity: 0.55 } : undefined}
                 onClick={() => selectScope(g.group_id)}
                 title={`${scopeLabel(g)} — click to isolate in 3D`}
               >
                 <div className="main">
                   <div className="name">
                     {titleCase(g.classification)} ×{g.quantity}
+                    {purchased && (
+                      <span
+                        style={{
+                          marginLeft: 6, fontSize: 10, fontWeight: 600,
+                          color: "#c07a2a", border: "1px solid #c07a2a",
+                          borderRadius: 4, padding: "0 4px",
+                        }}
+                      >
+                        purchased
+                      </span>
+                    )}
                   </div>
                   <div className="dims">{groupDims(g)} mm</div>
                   {g.feature_counts && (
@@ -2403,13 +2886,34 @@ export default function App() {
                     </div>
                   )}
                 </div>
+                <button
+                  className="btn"
+                  style={{
+                    padding: "0 6px", fontSize: 12, lineHeight: "18px",
+                    color: purchased ? "#c07a2a" : undefined,
+                  }}
+                  title={
+                    purchased
+                      ? "Marked as purchased — no machining, no cost. Click to machine it again."
+                      : "Don't machine (purchased part) — drop it from the job cost"
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleBodyExcluded(g.group_id);
+                  }}
+                >
+                  ⊘
+                </button>
                 <span className="t">
                   {assemblyMode === "assembled"
                     ? "view only"
-                    : `${fmtNum(g.machining_min_per_pc)} min/pc`}
+                    : purchased
+                      ? "purchased"
+                      : `${fmtNum(g.machining_min_per_pc)} min/pc`}
                 </span>
               </div>
-            ))}
+              );
+            })}
           </>
         )}
       </>
@@ -2645,6 +3149,16 @@ export default function App() {
             <button className="btn" onClick={() => fileRef.current?.click()}>
               Upload STEP
             </button>
+            {analysis && strategy && (
+              <button
+                className="btn"
+                disabled={excelBusy}
+                title="Per-part cost-split workbook — Summary, Ops, Holes, Features and Cost Library sheets (.xlsx). On a weldment the first click computes any missing per-part plans."
+                onClick={() => void exportExcel()}
+              >
+                {excelBusy ? "Building…" : "⭳ Export Excel"}
+              </button>
+            )}
             {analysis && (
               <button className="btn primary" onClick={() => setQuoteOpen(true)}>Prepare Quote</button>
             )}
@@ -3366,7 +3880,7 @@ export default function App() {
                       const {
                         machineMin, presetMult, tolMult, complexity, machMult,
                         machining, stockSize, massKg, materialCost: material_, setupsCost,
-                        rc: estRc,
+                        rc: estRc, addons: estAddons, addonCost: estAddonCost,
                       } = scoped ? scopedEstCore! : estCore;
                       // Itemised rows must come from the SAME plan as the
                       // totals — scoped plan under a body scope.
@@ -3405,7 +3919,7 @@ export default function App() {
                         ledgerSetups, totalsForView, rateHr, machMult,
                       );
                       const partTotal = material_ + machining; // block 1: material + machining
-                      const subtotal = partTotal + setupsCost;
+                      const subtotal = partTotal + setupsCost + estAddonCost;
                       const margin = subtotal * (marginPct / 100);
                       const total = subtotal + margin;
                       // ---- Batch pricing: setup TIME (in machining) and setup
@@ -3418,7 +3932,9 @@ export default function App() {
                       const setupTimeCost = estRc
                         ? 0
                         : (adjT.setupMin / 60) * rateHr * machMult;
-                      const runCostPc = Math.max(machining - setupTimeCost, 0) + material_;
+                      // Add-ons repeat per piece (each part is plated/hardened).
+                      const runCostPc =
+                        Math.max(machining - setupTimeCost, 0) + material_ + estAddonCost;
                       const setupOnce = setupTimeCost + setupsCost;
                       const batchSubtotal = runCostPc * N + setupOnce;
                       const batchTotal = batchSubtotal * (1 + marginPct / 100);
@@ -3428,7 +3944,8 @@ export default function App() {
                       // ends — complexity/tolerance stay as selected.
                       const totalAtPreset = (pm: number) => {
                         const mach = (machineMin / 60) * rateHr * pm * complexity * tolMult;
-                        return (material_ + mach + setupsCost) * (1 + marginPct / 100);
+                        // Add-ons are outsourced flat costs — preset-independent.
+                        return (material_ + mach + setupsCost + estAddonCost) * (1 + marginPct / 100);
                       };
                       const rangeLow = totalAtPreset(PRESET_MULT.competitive);
                       const rangeHigh = totalAtPreset(PRESET_MULT.conservative);
@@ -3493,14 +4010,19 @@ export default function App() {
                               <div className="ledger">
                                 {assemblyMode !== "assembled" && (
                                   <>
-                                    {rollup.rows.map((r) => (
+                                    {rollup.rows.map((r) => {
+                                      const purch = "purchased" in r && r.purchased;
+                                      return (
                                       <div
                                         className="ledger-row"
                                         key={r.g.group_id}
+                                        style={purch ? { opacity: 0.6 } : undefined}
                                         title={
-                                          r.ready
-                                            ? `Exact per-body plan × ${r.pieces} pcs — setup time + setup charges once per group`
-                                            : "Not planned yet — click this body under Bodies or press “Compute exact per-part plans”"
+                                          purch
+                                            ? "Marked as purchased under Bodies — supplied, not machined; no cost in this quote"
+                                            : r.ready
+                                              ? `Exact per-body plan × ${r.pieces} pcs — setup time + setup charges once per group`
+                                              : "Not planned yet — click this body under Bodies or press “Compute exact per-part plans”"
                                         }
                                       >
                                         <span className="desc">
@@ -3508,13 +4030,18 @@ export default function App() {
                                           {rollup.NA > 1
                                             ? ` × ${rollup.NA} = ${r.pieces} pcs`
                                             : ""}
-                                          {r.ready ? ` — ${fmtMin(r.minBatch)}` : " — pending"}
+                                          {purch
+                                            ? " — purchased part"
+                                            : r.ready
+                                              ? ` — ${fmtMin(r.minBatch)}`
+                                              : " — pending"}
                                         </span>
                                         <span className="amt">
-                                          {r.ready ? inr(r.costBatch) : "—"}
+                                          {purch ? "—" : r.ready ? inr(r.costBatch) : "—"}
                                         </span>
                                       </div>
-                                    ))}
+                                      );
+                                    })}
                                     <div
                                       className="ledger-row"
                                       title="The analyzer's welding minutes per assembly — type your own number if you know it better"
@@ -3714,7 +4241,12 @@ export default function App() {
                                             mode: assemblyMode,
                                             assemblies: rollup.NA,
                                             rows: rollup.rows.map((r) => ({
-                                              label: titleCase(r.g.classification) + ` ×${r.g.quantity}`,
+                                              label:
+                                                titleCase(r.g.classification) +
+                                                ` ×${r.g.quantity}` +
+                                                ("purchased" in r && r.purchased
+                                                  ? " — purchased part"
+                                                  : ""),
                                               pieces: r.pieces,
                                               min: r.minBatch,
                                               cost: r.costBatch,
@@ -3752,6 +4284,7 @@ export default function App() {
                                       marginPct,
                                       total,
                                     },
+                                    addons: estAddons,
                                   }),
                                 )
                               }
@@ -3801,15 +4334,6 @@ export default function App() {
                           {rateCardActive && (
                             <>
                               <div className="row">
-                                <span className="k">Surface grinding</span>
-                                <input
-                                  type="checkbox"
-                                  checked={grindingSel}
-                                  onChange={(e) => setGrindingSel(e.target.checked)}
-                                  title={`Flips the milling rate ${sym}${costingProfile.milling_rate_per_cm2.toFixed(2)} → ${sym}${costingProfile.milling_rate_grinding_per_cm2.toFixed(2)} per cm² (ARD R2)`}
-                                />
-                              </div>
-                              <div className="row">
                                 <span className="k">Rate card · {costingProfile.name}</span>
                                 <button className="btn" onClick={() => setCostPanelOpen(true)}>
                                   Edit rate card…
@@ -3825,6 +4349,60 @@ export default function App() {
                               )}
                             </>
                           )}
+                          {/* ARD R4 add-on processes — available in BOTH costing
+                              models; rates live in the machine's rate card. */}
+                          <div className="row">
+                            <span className="k">Surface grinding</span>
+                            <input
+                              type="checkbox"
+                              checked={grindingSel}
+                              onChange={(e) => setGrindingSel(e.target.checked)}
+                              title={
+                                rateCardActive
+                                  ? `Flips the milling rate ${sym}${costingProfile.milling_rate_per_cm2.toFixed(2)} → ${sym}${costingProfile.milling_rate_grinding_per_cm2.toFixed(2)} per cm² (ARD R2)`
+                                  : `Adds ${sym}${costingProfile.addon_rates.grinding_per_cm2.toFixed(2)}/cm² of machined surface as an add-on line`
+                              }
+                            />
+                          </div>
+                          <div className="row">
+                            <span className="k">Electroplating</span>
+                            <select
+                              className="mini-select"
+                              value={platingSel}
+                              onChange={(e) =>
+                                setPlatingSel(e.target.value as "" | "Ni" | "Cr" | "Zn" | "Cd")
+                              }
+                              title={`${sym}${costingProfile.addon_rates.plating_per_cm2.toFixed(2)}/cm² of part surface (stock envelope) — outsourced`}
+                            >
+                              <option value="">None</option>
+                              <option value="Ni">Nickel (Ni)</option>
+                              <option value="Cr">Hard chrome (Cr)</option>
+                              <option value="Zn">Zinc (Zn)</option>
+                              <option value="Cd">Cadmium (Cd)</option>
+                            </select>
+                          </div>
+                          <div className="row">
+                            <span className="k">Hardening</span>
+                            <input
+                              className="num-input"
+                              style={{ width: 96 }}
+                              placeholder="e.g. 45 HRC"
+                              value={hardeningSel}
+                              onChange={(e) => setHardeningSel(e.target.value)}
+                              title={`${sym}${costingProfile.addon_rates.hardening_per_kg.toFixed(0)}/kg of part weight — enter the spec to enable`}
+                            />
+                          </div>
+                          <div className="row">
+                            <span className="k">Powder coat (RAL)</span>
+                            <input
+                              className="num-input"
+                              style={{ width: 96 }}
+                              placeholder="e.g. 7035"
+                              value={powderSel}
+                              onChange={(e) => setPowderSel(e.target.value)}
+                              title={`${sym}${costingProfile.addon_rates.powder_per_cm2.toFixed(2)}/cm² of part surface — enter the RAL shade to enable`}
+                            />
+                          </div>
                           <div className="row">
                             <span className="k">Currency</span>
                             <select
@@ -4077,6 +4655,28 @@ export default function App() {
                                 <span className="amt">{inr(setupCharge)}</span>
                               </div>
                             ))}
+
+                            {/* Block 3 — ARD R4 add-on processes (per piece) */}
+                            {estAddons.length > 0 && (
+                              <>
+                                <div className="ledger-row root">
+                                  <span
+                                    className="desc"
+                                    title="Outsourced / secondary processes from the rate card's add-on rates — repeat per piece"
+                                  >
+                                    Add-on Processes
+                                  </span>
+                                  <span className="qty">× {estAddons.length}</span>
+                                  <span className="amt">{inr(estAddonCost)}</span>
+                                </div>
+                                {estAddons.map((a) => (
+                                  <div className="ledger-row child" key={a.name}>
+                                    <span className="desc">{a.name}</span>
+                                    <span className="amt">{inr(a.cost)}</span>
+                                  </div>
+                                ))}
+                              </>
+                            )}
 
                             {/* Footer */}
                             <div className="ledger-row subtotal">
