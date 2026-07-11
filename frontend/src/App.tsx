@@ -188,7 +188,19 @@ const numOr0 = (s: string) => {
 };
 
 // Shared money/time formatters (Estimate + Route tabs)
-const inr = (v: number) => "₹" + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+// Display currency for ALL money in the app (estimate, route, effort sheet).
+// Symbol-only by design: the shop enters its rates (₹/hr, ₹/kg, setup charge)
+// in whatever currency it works in, so no FX conversion happens — the selector
+// just relabels. Mirrors the Quote modal's currency list (Gulf-ready).
+const CURRENCIES: { code: string; symbol: string }[] = [
+  { code: "INR", symbol: "₹" }, { code: "USD", symbol: "$" },
+  { code: "AED", symbol: "AED " }, { code: "SAR", symbol: "SAR " },
+  { code: "QAR", symbol: "QAR " }, { code: "OMR", symbol: "OMR " },
+  { code: "KWD", symbol: "KD " }, { code: "BHD", symbol: "BD " },
+  { code: "EUR", symbol: "€" }, { code: "GBP", symbol: "£" },
+];
+let CUR_SYM = "₹"; // kept in sync with the selected currency on every render
+const inr = (v: number) => CUR_SYM + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
 const fmtMin = (min: number) => {
   const m = Math.round(min);
   return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min`;
@@ -523,6 +535,8 @@ interface EffortEstimateParams {
   complexityMult: number;
   rateHr: number;
   breakdown: MachiningBreakdown;
+  // Batch pricing (qty > 1): setup paid once, unit price amortized.
+  batch?: { qty: number; unit: number; total: number; setupOnce: number } | null;
   setups: { label: string; ops: number; min: number }[];
   cost: {
     material: number; machining: number; setups: number;
@@ -598,11 +612,15 @@ ${(() => {
   <tr><td>Tool changes</td><td>${p.toolChanges}</td></tr>
   <tr><td>Complexity factor</td><td>×${p.complexityMult.toFixed(2)}</td></tr>
   <tr><td>Effort level</td><td>${effortLabel(p.machineMin)}</td></tr>
+${p.batch && p.batch.qty > 1 ? `
+  <tr><td>Quantity</td><td>${p.batch.qty} pcs — setup time + setup charges (${inr(p.batch.setupOnce)}) paid once per batch</td></tr>
+  <tr><td>Unit price (${p.batch.qty} pcs)</td><td>${inr(p.batch.unit)} &nbsp;(${inr(p.cost.total)} at 1 pc)</td></tr>
+  <tr><td>Batch total</td><td>${inr(p.batch.total)}</td></tr>` : ""}
 </table>
 
 <h2>Where the machining time goes</h2>
 <table>
-  <thead><tr><th>Category</th><th class="n">Features</th><th class="n">Time</th><th class="n">Cost @ ₹${p.rateHr}/hr</th></tr></thead>
+  <thead><tr><th>Category</th><th class="n">Features</th><th class="n">Time</th><th class="n">Cost @ ${CUR_SYM}${p.rateHr}/hr</th></tr></thead>
   <tbody>${catRows}${ovRows}
     <tr class="tot"><td>Machining</td><td class="n"></td><td class="n">${fmtMin(p.machineMin)}</td><td class="n">${inr(p.cost.machining)}</td></tr>
   </tbody>
@@ -970,7 +988,7 @@ function AddProcessForm({
         />
       </div>
       <div className="mat-form-row">
-        <span>Rate (₹/hr)</span>
+        <span>Rate ({CUR_SYM}/hr)</span>
         <input
           className="num-input"
           type="number"
@@ -1033,6 +1051,15 @@ export default function App() {
   const [setupCharge, setSetupCharge] = useState(500);
   const [matPriceKg, setMatPriceKg] = useState(650);
   const [marginPct, setMarginPct] = useState(20);
+  // Batch quantity: setup time + setup charges are paid ONCE per batch, so the
+  // unit price falls as qty rises (₹500 setup over 10 pcs = ₹50/pc).
+  const [qty, setQty] = useState(1);
+  // Display currency (persisted). Symbol-only — see CURRENCIES.
+  const [currencyCode, setCurrencyCode] = useState<string>(
+    () => lsGet("cnc.currencyCode") || "INR",
+  );
+  const sym = CURRENCIES.find((c) => c.code === currencyCode)?.symbol ?? "₹";
+  CUR_SYM = sym; // module-level formatter follows the selection each render
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Uploaded part is retained so material changes can re-run analysis
@@ -1282,6 +1309,7 @@ export default function App() {
     } catch {
       setExcluded(new Set());
     }
+    setQty(1); // batch qty is a per-part decision — reset with the part
   }, [analysis?.filename]);
   useEffect(() => {
     const fn = analysis?.filename;
@@ -2284,7 +2312,22 @@ export default function App() {
               <QuoteModal
                 open={quoteOpen}
                 onClose={() => setQuoteOpen(false)}
-                quote={{ partName: analysis.filename, qty: 1, unitAmount: routeCalc?.total ?? 0 }}
+                quote={(() => {
+                  // Batch-aware quote: setup components (setup time cost +
+                  // per-setup charges) are amortized over the batch quantity;
+                  // at qty 1 this is exactly the legacy routed total.
+                  const N = Math.max(1, Math.floor(qty) || 1);
+                  if (!routeCalc || !strategy || !estCore || N === 1) {
+                    return { partName: analysis.filename, qty: N, unitAmount: routeCalc?.total ?? 0 };
+                  }
+                  const adj = exclusionAdjusted(strategy.setups, strategy.totals);
+                  const setupOnce =
+                    (adj.setupMin / 60) * rateHr * estCore.machMult + estCore.setupsCost;
+                  const unit =
+                    (Math.max(routeCalc.subtotal - setupOnce, 0) + setupOnce / N) *
+                    (1 + marginPct / 100);
+                  return { partName: analysis.filename, qty: N, unitAmount: unit };
+                })()}
               />
             )}
           </div>
@@ -2943,6 +2986,17 @@ export default function App() {
                       const subtotal = partTotal + setupsCost;
                       const margin = subtotal * (marginPct / 100);
                       const total = subtotal + margin;
+                      // ---- Batch pricing: setup TIME (in machining) and setup
+                      // CHARGES are paid once per batch; material + run time
+                      // (cut/rapid/tool changes) repeat per piece. Unit price
+                      // therefore falls with quantity.
+                      const N = Math.max(1, Math.floor(qty) || 1);
+                      const setupTimeCost = (adjT.setupMin / 60) * rateHr * machMult;
+                      const runCostPc = Math.max(machining - setupTimeCost, 0) + material_;
+                      const setupOnce = setupTimeCost + setupsCost;
+                      const batchSubtotal = runCostPc * N + setupOnce;
+                      const batchTotal = batchSubtotal * (1 + marginPct / 100);
+                      const unitCost = batchTotal / N;
                       // Quote range: the same ledger recomputed at the
                       // competitive (×0.70) and conservative (×1.00) preset
                       // ends — complexity/tolerance stay as selected.
@@ -2959,7 +3013,7 @@ export default function App() {
                       const stockTag =
                         stockSize && stockMode === "manual" && !scoped ? " (manual)" : "";
                       const materialLine =
-                        `${analysis.material} stock ${stockDims}${stockTag} — ${massKg.toFixed(1)} kg @ ₹${matPriceKg}/kg`;
+                        `${analysis.material} stock ${stockDims}${stockTag} — ${massKg.toFixed(1)} kg @ ${sym}${matPriceKg}/kg`;
                       return (
                         <>
                           {selectedGroup && (
@@ -3006,6 +3060,9 @@ export default function App() {
                                     complexityMult: machMult,
                                     rateHr,
                                     breakdown: machBreakdown,
+                                    batch: N > 1
+                                      ? { qty: N, unit: unitCost, total: batchTotal, setupOnce }
+                                      : null,
                                     setups: ledgerSetups.map((su) => ({
                                       label: su.setup_label,
                                       ops: su.ops.length,
@@ -3046,21 +3103,45 @@ export default function App() {
                           </div>
                           <div className="section-title">Estimate settings</div>
                           <div className="row">
-                            <span className="k">Machining rate (₹/hr)</span>
+                            <span className="k">Currency</span>
+                            <select
+                              className="mini-select"
+                              value={currencyCode}
+                              onChange={(e) => {
+                                setCurrencyCode(e.target.value);
+                                lsSet("cnc.currencyCode", e.target.value);
+                              }}
+                              title="Display symbol only — enter your rates in this currency; no conversion is applied"
+                            >
+                              {CURRENCIES.map((c) => (
+                                <option key={c.code} value={c.code}>{c.code}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="row">
+                            <span className="k">Quantity (pcs)</span>
+                            <input
+                              className="num-input" type="number" min={1} value={qty}
+                              onChange={(e) => setQty(Math.max(1, Math.floor(+e.target.value) || 1))}
+                              title="Setup time + setup charges are paid once per batch — unit price falls as quantity rises"
+                            />
+                          </div>
+                          <div className="row">
+                            <span className="k">Machining rate ({sym}/hr)</span>
                             <input
                               className="num-input" type="number" value={rateHr}
                               onChange={(e) => setRateHr(+e.target.value)}
                             />
                           </div>
                           <div className="row">
-                            <span className="k">Setup charge (₹)</span>
+                            <span className="k">Setup charge ({sym})</span>
                             <input
                               className="num-input" type="number" value={setupCharge}
                               onChange={(e) => setSetupCharge(+e.target.value)}
                             />
                           </div>
                           <div className="row">
-                            <span className="k">Material (₹/kg)</span>
+                            <span className="k">Material ({sym}/kg)</span>
                             <input
                               className="num-input" type="number" value={matPriceKg}
                               onChange={(e) => setMatPriceKg(+e.target.value)}
@@ -3179,9 +3260,9 @@ export default function App() {
                                   <div className="ledger-row child">
                                     <span
                                       className="desc"
-                                      title={`Machining — ${fmtMin(machineMin)} @ ₹${rateHr}/hr${multTag}. Broken down by feature category below; positioning, tool changes and machine setup are the remaining time components.`}
+                                      title={`Machining — ${fmtMin(machineMin)} @ ${sym}${rateHr}/hr${multTag}. Broken down by feature category below; positioning, tool changes and machine setup are the remaining time components.`}
                                     >
-                                      Machining — {fmtMin(machineMin)} @ ₹{rateHr}/hr{multTag}
+                                      Machining — {fmtMin(machineMin)} @ {sym}{rateHr}/hr{multTag}
                                     </span>
                                     <span className="amt">{inr(machining)}</span>
                                   </div>
@@ -3259,9 +3340,41 @@ export default function App() {
                               <span className="desc">Range</span>
                               <span className="amt">{inr(rangeLow)} — {inr(rangeHigh)}</span>
                             </div>
+                            {/* Batch pricing: setup time + setup charges are paid
+                                once per batch, so the unit price falls with qty. */}
+                            {N > 1 && (
+                              <>
+                                <div className="ledger-row subtotal">
+                                  <span className="desc">Batch — {N} pcs</span>
+                                  <span className="amt"></span>
+                                </div>
+                                <div className="ledger-row child"
+                                  title="Setup time cost + per-setup charges — paid once for the whole batch">
+                                  <span className="desc">Setup (time + charges) — once</span>
+                                  <span className="amt">{inr(setupOnce)}</span>
+                                </div>
+                                <div className="ledger-row child"
+                                  title="Material + cutting/rapid/tool-change time — repeats every piece">
+                                  <span className="desc">Per-piece run (material + machining)</span>
+                                  <span className="amt">{inr(runCostPc)}</span>
+                                </div>
+                                <div className="ledger-row grand"
+                                  title={`Setup amortized over ${N} pcs — was ${inr(total)} at 1 pc`}>
+                                  <span className="desc">Unit price ({N} pcs)</span>
+                                  <span className="amt">{inr(unitCost)}</span>
+                                </div>
+                                <div className="ledger-row grand">
+                                  <span className="desc">Batch total</span>
+                                  <span className="amt">{inr(batchTotal)}</span>
+                                </div>
+                              </>
+                            )}
                           </div>
                           <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 8 }}>
-                            {machineMin.toFixed(0)} min machine time · {strategy.setups.length} setups · per part
+                            {machineMin.toFixed(0)} min machine time · {strategy.setups.length} setups ·{" "}
+                            {N > 1
+                              ? `${N} pcs — unit ${inr(unitCost)} (${inr(total)} at 1 pc)`
+                              : "per part"}
                           </div>
                           {/* This ledger prices the milling only — point at the
                               full job when the route has more processes. */}
@@ -3337,7 +3450,7 @@ export default function App() {
                                       : "Machining rate from the Estimate tab"
                                   }
                                 >
-                                  ₹{rateHr}/hr
+                                  {sym}{rateHr}/hr
                                   {estCore.machMult !== 1 ? ` × ${estCore.machMult.toFixed(2)}` : ""}
                                 </span>
                               </div>
@@ -3378,7 +3491,7 @@ export default function App() {
                                     <span className="v">{fmtMin(routeCalc.weldMin)}</span>
                                   </div>
                                   <div className="rb-line">
-                                    <span className="k">Rate (₹/hr)</span>
+                                    <span className="k">Rate ({sym}/hr)</span>
                                     <input
                                       className="num-input"
                                       type="number"
@@ -3459,7 +3572,7 @@ export default function App() {
                                     />
                                   </div>
                                   <div className="rb-line">
-                                    <span className="k">Rate (₹/hr)</span>
+                                    <span className="k">Rate ({sym}/hr)</span>
                                     <input
                                       className="num-input"
                                       type="number"
@@ -3500,7 +3613,7 @@ export default function App() {
                                   </div>
                                   <div className="rb-line">
                                     <span className="k">Rate</span>
-                                    <span className="v">₹{c.rateHr}/hr</span>
+                                    <span className="v">{sym}{c.rateHr}/hr</span>
                                   </div>
                                   <div className="rb-sub">custom process</div>
                                 </div>
@@ -3549,7 +3662,7 @@ export default function App() {
                             <div className="ledger-row">
                               <span
                                 className="desc"
-                                title={`${analysis.material} stock — ${estCore.massKg.toFixed(1)} kg @ ₹${matPriceKg}/kg (same line as the Estimate tab)`}
+                                title={`${analysis.material} stock — ${estCore.massKg.toFixed(1)} kg @ ${sym}${matPriceKg}/kg (same line as the Estimate tab)`}
                               >
                                 Material — {analysis.material}, {estCore.massKg.toFixed(1)} kg
                               </span>
