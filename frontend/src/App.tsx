@@ -7,6 +7,11 @@ import type {
   FeatureGeometry, FeatureCounts, Candidate, AssistantContext,
 } from "./api";
 import { PartViewer } from "./PartViewer";
+import {
+  profileForMachine, rateCardBreakdown, updateProfile, audit,
+  type RateCardBreakdown,
+} from "./costing";
+import { CostLibraryPanel } from "./CostLibraryPanel";
 import type { Vec3, Approach, Highlight } from "./PartViewer";
 import { MaterialSelect } from "./MaterialSelect";
 import { MachineSelect } from "./MachineSelect";
@@ -1086,6 +1091,20 @@ export default function App() {
   );
   const sym = CURRENCIES.find((c) => c.code === currencyCode)?.symbol ?? "₹";
   CUR_SYM = sym; // module-level formatter follows the selection each render
+  // ARD R2/R3: per-machine costing profile (Time-based default | Rate-card).
+  // Profile follows the selected machine; created from the default rate card
+  // on first use. `costingNonce` re-reads after library edits.
+  const [costingNonce, setCostingNonce] = useState(0);
+  const [machineSelForCosting, setMachineSelForCosting] = useState("");
+  const costingProfile = useMemo(
+    () => profileForMachine(machineSelForCosting || "Default"),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [machineSelForCosting, costingNonce],
+  );
+  const rateCardActive = costingProfile.model === "ratecard";
+  // Surface grinding flag (ARD R2/R4 link): flips ₹0.60 → ₹0.80 per cm².
+  const [grindingSel, setGrindingSel] = useState(false);
+  const [costPanelOpen, setCostPanelOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Uploaded part is retained so material changes can re-run analysis
@@ -1151,6 +1170,12 @@ export default function App() {
   const [machines, setMachines] = useState<MachineInfo[]>([]);
   const [customMachines, setCustomMachines] = useState<CustomMachine[]>(loadCustomMachines);
   const [machineSel, setMachineSel] = useState<string>(() => lsGet("cnc.machine") ?? "");
+  // Costing profile follows the selected machine (declared above machineSel to
+  // keep the estimate cores below it — sync here, not in the memo, to avoid a
+  // temporal-dead-zone crash).
+  useEffect(() => {
+    setMachineSelForCosting(machineSel);
+  }, [machineSel]);
 
   // Multi-machine routing (our moat): the operator can assign a distinct
   // machine to each process stage in the Route tab. Milling stays tied to
@@ -1499,7 +1524,18 @@ export default function App() {
         1000;
       const matPc = ((stockVolCm3 * density) / 1000) * matPriceKg;
       const setupsCharge = adj.includedSetups * setupCharge;
-      const costBatch = (matPc + runCostPc) * pieces + setupTimeCost + setupsCharge;
+      // Rate-card mode: per-piece machining = surface money + hole library;
+      // setup TIME is not billed separately (the shop's ₹/cm² covers it) —
+      // only the per-setup charge stays.
+      const rcG = rateCardActive
+        ? rateCardBreakdown(plan.setups, costingProfile, {
+            grinding: grindingSel,
+            isOpExcluded,
+          })
+        : null;
+      const costBatch = rcG
+        ? (matPc + rcG.total) * pieces + setupsCharge
+        : (matPc + runCostPc) * pieces + setupTimeCost + setupsCharge;
       return { g, ready: true as const, pieces, minBatch, costBatch };
     });
     const plannedCount = rows.filter((r) => r.ready).length;
@@ -1531,6 +1567,7 @@ export default function App() {
     analysis, wmResult, rollupPlans, excluded, estPreset, estTolerance,
     estComplexity, rateHr, matPriceKg, setupCharge, marginPct, weldRate,
     postWeld, materials, customMaterials, qty, weldMinOverride,
+    rateCardActive, costingProfile, grindingSel,
   ]);
 
   // ---- Shared estimate core (Estimate tab ledger + Route tab blocks) ----
@@ -1555,6 +1592,7 @@ export default function App() {
     setPostWeldInit(false);
     setRollupErr(null);
     setWeldMinOverride(null);
+    setGrindingSel(false); // grinding is a per-part decision (ARD R2/R4)
     const m = lsGet(`cnc.assyMode.${fn}`);
     setAssemblyModeState(m === "parts" || m === "assembled" ? m : null);
   }, [analysis?.filename]);
@@ -1596,7 +1634,17 @@ export default function App() {
       ? Math.min(COMPLEXITY_MAX, Math.max(COMPLEXITY_MIN, estComplexity))
       : 1.0;
     const machMult = presetMult * complexity * tolMult;
-    const machining = (machineMin / 60) * rateHr * machMult;
+    // ARD R2/R3 — Rate-card model: milling priced per cm² of machined surface
+    // (each physical surface once) + holes from the cost library. Shop rates
+    // are absolute: the time-model preset/complexity/tolerance multipliers do
+    // NOT apply. Time-based stays the untouched default.
+    const rc: RateCardBreakdown | null = rateCardActive
+      ? rateCardBreakdown(strategy.setups, costingProfile, {
+          grinding: grindingSel,
+          isOpExcluded,
+        })
+      : null;
+    const machining = rc ? rc.total : (machineMin / 60) * rateHr * machMult;
     // Custom materials win the density lookup — their density drives the
     // stock-mass line.
     const density =
@@ -1617,11 +1665,12 @@ export default function App() {
     const setupsCost = adj.includedSetups * setupCharge;
     return {
       machineMin, presetMult, tolMult, complexity, machMult, machining,
-      stockSize, massKg, materialCost, setupsCost,
+      stockSize, massKg, materialCost, setupsCost, rc,
     };
   }, [
     analysis, strategy, estPreset, estTolerance, estComplexity, excluded,
     customMaterials, materials, stockMode, manualStock, matPriceKg, setupCharge, rateHr,
+    rateCardActive, costingProfile, grindingSel,
   ]);
 
   // Per-body estimate (scoped): same ledger math as estCore but from the
@@ -1641,7 +1690,13 @@ export default function App() {
       ? Math.min(COMPLEXITY_MAX, Math.max(COMPLEXITY_MIN, estComplexity))
       : 1.0;
     const machMult = presetMult * complexity * tolMult;
-    const machining = (machineMin / 60) * rateHr * machMult;
+    const rc: RateCardBreakdown | null = rateCardActive
+      ? rateCardBreakdown(sp.setups, costingProfile, {
+          grinding: grindingSel,
+          isOpExcluded,
+        })
+      : null;
+    const machining = rc ? rc.total : (machineMin / 60) * rateHr * machMult;
     const density =
       customMaterials.find((m) => m.name === analysis.material)?.density ??
       materials.find((m) => m.name === analysis.material)?.density ??
@@ -1660,12 +1715,12 @@ export default function App() {
     const setupsCost = adj.includedSetups * setupCharge;
     return {
       machineMin, presetMult, tolMult, complexity, machMult, machining,
-      stockSize, massKg, materialCost, setupsCost,
+      stockSize, massKg, materialCost, setupsCost, rc,
     };
   }, [
     analysis, selectedGroup, scopedStrategy, scopedBodyIndex, estPreset,
     estTolerance, estComplexity, excluded, customMaterials, materials, matPriceKg,
-    setupCharge, rateHr,
+    setupCharge, rateHr, rateCardActive, costingProfile, grindingSel,
   ]);
 
   // Feature Table source: under a body scope, use the classifier's
@@ -2570,6 +2625,14 @@ export default function App() {
             {analysis && (
               <button className="btn primary" onClick={() => setQuoteOpen(true)}>Prepare Quote</button>
             )}
+            {costPanelOpen && (
+              <CostLibraryPanel
+                profile={costingProfile}
+                currency={sym}
+                onClose={() => setCostPanelOpen(false)}
+                onChanged={() => setCostingNonce((n) => n + 1)}
+              />
+            )}
             {analysis && (
               <QuoteModal
                 open={quoteOpen}
@@ -3280,6 +3343,7 @@ export default function App() {
                       const {
                         machineMin, presetMult, tolMult, complexity, machMult,
                         machining, stockSize, massKg, materialCost: material_, setupsCost,
+                        rc: estRc,
                       } = scoped ? scopedEstCore! : estCore;
                       // Itemised rows must come from the SAME plan as the
                       // totals — scoped plan under a body scope.
@@ -3326,7 +3390,11 @@ export default function App() {
                       // (cut/rapid/tool changes) repeat per piece. Unit price
                       // therefore falls with quantity.
                       const N = Math.max(1, Math.floor(qty) || 1);
-                      const setupTimeCost = (adjT.setupMin / 60) * rateHr * machMult;
+                      // Rate-card machining carries no setup-time component —
+                      // only the per-setup charge is batch-fixed.
+                      const setupTimeCost = estRc
+                        ? 0
+                        : (adjT.setupMin / 60) * rateHr * machMult;
                       const runCostPc = Math.max(machining - setupTimeCost, 0) + material_;
                       const setupOnce = setupTimeCost + setupsCost;
                       const batchSubtotal = runCostPc * N + setupOnce;
@@ -3687,6 +3755,54 @@ export default function App() {
                           </div>
                           <div className="section-title">Estimate settings</div>
                           <div className="row">
+                            <span className="k">Costing model</span>
+                            <select
+                              className="mini-select"
+                              value={costingProfile.model}
+                              onChange={(e) => {
+                                const v = e.target.value as "time" | "ratecard";
+                                updateProfile(
+                                  audit(
+                                    { ...costingProfile, model: v },
+                                    "model", costingProfile.model, v,
+                                  ),
+                                );
+                                setCostingNonce((n) => n + 1);
+                              }}
+                              title="Time-based: hours × your ₹/hr. Rate card: machined surface × ₹/cm² + per-hole prices from your library (per machine)."
+                            >
+                              <option value="time">Time-based ({sym}/hr)</option>
+                              <option value="ratecard">Rate card ({sym}/cm² + hole library)</option>
+                            </select>
+                          </div>
+                          {rateCardActive && (
+                            <>
+                              <div className="row">
+                                <span className="k">Surface grinding</span>
+                                <input
+                                  type="checkbox"
+                                  checked={grindingSel}
+                                  onChange={(e) => setGrindingSel(e.target.checked)}
+                                  title={`Flips the milling rate ${sym}${costingProfile.milling_rate_per_cm2.toFixed(2)} → ${sym}${costingProfile.milling_rate_grinding_per_cm2.toFixed(2)} per cm² (ARD R2)`}
+                                />
+                              </div>
+                              <div className="row">
+                                <span className="k">Rate card · {costingProfile.name}</span>
+                                <button className="btn" onClick={() => setCostPanelOpen(true)}>
+                                  Edit rate card…
+                                </button>
+                              </div>
+                              {estRc && estRc.estimatedCount > 0 && (
+                                <div className="scope-note" style={{ color: "#c07a2a" }}>
+                                  ⚠ {estRc.estimatedCount} hole price
+                                  {estRc.estimatedCount > 1 ? "s are" : " is"} estimated —
+                                  not confirmed by the shop. Open “Edit rate card…” to
+                                  confirm or correct them.
+                                </div>
+                              )}
+                            </>
+                          )}
+                          <div className="row">
                             <span className="k">Currency</span>
                             <select
                               className="mini-select"
@@ -3841,6 +3957,43 @@ export default function App() {
                               const bd = machBreakdown;
                               return (
                                 <>
+                                  {estRc ? (
+                                    <>
+                                      <div className="ledger-row child">
+                                        <span
+                                          className="desc"
+                                          title="Rate-card model: each machined surface priced once at the shop's ₹/cm² (rough + finish included in the rate)."
+                                        >
+                                          Milling — {estRc.millingAreaCm2.toFixed(1)} cm² @ {sym}
+                                          {estRc.millingRate.toFixed(2)}/cm²
+                                          {grindingSel ? " (with grinding)" : ""}
+                                        </span>
+                                        <span className="amt">{inr(estRc.millingCost)}</span>
+                                      </div>
+                                      <div className="ledger-row child">
+                                        <span
+                                          className="desc"
+                                          title={estRc.holes
+                                            .map(
+                                              (h) =>
+                                                `${h.feature}: ${inr(h.cost)} (${h.note})`,
+                                            )
+                                            .join("\n")}
+                                          style={
+                                            estRc.estimatedCount > 0
+                                              ? { color: "#c07a2a" }
+                                              : undefined
+                                          }
+                                        >
+                                          Holes — {estRc.holes.length} from library
+                                          {estRc.estimatedCount > 0
+                                            ? ` · ⚠ ${estRc.estimatedCount} estimated`
+                                            : ""}
+                                        </span>
+                                        <span className="amt">{inr(estRc.holeCost)}</span>
+                                      </div>
+                                    </>
+                                  ) : (
                                   <div className="ledger-row child">
                                     <span
                                       className="desc"
@@ -3850,6 +4003,7 @@ export default function App() {
                                     </span>
                                     <span className="amt">{inr(machining)}</span>
                                   </div>
+                                  )}
                                   {bd.categories.map((c) => (
                                     <div className="ledger-row grandchild" key={c.key}>
                                       <span className="desc">
