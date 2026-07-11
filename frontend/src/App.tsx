@@ -1293,6 +1293,131 @@ export default function App() {
     return meshes.length ? meshes : null;
   }, [selOpData, analysis]);
 
+  // ---- ASSY-ROLLUP: the weldment job ledger --------------------------------
+  // A welded assembly is NOT machined as one billet: each body is machined
+  // individually (exact per-body plans), then welded, then optionally machined
+  // again as an assembly (post-weld facing etc.). The rollup sums exact
+  // per-group plans × quantity + welding + post-weld ops — this is the number
+  // to quote for a weldment; the billet-style assembly plan is reference only.
+  const [rollupPlans, setRollupPlans] = useState<Record<string, StrategyResult>>({});
+  const [rollupBusy, setRollupBusy] = useState<string | null>(null);
+  const [rollupErr, setRollupErr] = useState<string | null>(null);
+  // Post-weld ops (machined on the WELDED assembly). Suggested rows are the
+  // assembly plan's own top/bottom facing passes — deletable, one click.
+  const [postWeld, setPostWeld] = useState<
+    { id: string; name: string; min: number; suggested?: boolean }[]
+  >([]);
+  const [postWeldInit, setPostWeldInit] = useState(false);
+  const [pwFormName, setPwFormName] = useState("");
+  const [pwFormMin, setPwFormMin] = useState("");
+
+  async function buildRollup() {
+    if (!partFile || !wmResult) return;
+    setRollupErr(null);
+    const plans: Record<string, StrategyResult> = { ...rollupPlans };
+    try {
+      for (let i = 0; i < wmResult.groups.length; i++) {
+        const g = wmResult.groups[i];
+        if (plans[g.group_id]) continue;
+        setRollupBusy(
+          `Planning ${titleCase(g.classification)} (${i + 1}/${wmResult.groups.length})…`,
+        );
+        const r = await api.strategy(partFile, {
+          material: materialOptsFor(material),
+          bodyIndex: g.body_indices[0],
+          machine: machineOptsFor(machineSel),
+          basis: estBasis,
+        });
+        plans[g.group_id] = r;
+        setRollupPlans({ ...plans });
+      }
+    } catch (e) {
+      setRollupErr(e instanceof Error ? e.message : "Assembly rollup failed");
+    } finally {
+      setRollupBusy(null);
+    }
+  }
+
+  // Seed the suggested post-weld facing from the billet assembly plan's own
+  // top/bottom facing passes (real tool + feed derived times) — near-universal
+  // practice after welding (distortion cleanup).
+  useEffect(() => {
+    if (postWeldInit || !strategy || !wmResult || wmResult.groups.length <= 1) return;
+    const rows: { id: string; name: string; min: number; suggested: boolean }[] = [];
+    for (const su of strategy.setups)
+      for (const op of su.ops) {
+        const f = (op.feature || "").toLowerCase();
+        if (
+          (op.operation || "").startsWith("Face Mill") &&
+          (f.includes("top") || f.includes("bottom"))
+        ) {
+          rows.push({
+            id: `pw-${su.setup_label}-${op.op_num}`,
+            name: `Post-weld ${op.feature || op.operation}`,
+            min: op.cut_min || 0,
+            suggested: true,
+          });
+        }
+      }
+    if (rows.length) setPostWeld(rows);
+    setPostWeldInit(true);
+  }, [strategy, wmResult, postWeldInit]);
+
+  const rollup = useMemo(() => {
+    if (!analysis || !wmResult || wmResult.groups.length <= 1) return null;
+    const complexity = Number.isFinite(estComplexity)
+      ? Math.min(COMPLEXITY_MAX, Math.max(COMPLEXITY_MIN, estComplexity))
+      : 1.0;
+    const machMult = PRESET_MULT[estPreset] * complexity * TOLERANCE_MULT[estTolerance];
+    const density =
+      customMaterials.find((m) => m.name === analysis.material)?.density ??
+      materials.find((m) => m.name === analysis.material)?.density ??
+      2.7;
+    const allow = 5.0;
+    let ready = true;
+    const rows = wmResult.groups.map((g) => {
+      const plan = rollupPlans[g.group_id];
+      if (!plan) {
+        ready = false;
+        return { g, ready: false as const, minBatch: 0, costBatch: 0 };
+      }
+      const adj = exclusionAdjusted(plan.setups, plan.totals);
+      // Identical pieces of a group run in the SAME setups: setup time and
+      // per-setup charges are paid once per group, run time repeats per piece.
+      const cutPcMin = Math.max(adj.machineMin - adj.setupMin, 0);
+      const minBatch = cutPcMin * g.quantity + adj.setupMin;
+      const setupTimeCost = (adj.setupMin / 60) * rateHr * machMult;
+      const runCostPc = (cutPcMin / 60) * rateHr * machMult;
+      const stockVolCm3 =
+        ((g.dims_mm.length + 2 * allow) *
+          (g.dims_mm.width + 2 * allow) *
+          (g.dims_mm.height + 2 * allow)) /
+        1000;
+      const matPc = ((stockVolCm3 * density) / 1000) * matPriceKg;
+      const setupsCharge = adj.includedSetups * setupCharge;
+      const costBatch = (matPc + runCostPc) * g.quantity + setupTimeCost + setupsCharge;
+      return { g, ready: true as const, minBatch, costBatch };
+    });
+    const machSubtotal = rows.reduce((a, r) => a + (r.ready ? r.costBatch : 0), 0);
+    const machMin = rows.reduce((a, r) => a + (r.ready ? r.minBatch : 0), 0);
+    const weldMin = wmResult.total_assembly_time_min ?? 0;
+    const weldCost = (weldMin / 60) * weldRate;
+    const pwTotalMin = postWeld.reduce((a, r) => a + (r.min || 0), 0);
+    const pwCost = (pwTotalMin / 60) * rateHr * machMult;
+    const subtotal = machSubtotal + weldCost + pwCost;
+    const total = subtotal * (1 + marginPct / 100);
+    return {
+      rows, ready, machMin, machSubtotal, weldMin, weldCost,
+      pwTotalMin, pwCost, subtotal, total,
+    };
+    // exclusionAdjusted closes over `excluded` — keep it in deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    analysis, wmResult, rollupPlans, excluded, estPreset, estTolerance,
+    estComplexity, rateHr, matPriceKg, setupCharge, marginPct, weldRate,
+    postWeld, materials, customMaterials,
+  ]);
+
   // ---- Shared estimate core (Estimate tab ledger + Route tab blocks) ----
   // One source of truth for the machining multiplier, material mass/cost and
   // setup charges, so the routed grand total is an exact superset of the
@@ -1310,6 +1435,10 @@ export default function App() {
       setExcluded(new Set());
     }
     setQty(1); // batch qty is a per-part decision — reset with the part
+    setRollupPlans({});
+    setPostWeld([]);
+    setPostWeldInit(false);
+    setRollupErr(null);
   }, [analysis?.filename]);
   useEffect(() => {
     const fn = analysis?.filename;
@@ -2868,6 +2997,15 @@ export default function App() {
                                 min
                               </span>
                             </div>
+                            {!selectedGroup && wmResult && wmResult.groups.length > 1 && (
+                              <div className="scope-note" style={{ margin: "6px 0 8px" }}>
+                                Weldment: the plan below treats the welded assembly as ONE
+                                block — machine each part individually (click a body under
+                                Bodies) and price with the Assembly job ledger on the
+                                Estimate tab. Only post-weld ops (e.g. facing) happen at
+                                assembly level.
+                              </div>
+                            )}
                             {rollupsBySetup.length === 0 && (
                               <div style={{ fontSize: 12, color: "var(--text-2)", padding: "6px 0" }}>
                                 No machinable candidates in this scope
@@ -3026,6 +3164,143 @@ export default function App() {
                                   ". Clear the scope for the whole-assembly quote."
                                 : "Scoped plan loading — showing whole-assembly estimate."}
                             </div>
+                          )}
+                          {/* ASSY-ROLLUP: THE number for a weldment — exact
+                              per-part plans × qty + welding + post-weld ops.
+                              The billet ledger below stays as reference. */}
+                          {!scoped && rollup && (
+                            <>
+                              <div className="section-title">
+                                Assembly job ledger — machine parts, weld, then post-weld
+                              </div>
+                              <div className="ledger">
+                                {rollup.rows.map((r) => (
+                                  <div
+                                    className="ledger-row"
+                                    key={r.g.group_id}
+                                    title={
+                                      r.ready
+                                        ? `Exact per-body plan × ${r.g.quantity} pcs — setup time + setup charges once per group`
+                                        : "Not planned yet — press “Compute exact per-part plans” below"
+                                    }
+                                  >
+                                    <span className="desc">
+                                      {titleCase(r.g.classification)} ×{r.g.quantity}
+                                      {r.ready ? ` — ${fmtMin(r.minBatch)}` : " — pending"}
+                                    </span>
+                                    <span className="amt">{r.ready ? inr(r.costBatch) : "—"}</span>
+                                  </div>
+                                ))}
+                                <div className="ledger-row">
+                                  <span className="desc">
+                                    Welding / assembly — {fmtMin(rollup.weldMin)} @ {sym}
+                                    {weldRate}/hr
+                                  </span>
+                                  <span className="amt">{inr(rollup.weldCost)}</span>
+                                </div>
+                                <div className="ledger-row">
+                                  <span className="desc">
+                                    Post-weld machining — {fmtMin(rollup.pwTotalMin)}
+                                  </span>
+                                  <span className="amt">{inr(rollup.pwCost)}</span>
+                                </div>
+                                {postWeld.map((r) => (
+                                  <div className="ledger-row child" key={r.id}>
+                                    <span className="desc">
+                                      {r.name}
+                                      {r.suggested ? " · suggested" : ""}
+                                    </span>
+                                    <span className="amt">
+                                      {fmtMin(r.min)}
+                                      <button
+                                        title="Remove this post-weld op"
+                                        onClick={() =>
+                                          setPostWeld((p) => p.filter((x) => x.id !== r.id))
+                                        }
+                                        style={{
+                                          marginLeft: 8, border: "none", background: "transparent",
+                                          color: "var(--text-2)", cursor: "pointer",
+                                        }}
+                                      >
+                                        ✕
+                                      </button>
+                                    </span>
+                                  </div>
+                                ))}
+                                <div
+                                  className="ledger-row child"
+                                  style={{ gap: 6, alignItems: "center" }}
+                                >
+                                  <input
+                                    className="num-input" placeholder="Add post-weld op (e.g. Line bore)"
+                                    style={{ flex: 1, minWidth: 0 }}
+                                    value={pwFormName}
+                                    onChange={(e) => setPwFormName(e.target.value)}
+                                  />
+                                  <input
+                                    className="num-input" placeholder="min" type="number" min={0}
+                                    style={{ width: 64 }}
+                                    value={pwFormMin}
+                                    onChange={(e) => setPwFormMin(e.target.value)}
+                                  />
+                                  <button
+                                    className="btn"
+                                    onClick={() => {
+                                      const m = parseFloat(pwFormMin);
+                                      if (!pwFormName.trim() || !Number.isFinite(m) || m <= 0) return;
+                                      setPostWeld((p) => [
+                                        ...p,
+                                        { id: `pw-c-${Date.now()}`, name: pwFormName.trim(), min: m },
+                                      ]);
+                                      setPwFormName("");
+                                      setPwFormMin("");
+                                    }}
+                                  >
+                                    + Add
+                                  </button>
+                                </div>
+                                <div className="ledger-row subtotal">
+                                  <span className="desc">Subtotal</span>
+                                  <span className="amt">{inr(rollup.subtotal)}</span>
+                                </div>
+                                <div className="ledger-row">
+                                  <span className="desc">Margin ({marginPct}%)</span>
+                                  <span className="amt">{inr(rollup.total - rollup.subtotal)}</span>
+                                </div>
+                                <div className="ledger-row grand">
+                                  <span className="desc">Job total — welded assembly</span>
+                                  <span className="amt">{rollup.ready ? inr(rollup.total) : `${inr(rollup.total)} + pending parts`}</span>
+                                </div>
+                              </div>
+                              {!rollup.ready && (
+                                <button
+                                  className="btn"
+                                  style={{ marginTop: 6 }}
+                                  disabled={!!rollupBusy}
+                                  onClick={buildRollup}
+                                  title="Runs the exact per-body plan for every part group (one pass, cached)"
+                                >
+                                  {rollupBusy ?? "Compute exact per-part plans"}
+                                </button>
+                              )}
+                              {rollupErr && (
+                                <div className="scope-note" style={{ marginTop: 6 }}>
+                                  {rollupErr} —{" "}
+                                  <span
+                                    style={{ cursor: "pointer", textDecoration: "underline" }}
+                                    onClick={buildRollup}
+                                  >
+                                    retry
+                                  </span>
+                                </div>
+                              )}
+                              <div style={{ fontSize: 11, color: "var(--text-2)", margin: "6px 0 12px" }}>
+                                Per-part rows use the exact per-body classifier; setup time and
+                                setup charges are paid once per group of identical parts. The
+                                single-block ledger below treats the welded assembly as one
+                                billet — reference only, do not quote a weldment from it.
+                              </div>
+                            </>
                           )}
                           <div style={{ margin: "2px 0 12px" }}>
                             <button
