@@ -1245,6 +1245,10 @@ export default function App() {
         scopedCacheRef.current.set(key, r);
         setScopedStrategy(r);
         setScopedLoading(false);
+        // Reviewing a body part-by-part also fills the assembly rollup — the
+        // job ledger's "pending" count drops as each part gets planned.
+        const grp = wmResult?.groups.find((g) => g.body_indices.includes(scopedBodyIndex!));
+        if (grp) setRollupPlans((p) => (p[grp.group_id] ? p : { ...p, [grp.group_id]: r }));
       })
       .catch((err) => {
         if (scopedReqRef.current !== token) return;
@@ -1302,6 +1306,18 @@ export default function App() {
   const [rollupPlans, setRollupPlans] = useState<Record<string, StrategyResult>>({});
   const [rollupBusy, setRollupBusy] = useState<string | null>(null);
   const [rollupErr, setRollupErr] = useState<string | null>(null);
+  // Weldment intent (asked on Overview): machine the ALREADY-ASSEMBLED weldment
+  // (surface ops only) vs build it part-by-part (machine → weld → post-weld).
+  // Persisted per part.
+  const [assemblyMode, setAssemblyModeState] = useState<"parts" | "assembled" | null>(null);
+  const setAssemblyMode = (m: "parts" | "assembled") => {
+    setAssemblyModeState(m);
+    const fn = analysis?.filename;
+    if (fn) lsSet(`cnc.assyMode.${fn}`, m);
+  };
+  // Welding is often a NUMBER the fabricator knows — override the analyzer's
+  // minutes per assembly when set.
+  const [weldMinOverride, setWeldMinOverride] = useState<number | null>(null);
   // Post-weld ops (machined on the WELDED assembly). Suggested rows are the
   // assembly plan's own top/bottom facing passes — deletable, one click.
   const [postWeld, setPostWeld] = useState<
@@ -1374,18 +1390,22 @@ export default function App() {
       materials.find((m) => m.name === analysis.material)?.density ??
       2.7;
     const allow = 5.0;
+    // Workpieces (assemblies) to build — workshop arithmetic: 10 assemblies
+    // with 2 flanges each = 20 flanges through the shop.
+    const NA = Math.max(1, Math.floor(qty) || 1);
     let ready = true;
     const rows = wmResult.groups.map((g) => {
+      const pieces = g.quantity * NA;
       const plan = rollupPlans[g.group_id];
       if (!plan) {
         ready = false;
-        return { g, ready: false as const, minBatch: 0, costBatch: 0 };
+        return { g, ready: false as const, pieces, minBatch: 0, costBatch: 0 };
       }
       const adj = exclusionAdjusted(plan.setups, plan.totals);
       // Identical pieces of a group run in the SAME setups: setup time and
       // per-setup charges are paid once per group, run time repeats per piece.
       const cutPcMin = Math.max(adj.machineMin - adj.setupMin, 0);
-      const minBatch = cutPcMin * g.quantity + adj.setupMin;
+      const minBatch = cutPcMin * pieces + adj.setupMin;
       const setupTimeCost = (adj.setupMin / 60) * rateHr * machMult;
       const runCostPc = (cutPcMin / 60) * rateHr * machMult;
       const stockVolCm3 =
@@ -1395,27 +1415,38 @@ export default function App() {
         1000;
       const matPc = ((stockVolCm3 * density) / 1000) * matPriceKg;
       const setupsCharge = adj.includedSetups * setupCharge;
-      const costBatch = (matPc + runCostPc) * g.quantity + setupTimeCost + setupsCharge;
-      return { g, ready: true as const, minBatch, costBatch };
+      const costBatch = (matPc + runCostPc) * pieces + setupTimeCost + setupsCharge;
+      return { g, ready: true as const, pieces, minBatch, costBatch };
     });
+    const plannedCount = rows.filter((r) => r.ready).length;
     const machSubtotal = rows.reduce((a, r) => a + (r.ready ? r.costBatch : 0), 0);
     const machMin = rows.reduce((a, r) => a + (r.ready ? r.minBatch : 0), 0);
-    const weldMin = wmResult.total_assembly_time_min ?? 0;
+    // Welding: the analyzer's minutes per assembly, or the fabricator's own
+    // number when entered — × assemblies.
+    const weldPerAssy = weldMinOverride ?? (wmResult.total_assembly_time_min ?? 0);
+    const weldMin = weldPerAssy * NA;
     const weldCost = (weldMin / 60) * weldRate;
-    const pwTotalMin = postWeld.reduce((a, r) => a + (r.min || 0), 0);
+    const pwPerAssy = postWeld.reduce((a, r) => a + (r.min || 0), 0);
+    const pwTotalMin = pwPerAssy * NA;
     const pwCost = (pwTotalMin / 60) * rateHr * machMult;
+    // Assembled-only mode: the weldment arrives welded — no part machining,
+    // no welding; just post-weld surface work × assemblies.
+    const assembledSubtotal = pwCost;
+    const assembledTotal = assembledSubtotal * (1 + marginPct / 100);
     const subtotal = machSubtotal + weldCost + pwCost;
     const total = subtotal * (1 + marginPct / 100);
     return {
-      rows, ready, machMin, machSubtotal, weldMin, weldCost,
-      pwTotalMin, pwCost, subtotal, total,
+      rows, ready, plannedCount, groupCount: rows.length, NA,
+      machMin, machSubtotal, weldPerAssy, weldMin, weldCost,
+      pwPerAssy, pwTotalMin, pwCost, subtotal, total,
+      assembledSubtotal, assembledTotal,
     };
     // exclusionAdjusted closes over `excluded` — keep it in deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     analysis, wmResult, rollupPlans, excluded, estPreset, estTolerance,
     estComplexity, rateHr, matPriceKg, setupCharge, marginPct, weldRate,
-    postWeld, materials, customMaterials,
+    postWeld, materials, customMaterials, qty, weldMinOverride,
   ]);
 
   // ---- Shared estimate core (Estimate tab ledger + Route tab blocks) ----
@@ -1439,6 +1470,9 @@ export default function App() {
     setPostWeld([]);
     setPostWeldInit(false);
     setRollupErr(null);
+    setWeldMinOverride(null);
+    const m = lsGet(`cnc.assyMode.${fn}`);
+    setAssemblyModeState(m === "parts" || m === "assembled" ? m : null);
   }, [analysis?.filename]);
   useEffect(() => {
     const fn = analysis?.filename;
@@ -2120,17 +2154,44 @@ export default function App() {
   }
 
   // Rollups for whichever plan the Strategy tab is showing (scoped or whole).
-  const rollupsBySetup = useMemo(
-    () =>
-      (stratForView?.setups ?? []).map((su) => ({
-        label: su.setup_label,
-        opCount: su.ops.length,
-        subtotal: su.subtotal_min,
-        workholding: su.workholding ?? null,
-        rollups: buildRollups(su.setup_label, su.ops),
-      })),
-    [stratForView],
-  );
+  const rollupsBySetup = useMemo(() => {
+    let setups = stratForView?.setups ?? [];
+    // "Already welded" intent: the assembly-level plan keeps only SURFACE
+    // operations (facing, chamfer/edge cleanup) — you can't pocket or drill a
+    // part that's already buried in the weldment. Select/deselect as usual.
+    if (
+      !selectedGroup &&
+      assemblyMode === "assembled" &&
+      wmResult &&
+      wmResult.groups.length > 1
+    ) {
+      const surface = (op: StrategyOp) => {
+        const o = (op.operation || "").toLowerCase();
+        const f = (op.feature || "").toLowerCase();
+        return (
+          o.startsWith("face mill") || o.includes("chamfer") ||
+          f.includes("edge") || f.includes("chamfer")
+        );
+      };
+      setups = setups
+        .map((su) => {
+          const ops = su.ops.filter(surface);
+          return {
+            ...su,
+            ops,
+            subtotal_min: ops.reduce((a, op) => a + (op.cut_min || 0), 0),
+          };
+        })
+        .filter((su) => su.ops.length > 0);
+    }
+    return setups.map((su) => ({
+      label: su.setup_label,
+      opCount: su.ops.length,
+      subtotal: su.subtotal_min,
+      workholding: su.workholding ?? null,
+      rollups: buildRollups(su.setup_label, su.ops),
+    }));
+  }, [stratForView, selectedGroup, assemblyMode, wmResult]);
 
   function toggleRollup(key: string) {
     setExpanded((e) => ({ ...e, [key]: !e[key] }));
@@ -2680,6 +2741,43 @@ export default function App() {
                   <div className="inspector">
                     {tab === "overview" && (
                       <>
+                        {wmResult && wmResult.groups.length > 1 && (
+                          <>
+                            <div className="section-title">Weldment — how will you machine it?</div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "2px 0 6px" }}>
+                              <button
+                                className="btn"
+                                style={assemblyMode === "parts" ? { outline: "2px solid #4a9eff" } : undefined}
+                                onClick={() => setAssemblyMode("parts")}
+                                title="Machine each part, weld, then finish — full job ledger with per-part plans"
+                              >
+                                Build part-by-part
+                              </button>
+                              <button
+                                className="btn"
+                                style={assemblyMode === "assembled" ? { outline: "2px solid #4a9eff" } : undefined}
+                                onClick={() => setAssemblyMode("assembled")}
+                                title="The weldment arrives already welded — only surface operations (facing, cleanup) apply"
+                              >
+                                Already welded — surface ops only
+                              </button>
+                            </div>
+                            {assemblyMode === null && (
+                              <div className="scope-note" style={{ marginBottom: 8 }}>
+                                Pick one — it decides what the Strategy and Estimate show
+                                for this assembly.
+                              </div>
+                            )}
+                          </>
+                        )}
+                        <div className="row">
+                          <span className="k">Workpieces to build</span>
+                          <input
+                            className="num-input" type="number" min={1} value={qty}
+                            onChange={(e) => setQty(Math.max(1, Math.floor(+e.target.value) || 1))}
+                            title="Multiplies the whole job — 10 assemblies × 2 flanges = 20 flanges through the shop"
+                          />
+                        </div>
                         <MaterialSelect
                           materials={materials}
                           customMaterials={customMaterials}
@@ -2999,11 +3097,9 @@ export default function App() {
                             </div>
                             {!selectedGroup && wmResult && wmResult.groups.length > 1 && (
                               <div className="scope-note" style={{ margin: "6px 0 8px" }}>
-                                Weldment: the plan below treats the welded assembly as ONE
-                                block — machine each part individually (click a body under
-                                Bodies) and price with the Assembly job ledger on the
-                                Estimate tab. Only post-weld ops (e.g. facing) happen at
-                                assembly level.
+                                {assemblyMode === "assembled"
+                                  ? "Already-welded intent: showing SURFACE operations only (facing, chamfer/edge cleanup) — select/deselect as needed; pockets and holes inside the weldment are hidden. Change the intent on the Overview tab."
+                                  : "Weldment: the plan below treats the welded assembly as ONE block — machine each part individually (click a body under Bodies) and price with the Assembly job ledger on the Estimate tab. Only post-weld ops (e.g. facing) happen at assembly level."}
                               </div>
                             )}
                             {rollupsBySetup.length === 0 && (
@@ -3171,36 +3267,98 @@ export default function App() {
                           {!scoped && rollup && (
                             <>
                               <div className="section-title">
-                                Assembly job ledger — machine parts, weld, then post-weld
+                                {assemblyMode === "assembled"
+                                  ? "Assembled weldment — post-weld machining only"
+                                  : "Assembly job ledger — machine parts, weld, then post-weld"}
                               </div>
-                              <div className="ledger">
-                                {rollup.rows.map((r) => (
-                                  <div
-                                    className="ledger-row"
-                                    key={r.g.group_id}
-                                    title={
-                                      r.ready
-                                        ? `Exact per-body plan × ${r.g.quantity} pcs — setup time + setup charges once per group`
-                                        : "Not planned yet — press “Compute exact per-part plans” below"
-                                    }
+                              {assemblyMode === null && (
+                                <div className="scope-note" style={{ marginBottom: 6 }}>
+                                  How will you machine this weldment?{" "}
+                                  <span
+                                    style={{ cursor: "pointer", textDecoration: "underline" }}
+                                    onClick={() => setAssemblyMode("parts")}
                                   >
-                                    <span className="desc">
-                                      {titleCase(r.g.classification)} ×{r.g.quantity}
-                                      {r.ready ? ` — ${fmtMin(r.minBatch)}` : " — pending"}
-                                    </span>
-                                    <span className="amt">{r.ready ? inr(r.costBatch) : "—"}</span>
-                                  </div>
-                                ))}
-                                <div className="ledger-row">
-                                  <span className="desc">
-                                    Welding / assembly — {fmtMin(rollup.weldMin)} @ {sym}
-                                    {weldRate}/hr
+                                    Build part-by-part
                                   </span>
-                                  <span className="amt">{inr(rollup.weldCost)}</span>
+                                  {" · "}
+                                  <span
+                                    style={{ cursor: "pointer", textDecoration: "underline" }}
+                                    onClick={() => setAssemblyMode("assembled")}
+                                  >
+                                    Already welded — surface ops only
+                                  </span>
                                 </div>
+                              )}
+                              {assemblyMode !== "assembled" &&
+                                rollup.plannedCount < rollup.groupCount && (
+                                  <div className="scope-note" style={{ marginBottom: 6 }}>
+                                    ⚠ Quoted {rollup.plannedCount} of {rollup.groupCount} part
+                                    groups — {rollup.groupCount - rollup.plannedCount} pending.
+                                    Click each body under Bodies, or press “Compute exact
+                                    per-part plans” below to finish them all.
+                                  </div>
+                                )}
+                              <div className="ledger">
+                                {assemblyMode !== "assembled" && (
+                                  <>
+                                    {rollup.rows.map((r) => (
+                                      <div
+                                        className="ledger-row"
+                                        key={r.g.group_id}
+                                        title={
+                                          r.ready
+                                            ? `Exact per-body plan × ${r.pieces} pcs — setup time + setup charges once per group`
+                                            : "Not planned yet — click this body under Bodies or press “Compute exact per-part plans”"
+                                        }
+                                      >
+                                        <span className="desc">
+                                          {titleCase(r.g.classification)} ×{r.g.quantity}
+                                          {rollup.NA > 1
+                                            ? ` × ${rollup.NA} = ${r.pieces} pcs`
+                                            : ""}
+                                          {r.ready ? ` — ${fmtMin(r.minBatch)}` : " — pending"}
+                                        </span>
+                                        <span className="amt">
+                                          {r.ready ? inr(r.costBatch) : "—"}
+                                        </span>
+                                      </div>
+                                    ))}
+                                    <div
+                                      className="ledger-row"
+                                      title="The analyzer's welding minutes per assembly — type your own number if you know it better"
+                                    >
+                                      <span className="desc" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                        Welding
+                                        <input
+                                          className="num-input" type="number" min={0}
+                                          style={{ width: 64 }}
+                                          value={Math.round(rollup.weldPerAssy * 10) / 10}
+                                          onChange={(e) => {
+                                            const v = parseFloat(e.target.value);
+                                            setWeldMinOverride(Number.isFinite(v) && v >= 0 ? v : 0);
+                                          }}
+                                        />
+                                        min/assembly
+                                        {rollup.NA > 1 ? ` × ${rollup.NA}` : ""} @ {sym}
+                                        {weldRate}/hr
+                                        {weldMinOverride != null && (
+                                          <span
+                                            style={{ cursor: "pointer", textDecoration: "underline", fontSize: 11 }}
+                                            title="Back to the analyzer's welding time"
+                                            onClick={() => setWeldMinOverride(null)}
+                                          >
+                                            reset
+                                          </span>
+                                        )}
+                                      </span>
+                                      <span className="amt">{inr(rollup.weldCost)}</span>
+                                    </div>
+                                  </>
+                                )}
                                 <div className="ledger-row">
                                   <span className="desc">
-                                    Post-weld machining — {fmtMin(rollup.pwTotalMin)}
+                                    Post-weld machining — {fmtMin(rollup.pwPerAssy)}/assembly
+                                    {rollup.NA > 1 ? ` × ${rollup.NA} = ${fmtMin(rollup.pwTotalMin)}` : ""}
                                   </span>
                                   <span className="amt">{inr(rollup.pwCost)}</span>
                                 </div>
@@ -3259,20 +3417,37 @@ export default function App() {
                                     + Add
                                   </button>
                                 </div>
-                                <div className="ledger-row subtotal">
-                                  <span className="desc">Subtotal</span>
-                                  <span className="amt">{inr(rollup.subtotal)}</span>
-                                </div>
-                                <div className="ledger-row">
-                                  <span className="desc">Margin ({marginPct}%)</span>
-                                  <span className="amt">{inr(rollup.total - rollup.subtotal)}</span>
-                                </div>
-                                <div className="ledger-row grand">
-                                  <span className="desc">Job total — welded assembly</span>
-                                  <span className="amt">{rollup.ready ? inr(rollup.total) : `${inr(rollup.total)} + pending parts`}</span>
-                                </div>
+                                {(() => {
+                                  const isAsm = assemblyMode === "assembled";
+                                  const sub = isAsm ? rollup.assembledSubtotal : rollup.subtotal;
+                                  const tot = isAsm ? rollup.assembledTotal : rollup.total;
+                                  return (
+                                    <>
+                                      <div className="ledger-row subtotal">
+                                        <span className="desc">Subtotal</span>
+                                        <span className="amt">{inr(sub)}</span>
+                                      </div>
+                                      <div className="ledger-row">
+                                        <span className="desc">Margin ({marginPct}%)</span>
+                                        <span className="amt">{inr(tot - sub)}</span>
+                                      </div>
+                                      <div className="ledger-row grand">
+                                        <span className="desc">
+                                          {isAsm
+                                            ? `Job total — post-weld only${rollup.NA > 1 ? ` (${rollup.NA} assemblies)` : ""}`
+                                            : `Job total — welded assembly${rollup.NA > 1 ? ` ×${rollup.NA}` : ""}`}
+                                        </span>
+                                        <span className="amt">
+                                          {isAsm || rollup.ready
+                                            ? inr(tot)
+                                            : `${inr(tot)} + pending parts`}
+                                        </span>
+                                      </div>
+                                    </>
+                                  );
+                                })()}
                               </div>
-                              {!rollup.ready && (
+                              {assemblyMode !== "assembled" && !rollup.ready && (
                                 <button
                                   className="btn"
                                   style={{ marginTop: 6 }}
