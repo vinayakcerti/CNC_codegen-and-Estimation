@@ -394,6 +394,17 @@ def _orient_setups(features: list, bbox: dict | None) -> None:
         minus = (mill.get((k, -1), 0), anyc.get((k, -1), 0))
         sign = 1 if plus >= minus else -1
         f["setup_label"] = _label_k(k, sign)
+        # The hole is DRILLED FROM the consolidated setup's face — overwrite
+        # the detected entry with the setup's outward direction so the viewer
+        # cone/auto-focus/G-code all show the tool from the correct side (a
+        # through hole consolidated into the faced-up setup must not keep an
+        # entry vector pointing out the far side — that drew the drill coming
+        # up from below the plate).
+        g = f.get("_geometry")
+        if isinstance(g, dict):
+            outward = [0.0, 0.0, 0.0]
+            outward[k] = float(sign)
+            g["entry_dir"] = outward
 
 
 def _exact_body_features(cls: dict, scoped_candidates: list, bbox: dict | None = None) -> list:

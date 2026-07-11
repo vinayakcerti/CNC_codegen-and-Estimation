@@ -1816,15 +1816,16 @@ export default function App() {
   // frame as its mesh), so a slot reads as cut INTO the part from outside.
   const opApproach = useMemo((): Approach | null => {
     const geo = selOpData?.geo;
-    const gg = geo?.geometry;
-    if (!geo || !gg || geo.x == null || geo.y == null || geo.z == null) return null;
-    // Open slots: the tool enters through the OPENING (open_dir); holes and
-    // closed slots enter along entry_dir. Both are OUTWARD vectors, so the
-    // tool travels into the part along the negated direction below.
+    if (!geo || geo.x == null || geo.y == null || geo.z == null) return null;
     // The cutter plunges along the feature's tool axis (entry_dir = outward
     // normal of the machined face), NOT a slot's horizontal open_dir — the
     // real cut comes from the floor-normal face, matching the setup routing.
-    const ed = gg.entry_dir;
+    // Ops without an entry vector (facing, steps) fall back to their SETUP's
+    // outward face so the cone always shows where the tool comes from.
+    const ed =
+      geo.geometry?.entry_dir ??
+      SETUP_DIRS[normalizeSetupLabel(selOpData?.setup ?? "")] ??
+      null;
     if (!ed || ed.length < 3) return null;
     const n = Math.hypot(ed[0], ed[1], ed[2]);
     if (n < 1e-6) return null;
@@ -1857,15 +1858,27 @@ export default function App() {
     toolAxis: Vec3 | null;
     method: string | null;
     flip: boolean;
+    facing: boolean;
   } => {
+    // Does the active setup face-mill its whole surface? Then clamps must
+    // grip the part ENDS below the machined face — a toe on the face being
+    // faced would sit in the cutter's path.
+    const setupHasFacing = (label: string | null): boolean => {
+      if (!label) return false;
+      const su = stratForView?.setups.find(
+        (s) => normalizeSetupLabel(s.setup_label) === normalizeSetupLabel(label),
+      );
+      return !!su?.ops.some((op) => (op.operation || "").startsWith("Face Mill"));
+    };
     if (selectedGroup) {
       const setupLabel = selOpData?.setup ?? stratForView?.setups[0]?.setup_label ?? null;
-      if (!setupLabel) return { toolAxis: null, method: null, flip: false };
+      if (!setupLabel) return { toolAxis: null, method: null, flip: false, facing: false };
       const su = stratForView?.setups.find((s) => s.setup_label === setupLabel);
       return {
         toolAxis: SETUP_DIRS[normalizeSetupLabel(setupLabel)] ?? null,
         method: su?.workholding?.method ?? stratForView?.setups[0]?.workholding?.method ?? null,
         flip: false,
+        facing: setupHasFacing(setupLabel),
       };
     }
     if (activeSetup) {
@@ -1876,9 +1889,10 @@ export default function App() {
         toolAxis: SETUP_DIRS[normalizeSetupLabel(activeSetup)] ?? null,
         method: su?.method ?? null,
         flip: SECONDARY_FACE_RE.test(activeSetup),
+        facing: setupHasFacing(activeSetup),
       };
     }
-    return { toolAxis: null, method: null, flip: false };
+    return { toolAxis: null, method: null, flip: false, facing: false };
   }, [selectedGroup, selOpData, stratForView, activeSetup, analysis]);
 
   // ---- Thread status per hole diameter (session-only UI state) ----
@@ -2704,6 +2718,7 @@ export default function App() {
                           flip: fixtureCtx.flip,
                           toolAxis: fixtureCtx.toolAxis,
                           method: fixtureCtx.method,
+                          clearFace: fixtureCtx.facing,
                         }
                       : null
                   }

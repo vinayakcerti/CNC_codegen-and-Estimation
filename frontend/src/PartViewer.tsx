@@ -114,6 +114,7 @@ function WorkholdingScene({
   method,
   flip,
   avoid = null,
+  clearFace = false,
 }: {
   bbox: Bbox;
   partSize: number;
@@ -127,6 +128,8 @@ function WorkholdingScene({
   // Feature positions (part frame) the clamps must stay clear of — a toe
   // clamp on a cut region can't hold the part while that cut runs (Pic-3).
   avoid?: Vec3[] | null;
+  // Facing setup: grip the part ENDS below the machined face (no toe on top).
+  clearFace?: boolean;
 }) {
   const mins = bbox.mins;
   const maxs = bbox.maxs;
@@ -205,8 +208,19 @@ function WorkholdingScene({
   const endB = maxs[clampAx] + clampLenC / 2 - toe;
   const otherA = ptsFor.length ? bestOther(endA) : c[otherAx];
   const otherB = ptsFor.length ? bestOther(endB) : c[otherAx];
-  const clampPosA = triple((a) => (a === clampAx ? endA : a === mAx ? clampM : otherA));
-  const clampPosB = triple((a) => (a === clampAx ? endB : a === mAx ? clampM : otherB));
+  // Facing setup (clearFace): the WHOLE machined face is in the cutter's
+  // path, so no toe may rest on it — grip the part ends instead, with the
+  // clamp top sitting safely below the machined plane.
+  const faceOpp = tSign > 0 ? mins[mAx] : maxs[mAx];
+  const gripTop = faceM - tSign * span[mAx] * 0.15;
+  const gripC = (gripTop + faceOpp) / 2;
+  const gripH = Math.max(Math.abs(gripTop - faceOpp), 2);
+  const clampM2 = clearFace ? gripC : clampM;
+  const clampSizeEff = clearFace
+    ? triple((a) => (a === clampAx ? clampLenC : a === mAx ? gripH : cw * 1.7))
+    : clampSize;
+  const clampPosA = triple((a) => (a === clampAx ? endA : a === mAx ? clampM2 : otherA));
+  const clampPosB = triple((a) => (a === clampAx ? endB : a === mAx ? clampM2 : otherB));
 
   // Vise style: two soft jaws on the ±clamp-axis faces, biased to the
   // tool-opposite portion so the machined face stays clear.
@@ -232,11 +246,11 @@ function WorkholdingScene({
             <meshStandardMaterial color={steel} metalness={0.3} roughness={0.55} />
           </mesh>
           <mesh position={clampPosA}>
-            <boxGeometry args={clampSize} />
+            <boxGeometry args={clampSizeEff} />
             <meshStandardMaterial color="#c07a2a" metalness={0.4} roughness={0.5} />
           </mesh>
           <mesh position={clampPosB}>
-            <boxGeometry args={clampSize} />
+            <boxGeometry args={clampSizeEff} />
             <meshStandardMaterial color="#c07a2a" metalness={0.4} roughness={0.5} />
           </mesh>
         </>
@@ -669,7 +683,14 @@ export function PartViewer({
   // Fixture visuals for the active setup. toolAxis = machined-face normal so
   // the fixture clamps clear of it; method picks vise vs fixture-plate; flip =
   // secondary face re-fixture hint.
-  workholding?: { flip: boolean; toolAxis?: Vec3 | null; method?: string | null } | null;
+  workholding?: {
+    flip: boolean;
+    toolAxis?: Vec3 | null;
+    method?: string | null;
+    // The setup FACE-MILLS its whole surface: clamps must grip the part ends
+    // BELOW the machined face — a toe on that face sits in the cutter's path.
+    clearFace?: boolean;
+  } | null;
   // WS-B: pickable feature handles for the 3D right-click deselect. Each dot
   // sits at a feature's position; right-click toggles its exclusion.
   pickFeatures?: { id: string; hl: Highlight; faces: Mesh[] }[] | null;
@@ -847,6 +868,7 @@ export function PartViewer({
             toolAxis={workholding.toolAxis ?? null}
             method={workholding.method ?? null}
             flip={workholding.flip}
+            clearFace={workholding.clearFace ?? false}
             avoid={
               pickFeatures
                 ? pickFeatures
