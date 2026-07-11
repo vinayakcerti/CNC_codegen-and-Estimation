@@ -775,21 +775,44 @@ function loadInspectorWidth(): number {
 // face. Rendered only when the backend planned from exact classifier
 // geometry (op.geo.geometry present).
 function GeometrySection({ g }: { g: FeatureGeometry }) {
+  // ARD R5: a "compound" hole is a counter (counterbore or countersink) sitting
+  // over a threaded base hole — e.g. a counterbore clearing a screw head above
+  // a tapped M6. For those cards, surface the thread spec as a top-level,
+  // visually prominent row above the counter geometry so it isn't buried below
+  // the base-hole rows it actually belongs to.
+  const hasCounter =
+    g.kind === "hole" && ((g.cbore_diameter_mm != null && g.cbore_diameter_mm > 0) || g.countersink === true);
+  const isCompound = g.kind === "hole" && hasCounter && !!g.thread_likely;
   return (
     <>
       <div className="op-panel-sect">Geometry</div>
       {g.kind === "hole" ? (
         <>
-          <div className="op-panel-row">
-            <span className="k">Diameter</span>
-            <span className="v">Ø{fmtNum(g.diameter_mm)} mm</span>
-          </div>
+          {isCompound && (
+            <div
+              className="op-panel-row"
+              title={`Base hole Ø${fmtNum(g.diameter_mm)} mm — likely ${g.thread_likely} tap`}
+            >
+              <span className="k">Thread</span>
+              <span className="v" style={{ fontWeight: 600 }}>{g.thread_likely}</span>
+            </div>
+          )}
           {g.cbore_diameter_mm != null && g.cbore_diameter_mm > 0 && (
             <div className="op-panel-row">
               <span className="k">Counterbore</span>
               <span className="v">Ø{fmtNum(g.cbore_diameter_mm)} mm</span>
             </div>
           )}
+          {g.countersink && (
+            <div className="op-panel-row">
+              <span className="k">Countersink</span>
+              <span className="v">{g.tip_angle_deg != null ? `${fmtNum(g.tip_angle_deg)}°` : "—"}</span>
+            </div>
+          )}
+          <div className="op-panel-row">
+            <span className="k">Diameter</span>
+            <span className="v">Ø{fmtNum(g.diameter_mm)} mm</span>
+          </div>
           <div className="op-panel-row">
             <span className="k">Depth</span>
             <span className="v">{fmtNum(g.depth_mm)} mm</span>
@@ -812,7 +835,7 @@ function GeometrySection({ g }: { g: FeatureGeometry }) {
               <span className="v">{fmtNum(g.depth_below_top_mm)} mm</span>
             </div>
           )}
-          {g.tip_angle_deg != null && (
+          {!g.countersink && g.tip_angle_deg != null && (
             <div className="op-panel-row">
               <span className="k">Tip angle</span>
               <span className="v">{fmtNum(g.tip_angle_deg)}°</span>
@@ -829,13 +852,13 @@ function GeometrySection({ g }: { g: FeatureGeometry }) {
               </span>
             </div>
           )}
-          {g.thread_likely && (
+          {!isCompound && g.thread_likely && (
             <div className="op-panel-row" title="Inferred from the pilot diameter (tap-drill table) — not thread data from the CAD file">
               <span className="k">Thread</span>
               <span className="v">likely {g.thread_likely}</span>
             </div>
           )}
-          {g.countersink && (
+          {!isCompound && g.countersink && (
             <div className="op-panel-chips">
               <span className="chip">Countersink</span>
             </div>
