@@ -1344,6 +1344,10 @@ export default function App() {
       return n;
     });
   const fileRef = useRef<HTMLInputElement>(null);
+  // Parts the user uploaded this session — a project can hold as many as they
+  // like. Each shows as a card on Projects; clicking one analyses it. (Kept as
+  // in-memory File handles so re-analysis on click needs no re-upload.)
+  const [uploadedParts, setUploadedParts] = useState<File[]>([]);
 
   // Uploaded part is retained so material changes can re-run analysis
   const [partFile, setPartFile] = useState<File | null>(null);
@@ -2918,8 +2922,19 @@ export default function App() {
   }
 
   function onFile(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) void runAnalysis(file);
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    // Add every selected file to the project (dedupe by name+size), so the
+    // user can drop in 5–6 STEPs at once and browse them as cards.
+    setUploadedParts((prev) => {
+      const key = (f: File) => `${f.name}:${f.size}`;
+      const seen = new Set(prev.map(key));
+      return [...prev, ...files.filter((f) => !seen.has(key(f)))];
+    });
+    // Open the first one immediately so there's instant feedback; the rest
+    // wait as cards on Projects.
+    void runAnalysis(files[0]);
+    e.target.value = ""; // let the same files be re-picked later
   }
 
   async function loadSample() {
@@ -3400,6 +3415,7 @@ export default function App() {
             ref={fileRef}
             type="file"
             accept=".step,.stp"
+            multiple
             style={{ display: "none" }}
             onChange={onFile}
           />
@@ -3505,10 +3521,50 @@ export default function App() {
                 </div>
                 <div className="part-card upload" onClick={() => fileRef.current?.click()}>
                   <div style={{ fontSize: 26, color: "var(--text-2)" }}>+</div>
-                  <div className="card-sub">Upload STEP</div>
+                  <div className="card-sub">Upload STEP (one or many)</div>
                 </div>
               </div>
             </div>
+
+            {uploadedParts.length > 0 && (
+              <div className="project-group" style={{ marginTop: 18 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
+                  Your uploads ({uploadedParts.length})
+                </div>
+                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 14 }}>
+                  Uploaded this session — click a part to analyse it
+                </div>
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                  {uploadedParts.map((f, i) => (
+                    <div
+                      className="part-card"
+                      key={`${f.name}:${f.size}:${i}`}
+                      onClick={() => void runAnalysis(f)}
+                      title={f.name}
+                    >
+                      <div className="thumb">
+                        <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
+                          <polygon points="16,44 80,26 104,40 40,58" fill="#3a4048" stroke="#565e68" />
+                          <polygon points="16,44 40,58 40,66 16,52" fill="#2e343b" stroke="#565e68" />
+                          <polygon points="40,58 104,40 104,48 40,66" fill="#333940" stroke="#565e68" />
+                        </svg>
+                      </div>
+                      <div className="card-name">{f.name.replace(/\.(step|stp)$/i, "")}</div>
+                      <div className="card-sub">
+                        {(f.size / 1024).toFixed(0)} KB · click to analyse
+                      </div>
+                    </div>
+                  ))}
+                  <div
+                    className="part-card upload"
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    <div style={{ fontSize: 26, color: "var(--text-2)" }}>+</div>
+                    <div className="card-sub">Add more</div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
