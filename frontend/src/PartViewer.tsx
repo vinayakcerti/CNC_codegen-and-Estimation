@@ -127,7 +127,9 @@ function WorkholdingScene({
   flip: boolean;
   // Feature positions (part frame) the clamps must stay clear of — a toe
   // clamp on a cut region can't hold the part while that cut runs (Pic-3).
-  avoid?: Vec3[] | null;
+  // [x, y, z] or [x, y, z, keepOutRadius] — radius inflates the feature so
+  // clamps clear its whole extent (long slots), not just its centre.
+  avoid?: number[][] | null;
   // Facing setup: grip the part ENDS below the machined face (no toe on top).
   clearFace?: boolean;
 }) {
@@ -188,7 +190,9 @@ function WorkholdingScene({
   const nearFace = avoidPts.filter((p) => Math.abs(p[mAx] - faceM) <= span[mAx] * 0.35 + cw);
   const ptsFor = nearFace.length ? nearFace : avoidPts;
   const bestOther = (endC: number): number => {
-    const cands = [0, 0.18, -0.18, 0.32, -0.32].map((f) => c[otherAx] + f * span[otherAx]);
+    const cands = [0, 0.18, -0.18, 0.32, -0.32, 0.45, -0.45].map(
+      (f) => c[otherAx] + f * span[otherAx],
+    );
     const halfC = clampLenC / 2 + cw * 0.4;
     const halfO = (cw * 1.7) / 2 + cw * 0.4;
     let best = cands[0];
@@ -196,8 +200,11 @@ function WorkholdingScene({
     for (const cand of cands) {
       let score = Infinity;
       for (const p of ptsFor) {
-        const dC = Math.abs(p[clampAx] - endC) / halfC;
-        const dO = Math.abs(p[otherAx] - cand) / halfO;
+        // p[3] = feature keep-out radius: a 116 mm slot must repel the clamp
+        // along its whole length, not only at its centre point.
+        const r = p.length > 3 && Number.isFinite(p[3]) ? p[3] : 0;
+        const dC = Math.abs(p[clampAx] - endC) / (halfC + r);
+        const dO = Math.abs(p[otherAx] - cand) / (halfO + r);
         score = Math.min(score, Math.max(dC, dO)); // normalized clearance; >1 = clear
       }
       if (score > bestScore + 1e-6) { bestScore = score; best = cand; }
@@ -873,7 +880,15 @@ export function PartViewer({
               pickFeatures
                 ? pickFeatures
                     .filter((p) => p.hl.x != null && p.hl.y != null && p.hl.z != null)
-                    .map((p) => [p.hl.x as number, p.hl.y as number, p.hl.z as number] as Vec3)
+                    .map((p) => [
+                      p.hl.x as number,
+                      p.hl.y as number,
+                      p.hl.z as number,
+                      // Keep-out radius: half the feature's planar extent, so a
+                      // long slot blocks a clamp along its WHOLE length — not
+                      // just at its centre point.
+                      Math.max(p.hl.length || 0, p.hl.width || 0, p.hl.diameter || 0) / 2,
+                    ])
                 : null
             }
           />

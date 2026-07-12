@@ -2426,6 +2426,21 @@ export default function App() {
         facing: setupHasFacing(setupLabel),
       };
     }
+    // A selected op re-orients the WHOLE-PART view too: the part sits
+    // working-face-up exactly as it would in the machine for that op's
+    // setup. A VMC tool never enters from below — without this, bottom-face
+    // ops read as "drilling upward" in the raw part orientation.
+    if (selOpData?.setup) {
+      const su = stratForView?.setups.find(
+        (s) => normalizeSetupLabel(s.setup_label) === normalizeSetupLabel(selOpData.setup),
+      );
+      return {
+        toolAxis: SETUP_DIRS[normalizeSetupLabel(selOpData.setup)] ?? null,
+        method: su?.workholding?.method ?? null,
+        flip: SECONDARY_FACE_RE.test(selOpData.setup),
+        facing: setupHasFacing(selOpData.setup),
+      };
+    }
     if (activeSetup) {
       const su = analysis?.setups?.find(
         (s) => normalizeSetupLabel(s.label) === normalizeSetupLabel(activeSetup),
