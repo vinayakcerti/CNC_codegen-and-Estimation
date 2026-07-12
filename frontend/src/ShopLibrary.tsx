@@ -58,19 +58,24 @@ function customParamRows(m: CustomMachine): [string, string][] {
   return rows;
 }
 
-// Inline "+ Add machine" form: name required; axes / rpm / controller
-// optional (engine defaults fill the rest, as in the machine dropdown).
+// Inline machine form: used for "+ Add machine" AND for editing a copy of a
+// default machine (initial pre-fills every field; unchanged extras are
+// carried over on save so nothing from the default's spec is lost).
 function AddMachineInlineForm({
   onSave,
   onCancel,
+  initial = null,
+  saveLabel = "Save machine",
 }: {
   onSave: (m: CustomMachine) => void;
   onCancel: () => void;
+  initial?: CustomMachine | null;
+  saveLabel?: string;
 }) {
-  const [name, setName] = useState("");
-  const [axes, setAxes] = useState(3);
-  const [rpm, setRpm] = useState(8000);
-  const [controller, setController] = useState("");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [axes, setAxes] = useState(initial?.axes ?? 3);
+  const [rpm, setRpm] = useState(initial?.max_spindle_rpm ?? 8000);
+  const [controller, setController] = useState(initial?.controller ?? "");
 
   return (
     <div className="route-form" style={{ marginTop: 10 }}>
@@ -124,19 +129,23 @@ function AddMachineInlineForm({
           disabled={!name.trim()}
           onClick={() => {
             const m: CustomMachine = {
+              // Copy-on-edit: every field of the source machine survives;
+              // the form only overrides what's shown below.
+              ...(initial ?? {}),
               name: name.trim(),
               max_spindle_rpm: rpm,
               axes,
               // Same engine defaults as the machine dropdown's add form.
-              rapid_feed_rate: 24000,
-              tool_change_time_s: 5,
-              setup_time_min: 20,
+              rapid_feed_rate: initial?.rapid_feed_rate ?? 24000,
+              tool_change_time_s: initial?.tool_change_time_s ?? 5,
+              setup_time_min: initial?.setup_time_min ?? 20,
             };
             if (controller.trim()) m.controller = controller.trim();
+            else delete m.controller;
             onSave(m);
           }}
         >
-          Save machine
+          {saveLabel}
         </button>
       </div>
     </div>
@@ -149,6 +158,7 @@ export function ShopLibrary({
   myMachines,
   onToggleMyMachine,
   onAddCustomMachine,
+  onUpdateCustomMachine,
   currency,
   profilesNonce,
   onProfilesChanged,
@@ -159,6 +169,8 @@ export function ShopLibrary({
   myMachines: Set<string>;
   onToggleMyMachine: (name: string) => void;
   onAddCustomMachine: (m: CustomMachine) => void;
+  // Replace an existing custom machine (edit-in-place, keyed by old name).
+  onUpdateCustomMachine: (originalName: string, m: CustomMachine) => void;
   currency: string; // display symbol, e.g. "₹"
   // Re-read stored costing profiles whenever this bumps.
   profilesNonce: number;
@@ -167,6 +179,10 @@ export function ShopLibrary({
   const [picked, setPicked] = useState<string>("");
   const [adding, setAdding] = useState(false);
   const [copyFromId, setCopyFromId] = useState("");
+  // Copy-on-edit form seed: a pre-filled machine (default → "(My Shop)" copy,
+  // custom → itself). null = form closed.
+  const [editSeed, setEditSeed] = useState<CustomMachine | null>(null);
+  const [editingCustom, setEditingCustom] = useState(false);
 
   // Defaults first, then customs marked "custom". A custom machine wins a
   // name collision (same rule as the machine dropdown); default names are
@@ -311,10 +327,53 @@ export function ShopLibrary({
             ) : (
               <div className="bp-msg">No parameters on record for this machine.</div>
             )}
-            <div className="shop-note">
-              Parameters are read-only — custom machine editing lands with the
-              shop database (v1).
+            <div
+              className="shop-note"
+              style={{ display: "flex", alignItems: "center", gap: 8 }}
+            >
+              <span style={{ flex: 1 }}>
+                {selCustom
+                  ? "Your machine — edit its parameters any time."
+                  : "Default machine — our library never changes. “Edit a copy” makes your own version (e.g. same Ace, Siemens controller)."}
+              </span>
+              <button
+                className="btn"
+                style={{ fontSize: 11, padding: "3px 10px", flexShrink: 0 }}
+                onClick={() => {
+                  if (selCustom) {
+                    setEditingCustom(true);
+                    setEditSeed({ ...selCustom });
+                  } else if (selLib) {
+                    setEditingCustom(false);
+                    setEditSeed({
+                      ...(selLib as Record<string, unknown>),
+                      name: `${selName} (My Shop)`,
+                      axes: Number(selLib.axes ?? selLib.axis_count ?? 3),
+                      max_spindle_rpm: Number(selLib.max_spindle_rpm ?? 8000),
+                      rapid_feed_rate: Number(selLib.rapid_feed_rate ?? 24000),
+                      tool_change_time_s: Number(selLib.tool_change_time_s ?? 5),
+                      setup_time_min: Number(selLib.setup_time_min ?? 20),
+                    } as CustomMachine);
+                  }
+                }}
+              >
+                {selCustom ? "✎ Edit" : "✎ Edit a copy"}
+              </button>
             </div>
+            {editSeed && (
+              <AddMachineInlineForm
+                key={`${selName}-${editingCustom}`}
+                initial={editSeed}
+                saveLabel={editingCustom ? "Save changes" : "Save my copy"}
+                onCancel={() => setEditSeed(null)}
+                onSave={(m) => {
+                  if (editingCustom) onUpdateCustomMachine(selName, m);
+                  else onAddCustomMachine(m);
+                  setPicked(m.name);
+                  setEditSeed(null);
+                }}
+              />
+            )}
 
             <div className="section-title">Rate card — {profile.name}</div>
             <div className="shop-copy-row">

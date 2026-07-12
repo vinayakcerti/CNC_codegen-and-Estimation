@@ -13,6 +13,17 @@ import {
 
 const TOLS: ToleranceClass[] = ["H6", "H7", "H8", "H9", "H11", "free", "thread"];
 
+// Hole-making operations: everything the planner emits today plus the ops
+// shops commonly quote (the tester's Drill / Drill+Ream seeds included).
+// NOTE: the pricing lookup keys on (Ø, tolerance, thickness) — this column
+// documents HOW the shop achieves the hole; "Custom…" keeps it open-ended.
+const HOLE_OPERATIONS = [
+  "Drill", "Spot Drill", "Pilot Drill", "Drill+Ream", "Ream",
+  "Bore", "Bore+Ream", "Tap", "Drill+Tap", "Thread Mill",
+  "Counter-bore", "Countersink", "Drill+Counter-bore", "Drill+Countersink",
+  "Jig Bore", "Gun Drill", "Honing",
+];
+
 export function RateCardEditor({
   profile,
   currency,
@@ -348,10 +359,29 @@ export function RateCardEditor({
                 </td>
                 <td>{numCell(r.thickness_mm, (v) => setRow(r.id, { thickness_mm: v }, "edit_thickness"), 58, 0.5)}</td>
                 <td>
-                  <input
-                    className="num-input" style={{ width: 96 }} value={r.operation}
-                    onChange={(e) => setRow(r.id, { operation: e.target.value }, "edit_operation")}
-                  />
+                  <select
+                    className="mini-select"
+                    style={{ width: 118 }}
+                    value={r.operation}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "__custom__") {
+                        const c = window.prompt("Operation name:", r.operation);
+                        if (c && c.trim())
+                          setRow(r.id, { operation: c.trim() }, "edit_operation");
+                        return;
+                      }
+                      setRow(r.id, { operation: v }, "edit_operation");
+                    }}
+                  >
+                    {!HOLE_OPERATIONS.includes(r.operation) && (
+                      <option value={r.operation}>{r.operation}</option>
+                    )}
+                    {HOLE_OPERATIONS.map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                    <option value="__custom__">Custom…</option>
+                  </select>
                 </td>
                 <td>
                   {numCell(r.cost_inr, (v) =>

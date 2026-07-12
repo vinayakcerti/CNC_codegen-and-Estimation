@@ -2839,6 +2839,30 @@ export default function App() {
     }
   }
 
+  // Edit a custom machine in place (Shop Library "✎ Edit"): replace by its
+  // old name; keep selection and the my-machines tick following a rename.
+  function updateCustomMachine(originalName: string, m: CustomMachine) {
+    const next = customMachines.map((c) => (c.name === originalName ? m : c));
+    setCustomMachines(next);
+    lsSet("cnc.customMachines", JSON.stringify(next));
+    if (m.name !== originalName && myMachines.has(originalName)) {
+      setMyMachines((prev) => {
+        const n = new Set(prev);
+        n.delete(originalName);
+        n.add(m.name);
+        lsSet("cnc.myMachines", JSON.stringify([...n]));
+        return n;
+      });
+    }
+    if (machineSel === originalName) {
+      setMachineSel(m.name);
+      lsSet("cnc.machine", m.name);
+      if (partFile) {
+        void runAnalysis(partFile, { preserveTab: true, machine: { machineJson: JSON.stringify(m) } });
+      }
+    }
+  }
+
   function onFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) void runAnalysis(file);
@@ -3397,6 +3421,7 @@ export default function App() {
               myMachines={myMachines}
               onToggleMyMachine={toggleMyMachine}
               onAddCustomMachine={addCustomMachine}
+              onUpdateCustomMachine={updateCustomMachine}
               currency={sym}
               profilesNonce={costingNonce}
               onProfilesChanged={() => setCostingNonce((n) => n + 1)}
