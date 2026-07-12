@@ -9,10 +9,12 @@ import type {
 import { PartViewer } from "./PartViewer";
 import {
   profileForMachine, rateCardBreakdown, updateProfile, audit, baseName,
-  inferTolerance, loadProfiles,
+  inferTolerance, loadProfiles, saveProfiles,
   type RateCardBreakdown,
 } from "./costing";
 import { CostLibraryPanel } from "./CostLibraryPanel";
+import { ShopLibrary } from "./ShopLibrary";
+import { exportShopFile, importShopFile } from "./shopFile";
 import { buildWorkbook, type WorkbookPayload } from "./excelExport";
 import type { Vec3, Approach, Highlight } from "./PartViewer";
 import { MaterialSelect } from "./MaterialSelect";
@@ -1126,8 +1128,6 @@ export default function App() {
       : list.filter(
           (m) => m.name === current || (m.name != null && myMachines.has(m.name)),
         );
-  // Used by the Shop Library screen (SHOP-1 merge wires it through).
-  void toggleMyMachine;
   const [selOp, setSelOp] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<OpGeo | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -3329,15 +3329,78 @@ export default function App() {
 
         {view === "shop" && (
           <div style={{ flex: 1, overflowY: "auto", padding: "28px 36px" }}>
-            <h1 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 18px" }}>
-              My Shop — Machines &amp; Rate Cards
-            </h1>
-            {/* SHOP-1 screen lands here once the agent branch merges. */}
-            <div style={{ fontSize: 13, color: "var(--text-2)" }}>
-              The Shop Library screen is being assembled — machine list, per-machine
-              parameters and rate cards, copy-between-machines, and the
-              “machines I use” selection will appear here.
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+              <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0, flex: 1 }}>
+                My Shop — Machines &amp; Rate Cards
+              </h1>
+              {/* SHOP-4: one shop file — full backup/restore of machines,
+                  rate cards and the my-machines selection. */}
+              <button
+                className="btn"
+                title="Download your whole shop setup (machines, rate cards, selection) as one JSON file"
+                onClick={() => {
+                  const text = exportShopFile(
+                    loadProfiles(), customMachines, [...myMachines],
+                  );
+                  const blob = new Blob([text], { type: "application/json" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "my_shop_library.json";
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                ⭳ Export shop file
+              </button>
+              <button
+                className="btn"
+                title="Restore a shop file (replaces rate cards, custom machines and the my-machines selection)"
+                onClick={() => document.getElementById("shop-import-input")?.click()}
+              >
+                Import…
+              </button>
+              <input
+                id="shop-import-input"
+                type="file"
+                accept=".json,application/json"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!f) return;
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    const res = importShopFile(String(reader.result || ""));
+                    if (!res.ok) {
+                      setError(`Shop file import failed: ${res.error}`);
+                      return;
+                    }
+                    saveProfiles(res.data.profiles);
+                    setCustomMachines(res.data.customMachines);
+                    lsSet("cnc.customMachines", JSON.stringify(res.data.customMachines));
+                    setMyMachines(new Set(res.data.myMachines));
+                    lsSet("cnc.myMachines", JSON.stringify(res.data.myMachines));
+                    setCostingNonce((n) => n + 1);
+                    if (res.warnings.length)
+                      window.alert(
+                        "Imported with warnings:\n" + res.warnings.join("\n"),
+                      );
+                  };
+                  reader.readAsText(f);
+                }}
+              />
             </div>
+            <ShopLibrary
+              machines={machines}
+              customMachines={customMachines}
+              myMachines={myMachines}
+              onToggleMyMachine={toggleMyMachine}
+              onAddCustomMachine={addCustomMachine}
+              currency={sym}
+              profilesNonce={costingNonce}
+              onProfilesChanged={() => setCostingNonce((n) => n + 1)}
+            />
           </div>
         )}
         {view === "projects" && (
