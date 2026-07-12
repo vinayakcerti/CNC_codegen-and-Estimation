@@ -2704,7 +2704,12 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
         # pockets/slots) are rejected by looking for PLANE faces whose normals are
         # perpendicular to the candidate turning axis and that sit away from the
         # part ends — a signature of milling, not turning.
-        _G_cyl_faces  = [r for r in face_records if r.get("geom_type") == "CYLINDER"]
+        # Surfaces of revolution: a turned OD is CYLINDER (straight shaft) or
+        # CONE (taper). Both share one axis, so both count toward the
+        # axisymmetric fraction. Cones carry no OCC cylinder axis, so their
+        # axis falls through to the bbox odd-axis inference below.
+        _G_cyl_faces  = [r for r in face_records
+                         if r.get("geom_type") in ("CYLINDER", "CONE")]
         _G_total_area = sum(r.get("area_mm2") or 0.0 for r in face_records)
         is_axisymmetric         = False
         turning_axis            = None
@@ -2875,6 +2880,101 @@ def detect_feature_candidates_from_cadquery_file(file_path: str) -> dict:
                     + f" | 19-2: coaxial with {turning_axis.upper()} turning axis "
                     f"(envelope Ø{_envelope_od:.1f}) — lathe region, not a milled bore."
                 )
+
+            # 19-2e: TAPER / conical OD. A cone coaxial with the turning axis
+            # is a tapered OD-turning region. Unlike a straight shaft the cone
+            # is never read as a bore by Section B, so no candidate exists to
+            # re-type — synthesize one straight from the cone face. Small end
+            # or edge-break chamfers (a few % of area) are rejected by the area
+            # gate so only genuine taper stock becomes a turning op.
+            for _cn in face_records:
+                if _cn.get("geom_type") != "CONE":
+                    continue
+                _cn_area = _cn.get("area_mm2") or 0.0
+                if _G_total_area <= 0 or _cn_area < 0.10 * _G_total_area:
+                    continue  # chamfer / edge break, not a taper region
+                _cn_dims = {"x": _cn.get("bbox_length_x") or 0.0,
+                            "y": _cn.get("bbox_length_y") or 0.0,
+                            "z": _cn.get("bbox_length_z") or 0.0}
+
+                def _odd_axis_of(dims):
+                    _best_a, _best_s = None, 0.0
+                    for _a in ("x", "y", "z"):
+                        _others = [v for k, v in dims.items() if k != _a]
+                        _mx = max(_others)
+                        _sim = (min(_others) / _mx) if _mx > 0 else 0.0
+                        if _sim > _best_s:
+                            _best_s, _best_a = _sim, _a
+                    return _best_a
+
+                if _odd_axis_of(_cn_dims) != turning_axis:
+                    continue  # cone not coaxial with the part's turning axis
+                _cn_len = _cn_dims[turning_axis]
+                _cn_max_od = max(_cn_dims[a] for a in ("x", "y", "z")
+                                 if a != turning_axis)
+                # min OD from the smaller coaxial end-cap disc, when present
+                _cn_lo = _cn.get(f"bbox_{turning_axis}min")
+                _cn_hi = _cn.get(f"bbox_{turning_axis}max")
+                _cn_etol = max(1.0, _cn_len * 0.05)
+                _cn_end_d = []
+                for _pl in face_records:
+                    if _pl.get("geom_type") != "PLANE":
+                        continue
+                    if abs(_pl.get(f"normal_{turning_axis}") or 0.0) < 0.85:
+                        continue
+                    _plc = _pl.get(f"center_{turning_axis}")
+                    if _plc is None or _cn_lo is None or _cn_hi is None:
+                        continue
+                    if min(abs(_plc - _cn_lo), abs(_plc - _cn_hi)) > _cn_etol:
+                        continue
+                    _pla = _pl.get("area_mm2") or 0.0
+                    if _pla > 0:
+                        _cn_end_d.append(2.0 * (_pla / 3.141592653589793) ** 0.5)
+                if _cn_end_d:
+                    _cn_max_od = max(_cn_max_od, max(_cn_end_d))
+                _cn_min_od = min(_cn_end_d) if _cn_end_d else None
+                _cn_axis_vec = [1.0 if a == turning_axis else 0.0
+                                for a in ("x", "y", "z")]
+                _cn_label = _setup_label_from_normal(*_cn_axis_vec)
+                if _cn_label == "Unknown":
+                    _cn_label = "Top"
+                _cn_taper = (
+                    f" (taper Ø{_cn_min_od:.1f}→Ø{_cn_max_od:.1f})"
+                    if _cn_min_od is not None and abs(_cn_min_od - _cn_max_od) > 0.5
+                    else " (tapered)")
+                candidates.append({
+                    "candidate_id": f"ODT-cone-{_cn.get('face_index')}",
+                    "feature_name": (f"OD Turning Ø{_cn_max_od:.2f} mm × "
+                                     f"{_cn_len:.1f} mm{_cn_taper}"),
+                    "feature_type": "OD Turning",
+                    "quantity": 1,
+                    "x_pos": _cn.get("center_x"),
+                    "y_pos": _cn.get("center_y"),
+                    "diameter": round(_cn_max_od, 3),
+                    "length": None,
+                    "width": None,
+                    "depth": round(_cn_len, 3),
+                    "tolerance_note": "",
+                    "priority": 2,
+                    "confidence": "medium",
+                    "setup_label": _cn_label,
+                    "detection_source": "cadquery_face_records",
+                    "detection_note": (
+                        f"19-2e taper: cone face #{_cn.get('face_index')} coaxial "
+                        f"with {turning_axis.upper()} turning axis, "
+                        f"{100 * _cn_area / _G_total_area:.0f}% of surface area — "
+                        "tapered OD-turning region, not a milled feature."
+                    ),
+                    "face_indices": [_cn.get("face_index")],
+                    "cad_position": {
+                        "x": round(float(_cn.get("center_x") or 0.0), 6),
+                        "y": round(float(_cn.get("center_y") or 0.0), 6),
+                        "z": round(float(_cn.get("center_z") or 0.0), 6),
+                    },
+                    "requires_lathe": True,
+                    "accepted": False,
+                    "ignored": False,
+                })
 
             # 19-3: ID groove split. A grooved bore arrives as several coaxial
             # internal cylinders: same-diameter bore SEGMENTS interrupted by a
