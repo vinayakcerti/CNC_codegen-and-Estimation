@@ -1557,6 +1557,31 @@ def _classify_face_records_in_frame(face_records: list, part_bbox: dict) -> list
             slot_depth = round((a["lx"] + b["lx"]) / 2.0, 3) if a["lx"] and b["lx"] else None
             slot_width = round((a["lz"] + b["lz"]) / 2.0, 3) if a["lz"] and b["lz"] else diam_slot
 
+        # Physical sanity: a slot cannot be ACCESSED from the same face its two
+        # end caps sit on — the caps ARE the ends of the slot's length. So if
+        # the end-cap separation (the slot's length axis) runs along the claimed
+        # side-access axis, the normal-averaging above mislabelled a top slot
+        # whose end-cap normals simply didn't cancel cleanly. Fall back to a top
+        # slot. This keys on GEOMETRY (which axis the caps span), not on the
+        # slot's size, so genuine side slots of the same dimensions elsewhere
+        # (e.g. the SLIDE BASE side channels) are unaffected.
+        if slot_setup in ("Left", "Right", "Front", "Back"):
+            _sep_x = abs(a["cx"] - b["cx"])
+            _sep_y = abs(a["cy"] - b["cy"])
+            _az = ((a["zmin"] + a["zmax"]) / 2.0
+                   if a["zmin"] is not None and a["zmax"] is not None else 0.0)
+            _bz = ((b["zmin"] + b["zmax"]) / 2.0
+                   if b["zmin"] is not None and b["zmax"] is not None else 0.0)
+            _sep_z = abs(_az - _bz)
+            _length_axis = max((("x", _sep_x), ("y", _sep_y), ("z", _sep_z)),
+                               key=lambda t: t[1])[0]
+            _access_axis = "x" if slot_setup in ("Left", "Right") else "y"
+            if _length_axis == _access_axis:
+                slot_setup = "Top"
+                slot_depth = None
+                slot_width = (round((a["lz"] + b["lz"]) / 2.0, 3)
+                              if a["lz"] and b["lz"] else diam_slot)
+
         # Sanity-check dimensions — skip implausible pairs that squeaked through
         # the pairing logic.  Very thin "slots" (width < 5 mm) are almost
         # certainly corner-fillet or edge-rounding false positives, not real
