@@ -13,6 +13,9 @@ export interface CustomMachine {
   rapid_feed_rate: number;
   tool_change_time_s: number;
   setup_time_min: number;
+  // Optional display field (Shop Library add form) — the backend's
+  // machine_json normalizer tolerates and ignores unknown keys.
+  controller?: string;
 }
 
 // Library machines use name/axes; engine defaults use machine_name/axis_count.
