@@ -9,6 +9,9 @@ export interface SearchItem {
   id: string;
   title: string;
   caption?: string;
+  // Optional section label. When any item carries a group, the list renders
+  // a header before each group (in first-seen order); otherwise it's flat.
+  group?: string;
 }
 
 export function SearchSelect({
@@ -92,19 +95,39 @@ export function SearchSelect({
             onChange={(e) => setQuery(e.target.value)}
           />
           <div className="mat-list">
-            {filtered.map((it) => (
-              <div
-                key={it.id}
-                className={`mat-item ${it.id === value ? "sel" : ""}`}
-                onClick={() => {
-                  setOpen(false);
-                  if (it.id !== value) onChange(it.id);
-                }}
-              >
-                <div className="mat-item-name">{it.title}</div>
-                {it.caption && <div className="mat-item-sub">{it.caption}</div>}
-              </div>
-            ))}
+            {(() => {
+              // Bucket by group, preserving first-seen order. Headers show only
+              // when at least one item is grouped (keeps ungrouped selects flat).
+              const order: string[] = [];
+              const byGroup = new Map<string, SearchItem[]>();
+              for (const it of filtered) {
+                const g = it.group ?? "";
+                if (!byGroup.has(g)) {
+                  byGroup.set(g, []);
+                  order.push(g);
+                }
+                byGroup.get(g)!.push(it);
+              }
+              const showHeaders = order.some((g) => g !== "");
+              return order.map((g) => (
+                <div key={g || "_ungrouped"}>
+                  {showHeaders && g && <div className="mat-group-header">{g}</div>}
+                  {byGroup.get(g)!.map((it) => (
+                    <div
+                      key={it.id}
+                      className={`mat-item ${it.id === value ? "sel" : ""}`}
+                      onClick={() => {
+                        setOpen(false);
+                        if (it.id !== value) onChange(it.id);
+                      }}
+                    >
+                      <div className="mat-item-name">{it.title}</div>
+                      {it.caption && <div className="mat-item-sub">{it.caption}</div>}
+                    </div>
+                  ))}
+                </div>
+              ));
+            })()}
             {filtered.length === 0 && <div className="mat-empty">{emptyText}</div>}
           </div>
           {footer?.(() => setOpen(false))}

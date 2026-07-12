@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { SearchSelect } from "./SearchSelect";
+import { SearchSelect, type SearchItem } from "./SearchSelect";
 import type { MachineInfo } from "./api";
 
 // Machine selector next to Cut config. Library machines come from
@@ -34,6 +34,26 @@ function machineCaption(m: MachineInfo): string {
     .filter(Boolean)
     .join(" · ");
 }
+
+// Coarse machine class for grouping the picker: milling (VMC), lathe/turning,
+// or turn-mill. The library's `type` field is authoritative; fall back to the
+// machine name for entries that don't carry a type (e.g. user-added).
+type MachineKind = "mill" | "lathe" | "turnmill";
+export function machineKind(m: MachineInfo): MachineKind {
+  const t = `${m.type ?? ""} ${m.machine_type ?? ""}`.toLowerCase();
+  if (t.includes("turn-mill") || t.includes("mill-turn") || t.includes("turnmill")) return "turnmill";
+  if (t.includes("lathe") || t.includes("turning")) return "lathe";
+  const n = machineName(m).toLowerCase();
+  if (/integrex|\bntx\b|multi.?task/.test(n)) return "turnmill";
+  if (/lathe|\bturn\b|quick turn|\blynx\b|\bst-\d|\bclx\b|\bnlx\b/.test(n)) return "lathe";
+  return "mill";
+}
+const MACHINE_GROUP_LABEL: Record<MachineKind, string> = {
+  mill: "Milling (VMC)",
+  lathe: "Lathe / Turning",
+  turnmill: "Turn-Mill",
+};
+const MACHINE_GROUP_ORDER: Record<MachineKind, number> = { mill: 1, lathe: 2, turnmill: 3 };
 
 const numOr0 = (s: string) => {
   const v = parseFloat(s);
@@ -163,11 +183,25 @@ export function MachineSelect({
   disabled?: boolean;
 }) {
   const customNames = new Set(customMachines.map((m) => m.name));
-  const items = [
-    ...customMachines.map((m) => ({ id: m.name, title: m.name, caption: "Custom" })),
-    ...machines
-      .filter((m) => machineName(m) && !customNames.has(machineName(m)))
-      .map((m) => ({ id: machineName(m), title: machineName(m), caption: machineCaption(m) })),
+  // Library machines sorted into Milling → Lathe → Turn-Mill, alphabetical
+  // within each class, so the picker shows clear sections.
+  const libSorted = machines
+    .filter((m) => machineName(m) && !customNames.has(machineName(m)))
+    .map((m) => ({ m, kind: machineKind(m) }))
+    .sort(
+      (a, b) =>
+        MACHINE_GROUP_ORDER[a.kind] - MACHINE_GROUP_ORDER[b.kind] ||
+        machineName(a.m).localeCompare(machineName(b.m)),
+    );
+  const items: SearchItem[] = [
+    // The user's own machines first, then the library grouped by class.
+    ...customMachines.map((m) => ({ id: m.name, title: m.name, caption: "Custom", group: "My Shop" })),
+    ...libSorted.map(({ m, kind }) => ({
+      id: machineName(m),
+      title: machineName(m),
+      caption: machineCaption(m),
+      group: MACHINE_GROUP_LABEL[kind],
+    })),
   ];
   const selectedLib = machines.find((m) => machineName(m) === value);
   const triggerCaption = !value

@@ -243,6 +243,17 @@ body { background: var(--bg-0); color: var(--text-0); }
   background: var(--bg-2); color: var(--text-0); outline: none;
 }
 .mat-list { max-height: 240px; overflow-y: auto; }
+.mat-group-header {
+  padding: 6px 10px 3px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  background: var(--bg-2);
+  position: sticky;
+  top: 0;
+}
 .mat-item { padding: 7px 10px; cursor: pointer; font-size: 12.5px; }
 .mat-item:hover { background: var(--bg-3); }
 .mat-item.sel { background: var(--accent-bg); }
