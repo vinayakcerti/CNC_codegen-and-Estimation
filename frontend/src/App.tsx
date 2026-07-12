@@ -1152,6 +1152,31 @@ export default function App() {
   // Surface grinding flag (ARD R2/R4 link): flips ₹0.60 → ₹0.80 per cm².
   const [grindingSel, setGrindingSel] = useState(false);
   const [costPanelOpen, setCostPanelOpen] = useState(false);
+  // "+ New" rate card inline form (null = closed). Creating a card copies
+  // the CURRENT card's rates + hole library so tuned prices carry over;
+  // fresh defaults come from simply using a machine with no card yet.
+  const [newCardName, setNewCardName] = useState<string | null>(null);
+  const createRateCard = () => {
+    const name = (newCardName ?? "").trim();
+    if (!name) return;
+    if (allRateCards.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+      window.alert("A rate card with this name already exists.");
+      return;
+    }
+    const fresh = {
+      ...costingProfile,
+      id: `profile-${name}-${Date.now()}`,
+      name,
+      model: "ratecard" as const,
+      holeLibrary: costingProfile.holeLibrary.map((r) => ({ ...r })),
+      auditLog: [],
+    };
+    updateProfile(audit(fresh, "create_card", "", `copied from ${costingProfile.name}`));
+    setRateCardId(fresh.id);
+    lsSet("cnc.costing.activeCard", fresh.id);
+    setNewCardName(null);
+    setCostingNonce((n) => n + 1);
+  };
   // ARD R4: optional add-on processes (per part; empty = off).
   const [platingSel, setPlatingSel] = useState<"" | "Ni" | "Cr" | "Zn" | "Cd">("");
   const [hardeningSel, setHardeningSel] = useState(""); // spec, e.g. "45HRC"
@@ -4431,34 +4456,64 @@ export default function App() {
                             <>
                               <div className="row">
                                 <span className="k">Rate card</span>
-                                {allRateCards.length > 1 ? (
-                                  <select
-                                    className="mini-select"
-                                    style={{ maxWidth: 170 }}
-                                    value={costingProfile.id}
-                                    title="Pick which machine's rate card prices this quote"
-                                    onChange={(e) => {
-                                      const id = e.target.value;
-                                      setRateCardId(id);
-                                      lsSet("cnc.costing.activeCard", id);
-                                      const p = allRateCards.find((x) => x.id === id);
-                                      // Choosing a card AS the pricing source
-                                      // implies rate-card mode for it.
-                                      if (p && p.model !== "ratecard")
-                                        updateProfile(
-                                          audit({ ...p, model: "ratecard" }, "model", p.model, "ratecard"),
-                                        );
-                                      setCostingNonce((n) => n + 1);
-                                    }}
+                                <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                  {allRateCards.length > 1 ? (
+                                    <select
+                                      className="mini-select"
+                                      style={{ maxWidth: 150 }}
+                                      value={costingProfile.id}
+                                      title="Pick which rate card prices this quote"
+                                      onChange={(e) => {
+                                        const id = e.target.value;
+                                        setRateCardId(id);
+                                        lsSet("cnc.costing.activeCard", id);
+                                        const p = allRateCards.find((x) => x.id === id);
+                                        // Choosing a card AS the pricing source
+                                        // implies rate-card mode for it.
+                                        if (p && p.model !== "ratecard")
+                                          updateProfile(
+                                            audit({ ...p, model: "ratecard" }, "model", p.model, "ratecard"),
+                                          );
+                                        setCostingNonce((n) => n + 1);
+                                      }}
+                                    >
+                                      {allRateCards.map((p) => (
+                                        <option key={p.id} value={p.id}>{p.name}</option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <span className="v">{costingProfile.name}</span>
+                                  )}
+                                  <button
+                                    className="btn"
+                                    title="Create a new rate card — starts as a copy of the current card's rates and hole prices"
+                                    onClick={() => setNewCardName("")}
                                   >
-                                    {allRateCards.map((p) => (
-                                      <option key={p.id} value={p.id}>{p.name}</option>
-                                    ))}
-                                  </select>
-                                ) : (
-                                  <span className="v">{costingProfile.name}</span>
-                                )}
+                                    + New
+                                  </button>
+                                </span>
                               </div>
+                              {newCardName != null && (
+                                <div className="row">
+                                  <span className="k">· Name the new card</span>
+                                  <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                    <input
+                                      className="num-input"
+                                      style={{ width: 130 }}
+                                      autoFocus
+                                      placeholder="e.g. HAAS VF2 / Shop B"
+                                      value={newCardName}
+                                      onChange={(e) => setNewCardName(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") createRateCard();
+                                        if (e.key === "Escape") setNewCardName(null);
+                                      }}
+                                    />
+                                    <button className="btn" onClick={createRateCard}>Create</button>
+                                    <button className="btn" title="Cancel" onClick={() => setNewCardName(null)}>✕</button>
+                                  </span>
+                                </div>
+                              )}
                               <div className="row">
                                 <span className="k">Prices in this card</span>
                                 <button className="btn" onClick={() => setCostPanelOpen(true)}>
