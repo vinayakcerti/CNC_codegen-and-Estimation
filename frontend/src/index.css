@@ -133,8 +133,9 @@ body { background: var(--bg-0); color: var(--text-0); }
   background: var(--bg-3); color: var(--text-0); border: 1px solid var(--border-strong);
 }
 .btn:hover { background: var(--border); }
-.btn.primary { background: var(--orange); border-color: var(--orange); color: #fff; }
-.btn.primary:hover { filter: brightness(1.08); }
+/* Pastel blue primary action (tester: Prepare Quote should be pastel blue) */
+.btn.primary { background: #a9c9f0; border-color: #8fb6e6; color: #17263a; font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.05); }
 .btn.icon { padding: 7px 10px; font-size: 14px; line-height: 1; }
 
 .upload-zone {
@@ -442,7 +443,9 @@ body { background: var(--bg-0); color: var(--text-0); }
 .model-card { flex: 1; border: 1px solid var(--border-strong); border-radius: 8px;
   padding: 8px 10px; cursor: pointer; user-select: none; background: var(--bg-1); }
 .model-card:hover { border-color: var(--text-2); }
-.model-card.sel { border-color: #4a90d9; box-shadow: 0 0 0 1px #4a90d9 inset; }
+/* Selection = pastel green (tester: highlight whatever they select) */
+.model-card.sel { border-color: #8fd0ac; box-shadow: 0 0 0 1px #8fd0ac inset;
+  background: rgba(46,158,91,0.08); }
 .model-card .mc-name { font-size: 12px; font-weight: 600; color: var(--text-0); }
 .model-card .mc-sub { font-size: 11px; color: var(--text-2); margin-top: 2px; }
 .qm { background: var(--bg-1); border: 1px solid var(--border-strong); border-radius: 10px;
@@ -473,7 +476,10 @@ body { background: var(--bg-0); color: var(--text-0); }
 .ledger-row.subtotal .desc, .ledger-row.subtotal .amt { font-weight: 500; }
 .ledger-row.grand { background: var(--bg-2); border-top: 1px solid var(--border-strong); }
 .ledger-row.grand .desc { color: var(--text-0); font-weight: 700; }
-.ledger-row.grand .amt { color: var(--orange); font-weight: 700; font-size: 14px; }
+/* Totals read BLUE; orange is reserved for rates + unconfirmed prices. */
+.ledger-row.grand .amt { color: #4a90d9; font-weight: 700; font-size: 14px; }
+/* Rate fragments (@ ₹800/hr, @ ₹0.60/cm², ₹/kg) highlighted in orange */
+.rate-val { color: var(--orange); font-weight: 600; }
 /* Competitive→conservative quote spread under the Grand Total */
 .ledger-row.range { background: var(--bg-2); padding-top: 0; }
 .ledger-row.range .desc, .ledger-row.range .amt {

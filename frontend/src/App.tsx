@@ -4135,8 +4135,8 @@ export default function App() {
                                           }}
                                         />
                                         min/assembly
-                                        {rollup.NA > 1 ? ` × ${rollup.NA}` : ""} @ {sym}
-                                        {weldRate}/hr
+                                        {rollup.NA > 1 ? ` × ${rollup.NA}` : ""} @{" "}
+                                        <span className="rate-val">{sym}{weldRate}/hr</span>
                                         {weldMinOverride != null && (
                                           <span
                                             style={{ cursor: "pointer", textDecoration: "underline", fontSize: 11 }}
@@ -4812,8 +4812,10 @@ export default function App() {
                                           className="desc"
                                           title="Rate-card model: each machined surface priced once at the shop's ₹/cm² (rough + finish included in the rate)."
                                         >
-                                          Milling — {estRc.millingAreaCm2.toFixed(1)} cm² @ {sym}
-                                          {estRc.millingRate.toFixed(2)}/cm²
+                                          Milling — {estRc.millingAreaCm2.toFixed(1)} cm² @{" "}
+                                          <span className="rate-val">
+                                            {sym}{estRc.millingRate.toFixed(2)}/cm²
+                                          </span>
                                           {grindingSel ? " (with grinding)" : ""}
                                         </span>
                                         <span className="amt">{inr(estRc.millingCost)}</span>
@@ -4847,7 +4849,8 @@ export default function App() {
                                       className="desc"
                                       title={`Machining — ${fmtMin(machineMin)} @ ${sym}${rateHr}/hr${multTag}. Broken down by feature category below; positioning, tool changes and machine setup are the remaining time components.`}
                                     >
-                                      Machining — {fmtMin(machineMin)} @ {sym}{rateHr}/hr{multTag}
+                                      Machining — {fmtMin(machineMin)} @{" "}
+                                      <span className="rate-val">{sym}{rateHr}/hr{multTag}</span>
                                     </span>
                                     <span className="amt">{inr(machining)}</span>
                                   </div>
