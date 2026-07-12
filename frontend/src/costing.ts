@@ -34,18 +34,41 @@ export interface AuditEntry {
   after: string;
 }
 
+// Secondary / outsourced processes (grinding, plating, hardening, powder,
+// or anything the shop adds). Priced per cm² of surface, per kg of weight,
+// or as a FLAT amount — because shops often just get a quote for the whole
+// job. Lives in the rate card so it's reusable and editable in both places.
+export type AddonBasis = "per_cm2" | "per_kg" | "flat";
+export interface AddonProcess {
+  id: string;
+  name: string;
+  basis: AddonBasis;
+  rate: number; // ₹/cm², ₹/kg, or a flat ₹ amount depending on basis
+  // For per_cm2 only: which surface the rate applies to.
+  //   "surface"  = the part's external (stock-envelope) area — plating, coating
+  //   "machined" = the machined surface area — grinding
+  area?: "surface" | "machined";
+  confirmed: boolean; // false = ORANGE estimate until the shop signs off
+  source: string;
+  effective_from: string;
+}
+
 export interface CostingProfile {
   id: string;
   name: string; // usually the machine name
   model: "time" | "ratecard";
   milling_rate_per_cm2: number; // ARD: 0.60
-  milling_rate_grinding_per_cm2: number; // ARD: 0.80 when surface grinding
+  milling_rate_grinding_per_cm2: number; // legacy — grinding is now an add-on
   addon_rates: {
     grinding_per_cm2: number;
     plating_per_cm2: number;
     hardening_per_kg: number;
     powder_per_cm2: number;
   };
+  // The editable add-on process library (source of truth for add-on pricing).
+  // Optional so profiles saved before this feature still load — read through
+  // addonLibraryFor(), which falls back to addon_rates.
+  addonLibrary?: AddonProcess[];
   holeLibrary: HoleCostRow[];
   auditLog: AuditEntry[];
 }
@@ -99,6 +122,34 @@ export function defaultHoleLibrary(): HoleCostRow[] {
   ];
 }
 
+// Seed add-on library — all placeholder rates (orange) until the shop
+// confirms. Grinding prices on the machined surface; plating/powder on the
+// external surface; hardening on weight.
+export function defaultAddonLibrary(): AddonProcess[] {
+  const today = "2026-07-12";
+  return [
+    { id: "addon-grinding", name: "Surface grinding", basis: "per_cm2", area: "machined", rate: 0.2, confirmed: false, source: "placeholder", effective_from: today },
+    { id: "addon-plating", name: "Electroplating", basis: "per_cm2", area: "surface", rate: 0.5, confirmed: false, source: "placeholder", effective_from: today },
+    { id: "addon-hardening", name: "Hardening", basis: "per_kg", rate: 60, confirmed: false, source: "placeholder", effective_from: today },
+    { id: "addon-powder", name: "Powder coating", basis: "per_cm2", area: "surface", rate: 0.35, confirmed: false, source: "placeholder", effective_from: today },
+  ];
+}
+
+// Read the add-on library from a profile, falling back to the legacy
+// addon_rates for profiles saved before addonLibrary existed. Always returns
+// a usable list so the estimate + editor never see undefined.
+export function addonLibraryFor(profile: CostingProfile): AddonProcess[] {
+  if (profile.addonLibrary && profile.addonLibrary.length) return profile.addonLibrary;
+  const r = profile.addon_rates;
+  const today = profile.holeLibrary[0]?.effective_from ?? "2026-07-12";
+  return [
+    { id: "addon-grinding", name: "Surface grinding", basis: "per_cm2", area: "machined", rate: r?.grinding_per_cm2 ?? 0.2, confirmed: false, source: "placeholder", effective_from: today },
+    { id: "addon-plating", name: "Electroplating", basis: "per_cm2", area: "surface", rate: r?.plating_per_cm2 ?? 0.5, confirmed: false, source: "placeholder", effective_from: today },
+    { id: "addon-hardening", name: "Hardening", basis: "per_kg", rate: r?.hardening_per_kg ?? 60, confirmed: false, source: "placeholder", effective_from: today },
+    { id: "addon-powder", name: "Powder coating", basis: "per_cm2", area: "surface", rate: r?.powder_per_cm2 ?? 0.35, confirmed: false, source: "placeholder", effective_from: today },
+  ];
+}
+
 export function defaultProfile(name: string): CostingProfile {
   return {
     id: `profile-${name}`,
@@ -112,6 +163,7 @@ export function defaultProfile(name: string): CostingProfile {
       hardening_per_kg: 60,
       powder_per_cm2: 0.35,
     },
+    addonLibrary: defaultAddonLibrary(),
     holeLibrary: defaultHoleLibrary(),
     auditLog: [],
   };
@@ -306,7 +358,10 @@ export function baseName(name: string): string {
 export function rateCardBreakdown(
   setups: StrategySetup[],
   profile: CostingProfile,
-  opts: { grinding: boolean; isOpExcluded?: (op: StrategyOp) => boolean },
+  // grinding is legacy (it used to flip the milling rate); grinding is now a
+  // normal add-on process, so callers leave this unset and milling always
+  // prices at the base rate.
+  opts: { grinding?: boolean; isOpExcluded?: (op: StrategyOp) => boolean },
 ): RateCardBreakdown {
   const excluded = opts.isOpExcluded ?? (() => false);
   const rate = opts.grinding

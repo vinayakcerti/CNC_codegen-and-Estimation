@@ -6,7 +6,8 @@
 // the CostLibraryPanel modal AND inline on the Shop Library screen.
 import { useMemo, useRef, useState } from "react";
 import {
-  audit, csvToLibrary, libraryToCsv, updateProfile,
+  audit, csvToLibrary, libraryToCsv, updateProfile, addonLibraryFor,
+  type AddonBasis, type AddonProcess,
   type CostingProfile, type HoleCostRow, type RateCardBreakdown,
   type ToleranceClass,
 } from "./costing";
@@ -202,10 +203,10 @@ export function RateCardEditor({
       </div>
 
       {/* Milling + add-on rates */}
-      <div className="qm-sect">Milling rates ({currency}/cm² of machined surface)</div>
+      <div className="qm-sect">Milling rate ({currency}/cm² of machined surface)</div>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 10 }}>
         <label style={{ fontSize: 12 }}>
-          Without grinding{" "}
+          Machined surface{" "}
           {numCell(profile.milling_rate_per_cm2, (v) =>
             commit(
               { ...profile, milling_rate_per_cm2: v },
@@ -213,17 +214,119 @@ export function RateCardEditor({
             ),
           )}
         </label>
-        <label style={{ fontSize: 12 }}>
-          With grinding{" "}
-          {numCell(profile.milling_rate_grinding_per_cm2, (v) =>
-            commit(
-              { ...profile, milling_rate_grinding_per_cm2: v },
-              "milling_rate_grinding",
-              String(profile.milling_rate_grinding_per_cm2), String(v),
-            ),
-          )}
-        </label>
       </div>
+
+      {/* Other processes (add-on library) — grinding, plating, hardening,
+          powder, or the shop's own. Priced per cm², per kg, or flat. Editable
+          here AND on the Estimate; the two stay in sync. */}
+      {(() => {
+        const lib = addonLibraryFor(profile);
+        const saveLib = (next: AddonProcess[], action: string, before: string, after: string) =>
+          commit({ ...profile, addonLibrary: next }, action, before, after);
+        const setP = (id: string, patch: Partial<AddonProcess>) =>
+          saveLib(lib.map((p) => (p.id === id ? { ...p, ...patch } : p)), "addon_edit", id, JSON.stringify(patch));
+        return (
+          <>
+            <div className="qm-sect" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              Other processes ({lib.length})
+              <span style={{ flex: 1 }} />
+              <button
+                className="btn"
+                onClick={() =>
+                  saveLib(
+                    [
+                      ...lib,
+                      {
+                        id: `addon-${Date.now()}`, name: "New process",
+                        basis: "per_cm2", area: "surface", rate: 0,
+                        confirmed: false, source: "manual",
+                        effective_from: new Date().toISOString().slice(0, 10),
+                      },
+                    ],
+                    "addon_add", "", "New process",
+                  )
+                }
+              >
+                + Add process
+              </button>
+            </div>
+            <table className="dense-table" style={{ width: "100%" }}>
+              <thead>
+                <tr>
+                  <th>Process</th><th>Priced</th><th>Surface</th>
+                  <th>Rate ({currency})</th><th>Status</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {lib.map((p) => (
+                  <tr
+                    key={p.id}
+                    style={{ background: p.confirmed ? "rgba(46,158,91,0.10)" : "rgba(192,122,42,0.14)" }}
+                  >
+                    <td>
+                      <input
+                        className="num-input" style={{ width: 120 }} value={p.name}
+                        onChange={(e) => setP(p.id, { name: e.target.value })}
+                      />
+                    </td>
+                    <td>
+                      <select
+                        className="mini-select" value={p.basis}
+                        onChange={(e) => setP(p.id, { basis: e.target.value as AddonBasis })}
+                      >
+                        <option value="per_cm2">per cm²</option>
+                        <option value="per_kg">per kg</option>
+                        <option value="flat">flat</option>
+                      </select>
+                    </td>
+                    <td>
+                      {p.basis === "per_cm2" ? (
+                        <select
+                          className="mini-select" value={p.area ?? "surface"}
+                          onChange={(e) => setP(p.id, { area: e.target.value as "surface" | "machined" })}
+                        >
+                          <option value="surface">external</option>
+                          <option value="machined">machined</option>
+                        </select>
+                      ) : <span style={{ color: "var(--text-2)" }}>—</span>}
+                    </td>
+                    <td>
+                      {numCell(p.rate, (v) =>
+                        setP(p.id, { rate: v, confirmed: true, source: "manual entry", effective_from: new Date().toISOString().slice(0, 10) }),
+                      68, 0.05)}
+                    </td>
+                    <td>
+                      {p.confirmed ? (
+                        <span style={{ color: "#2e9e5b", fontSize: 11, fontWeight: 600 }}>confirmed</span>
+                      ) : (
+                        <button
+                          className="btn" style={{ color: "#c07a2a" }}
+                          title="Mark this rate confirmed by the shop"
+                          onClick={() => setP(p.id, { confirmed: true, source: p.source + " · confirmed" })}
+                        >
+                          Confirm
+                        </button>
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        className="btn" title="Delete"
+                        onClick={() => saveLib(lib.filter((x) => x.id !== p.id), "addon_delete", p.name, "")}
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ fontSize: 11, color: "var(--text-2)", margin: "4px 0 8px" }}>
+              These appear in the Estimate’s “+ Add process” menu. Editing a rate
+              on the Estimate and pressing “Save to card” writes it back here.
+            </div>
+          </>
+        );
+      })()}
 
       {/* This part first: confirm the operations actually being quoted */}
       {partSpecs.length > 0 && (

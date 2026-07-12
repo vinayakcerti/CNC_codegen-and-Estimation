@@ -9,8 +9,8 @@ import type {
 import { PartViewer } from "./PartViewer";
 import {
   profileForMachine, rateCardBreakdown, updateProfile, audit, baseName,
-  inferTolerance, loadProfiles, saveProfiles,
-  type RateCardBreakdown,
+  inferTolerance, loadProfiles, saveProfiles, addonLibraryFor,
+  type RateCardBreakdown, type AddonBasis,
 } from "./costing";
 import { CostLibraryPanel } from "./CostLibraryPanel";
 import { ShopLibrary } from "./ShopLibrary";
@@ -360,6 +360,41 @@ interface OpRollup {
   toolDisplay: string; // catalog-style name for display ("6mm Drill 135°")
   ops: StrategyOp[];
   totalMin: number;
+}
+
+// A user-selected add-on process for the current part. Seeded from the rate
+// card's add-on library but editable inline (basis + rate), or a one-off
+// "Custom" row. `param` is an optional note (Ni, 45 HRC, RAL 7035, …).
+type AddonSelection = {
+  uid: string;
+  procId: string | null; // library process id, or null for a custom row
+  name: string;
+  basis: AddonBasis;
+  rate: number;
+  area: "surface" | "machined";
+  param?: string;
+};
+
+// Price the selected add-ons. per_cm2 uses machined area (grinding) or the
+// external stock-envelope area (plating/coating); per_kg uses part weight;
+// flat is a lump sum (e.g. an outsourced quote). Returns {name, cost}[] so
+// every downstream consumer (ledger, route, Excel, effort doc) is unchanged.
+function computeAddonSelections(
+  sels: AddonSelection[],
+  ctx: { envAreaCm2: number; machinedAreaCm2: number; massKg: number },
+): { name: string; cost: number }[] {
+  return sels
+    .filter((a) => a.name.trim())
+    .map((a) => {
+      const r = a.rate || 0;
+      let cost = 0;
+      if (a.basis === "flat") cost = r;
+      else if (a.basis === "per_kg") cost = r * ctx.massKg;
+      else cost = r * (a.area === "machined" ? ctx.machinedAreaCm2 : ctx.envAreaCm2);
+      const label =
+        a.param && a.param.trim() ? `${a.name.trim()} (${a.param.trim()})` : a.name.trim();
+      return { name: label, cost };
+    });
 }
 
 function buildRollups(setupLabel: string, ops: StrategyOp[]): OpRollup[] {
@@ -1215,8 +1250,6 @@ export default function App() {
     [costingNonce, machineSelForCosting],
   );
   const rateCardActive = costingProfile.model === "ratecard";
-  // Surface grinding flag (ARD R2/R4 link): flips ₹0.60 → ₹0.80 per cm².
-  const [grindingSel, setGrindingSel] = useState(false);
   const [costPanelOpen, setCostPanelOpen] = useState(false);
   // "+ New" rate card inline form (null = closed). Creating a card copies
   // the CURRENT card's rates + hole library so tuned prices carry over;
@@ -1243,13 +1276,62 @@ export default function App() {
     setNewCardName(null);
     setCostingNonce((n) => n + 1);
   };
-  // ARD R4: optional add-on processes (per part; empty = off).
-  const [platingSel, setPlatingSel] = useState<"" | "Ni" | "Cr" | "Zn" | "Cd">("");
-  const [hardeningSel, setHardeningSel] = useState(""); // spec, e.g. "45HRC"
-  const [powderSel, setPowderSel] = useState("");       // RAL code
-  // Custom (operator-named) add-on processes with a manual price — join the
-  // route as blocks and the estimate as add-on lines. Session-scoped.
-  const [customAddons, setCustomAddons] = useState<{ name: string; cost: number }[]>([]);
+  // ARD R4: add-on processes selected for this part (grinding/plating/…),
+  // each seeded from the rate-card library but editable inline. Empty = none.
+  const [addonSels, setAddonSels] = useState<AddonSelection[]>([]);
+  const addonLib = useMemo(
+    () => addonLibraryFor(costingProfile),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [costingProfile, costingNonce],
+  );
+  // Add a library process to this part's selection (seed from its saved rate).
+  const addAddonFromLib = (procId: string) => {
+    const p = addonLib.find((x) => x.id === procId);
+    if (!p) return;
+    setAddonSels((s) => [
+      ...s,
+      {
+        uid: `sel-${Date.now()}`, procId: p.id, name: p.name,
+        basis: p.basis, rate: p.rate, area: p.area ?? "surface",
+      },
+    ]);
+  };
+  const addCustomAddon = () =>
+    setAddonSels((s) => [
+      ...s,
+      {
+        uid: `sel-${Date.now()}`, procId: null, name: "Custom process",
+        basis: "flat", rate: 0, area: "surface",
+      },
+    ]);
+  const patchAddon = (uid: string, patch: Partial<AddonSelection>) =>
+    setAddonSels((s) => s.map((a) => (a.uid === uid ? { ...a, ...patch } : a)));
+  const removeAddon = (uid: string) =>
+    setAddonSels((s) => s.filter((a) => a.uid !== uid));
+  // Persist an edited add-on row back into the rate-card library (two-way):
+  // updates the matching process, or adds a new confirmed one for a custom row.
+  const saveAddonToLib = (a: AddonSelection) => {
+    const lib = addonLibraryFor(costingProfile);
+    const today = new Date().toISOString().slice(0, 10);
+    let next;
+    const existing = a.procId ? lib.find((x) => x.id === a.procId) : null;
+    if (existing) {
+      next = lib.map((x) =>
+        x.id === a.procId
+          ? { ...x, basis: a.basis, rate: a.rate, area: a.area, confirmed: true, source: "shop-confirmed", effective_from: today }
+          : x,
+      );
+    } else {
+      const id = `addon-${Date.now()}`;
+      next = [
+        ...lib,
+        { id, name: a.name.trim() || "Process", basis: a.basis, rate: a.rate, area: a.area, confirmed: true, source: "shop-confirmed", effective_from: today },
+      ];
+      patchAddon(a.uid, { procId: id });
+    }
+    updateProfile(audit({ ...costingProfile, addonLibrary: next }, "addon_save", a.name, String(a.rate)));
+    setCostingNonce((n) => n + 1);
+  };
   // Bodies excluded from machining (purchased parts / bolts), per part file.
   const [excludedBodies, setExcludedBodies] = useState<Set<string>>(new Set());
   const toggleBodyExcluded = (groupId: string) =>
@@ -1583,6 +1665,9 @@ export default function App() {
   // Welding is often a NUMBER the fabricator knows — override the analyzer's
   // minutes per assembly when set.
   const [weldMinOverride, setWeldMinOverride] = useState<number | null>(null);
+  // Some shops SUPPLY the cut parts and the customer welds them — so welding
+  // shows by default but can be removed from the job. Persisted per part.
+  const [weldingOff, setWeldingOff] = useState(false);
   // Post-weld ops (machined on the WELDED assembly). Suggested rows are the
   // assembly plan's own top/bottom facing passes — deletable, one click.
   const [postWeld, setPostWeld] = useState<
@@ -1699,7 +1784,7 @@ export default function App() {
       // only the per-setup charge stays.
       const rcG = rateCardActive
         ? rateCardBreakdown(plan.setups, costingProfile, {
-            grinding: grindingSel,
+            grinding: false,
             isOpExcluded,
           })
         : null;
@@ -1713,7 +1798,8 @@ export default function App() {
     const machMin = rows.reduce((a, r) => a + (r.ready ? r.minBatch : 0), 0);
     // Welding: the analyzer's minutes per assembly, or the fabricator's own
     // number when entered — × assemblies.
-    const weldPerAssy = weldMinOverride ?? (wmResult.total_assembly_time_min ?? 0);
+    // Welding is removable — shops that supply unwelded parts cross it out.
+    const weldPerAssy = weldingOff ? 0 : (weldMinOverride ?? (wmResult.total_assembly_time_min ?? 0));
     const weldMin = weldPerAssy * NA;
     const weldCost = (weldMin / 60) * weldRate;
     const pwPerAssy = postWeld.reduce((a, r) => a + (r.min || 0), 0);
@@ -1736,8 +1822,8 @@ export default function App() {
   }, [
     analysis, wmResult, rollupPlans, excluded, estPreset, estTolerance,
     estComplexity, rateHr, matPriceKg, setupCharge, marginPct, weldRate,
-    postWeld, materials, customMaterials, qty, weldMinOverride,
-    rateCardActive, costingProfile, grindingSel, excludedBodies,
+    postWeld, materials, customMaterials, qty, weldMinOverride, weldingOff,
+    rateCardActive, costingProfile, excludedBodies,
   ]);
 
   // ---- Shared estimate core (Estimate tab ledger + Route tab blocks) ----
@@ -1762,11 +1848,8 @@ export default function App() {
     setPostWeldInit(false);
     setRollupErr(null);
     setWeldMinOverride(null);
-    setGrindingSel(false); // add-ons are per-part decisions (ARD R2/R4)
-    setPlatingSel("");
-    setHardeningSel("");
-    setPowderSel("");
-    setCustomAddons([]);
+    setAddonSels([]); // add-ons are per-part decisions (ARD R4)
+    setWeldingOff(false);
     try {
       const rawB = localStorage.getItem(`cnc.excludedBodies.${fn}`);
       setExcludedBodies(new Set(rawB ? (JSON.parse(rawB) as string[]) : []));
@@ -1820,7 +1903,6 @@ export default function App() {
     // NOT apply. Time-based stays the untouched default.
     const rc: RateCardBreakdown | null = rateCardActive
       ? rateCardBreakdown(strategy.setups, costingProfile, {
-          grinding: grindingSel,
           isOpExcluded,
         })
       : null;
@@ -1843,16 +1925,13 @@ export default function App() {
     // Setup charges follow the SURVIVING setups — excluding every feature of a
     // setup removes that setup's charge too.
     const setupsCost = adj.includedSetups * setupCharge;
-    // ARD R4 add-ons — priced from the profile's rates in BOTH costing models
-    // (outsourced processes are independent of the machining model). Plating/
-    // powder approximate external area with the stock envelope; grinding uses
-    // machined area; hardening the part weight.
+    // ARD R4 add-ons — outsourced/secondary processes, priced in BOTH costing
+    // models from the user's selection (each seeded from the rate-card library,
+    // editable inline). per_cm2 uses machined or external surface; per_kg the
+    // weight; flat a lump sum.
     const rcInfo =
       rc ??
-      rateCardBreakdown(strategy.setups, costingProfile, {
-        grinding: grindingSel,
-        isOpExcluded,
-      });
+      rateCardBreakdown(strategy.setups, costingProfile, { isOpExcluded });
     const envAreaCm2 = stockSize
       ? (2 *
           (stockSize.length * stockSize.width +
@@ -1860,31 +1939,9 @@ export default function App() {
             stockSize.width * stockSize.height)) /
         100
       : 0;
-    const addons: { name: string; cost: number }[] = [];
-    // Rate-card mode already prices grinding via the flipped milling rate
-    // (0.60 → 0.80 /cm², ARD R2) — the addon line applies in time mode only.
-    if (grindingSel && !rc)
-      addons.push({
-        name: "Surface grinding",
-        cost: costingProfile.addon_rates.grinding_per_cm2 * rcInfo.millingAreaCm2,
-      });
-    if (platingSel)
-      addons.push({
-        name: `Electroplating (${platingSel})`,
-        cost: costingProfile.addon_rates.plating_per_cm2 * envAreaCm2,
-      });
-    if (hardeningSel.trim())
-      addons.push({
-        name: `Hardening (${hardeningSel.trim()})`,
-        cost: costingProfile.addon_rates.hardening_per_kg * massKg,
-      });
-    if (powderSel.trim())
-      addons.push({
-        name: `Powder coating (RAL ${powderSel.trim()})`,
-        cost: costingProfile.addon_rates.powder_per_cm2 * envAreaCm2,
-      });
-    for (const c of customAddons)
-      if (c.name.trim()) addons.push({ name: c.name.trim(), cost: c.cost || 0 });
+    const addons = computeAddonSelections(addonSels, {
+      envAreaCm2, machinedAreaCm2: rcInfo.millingAreaCm2, massKg,
+    });
     const addonCost = addons.reduce((a, x) => a + x.cost, 0);
     return {
       machineMin, presetMult, tolMult, complexity, machMult, machining,
@@ -1893,8 +1950,7 @@ export default function App() {
   }, [
     analysis, strategy, estPreset, estTolerance, estComplexity, excluded,
     customMaterials, materials, stockMode, manualStock, matPriceKg, setupCharge, rateHr,
-    rateCardActive, costingProfile, grindingSel, platingSel, hardeningSel, powderSel,
-    customAddons,
+    rateCardActive, costingProfile, addonSels,
   ]);
 
   // Per-body estimate (scoped): same ledger math as estCore but from the
@@ -1916,7 +1972,6 @@ export default function App() {
     const machMult = presetMult * complexity * tolMult;
     const rc: RateCardBreakdown | null = rateCardActive
       ? rateCardBreakdown(sp.setups, costingProfile, {
-          grinding: grindingSel,
           isOpExcluded,
         })
       : null;
@@ -1939,42 +1994,16 @@ export default function App() {
     const setupsCost = adj.includedSetups * setupCharge;
     // ARD R4 add-ons — same model as estCore, scoped to this body.
     const rcInfo =
-      rc ??
-      rateCardBreakdown(sp.setups, costingProfile, {
-        grinding: grindingSel,
-        isOpExcluded,
-      });
+      rc ?? rateCardBreakdown(sp.setups, costingProfile, { isOpExcluded });
     const envAreaCm2 =
       (2 *
         (stockSize.length * stockSize.width +
           stockSize.length * stockSize.height +
           stockSize.width * stockSize.height)) /
       100;
-    const addons: { name: string; cost: number }[] = [];
-    // Rate-card mode already prices grinding via the flipped milling rate
-    // (0.60 → 0.80 /cm², ARD R2) — the addon line applies in time mode only.
-    if (grindingSel && !rc)
-      addons.push({
-        name: "Surface grinding",
-        cost: costingProfile.addon_rates.grinding_per_cm2 * rcInfo.millingAreaCm2,
-      });
-    if (platingSel)
-      addons.push({
-        name: `Electroplating (${platingSel})`,
-        cost: costingProfile.addon_rates.plating_per_cm2 * envAreaCm2,
-      });
-    if (hardeningSel.trim())
-      addons.push({
-        name: `Hardening (${hardeningSel.trim()})`,
-        cost: costingProfile.addon_rates.hardening_per_kg * massKg,
-      });
-    if (powderSel.trim())
-      addons.push({
-        name: `Powder coating (RAL ${powderSel.trim()})`,
-        cost: costingProfile.addon_rates.powder_per_cm2 * envAreaCm2,
-      });
-    for (const c of customAddons)
-      if (c.name.trim()) addons.push({ name: c.name.trim(), cost: c.cost || 0 });
+    const addons = computeAddonSelections(addonSels, {
+      envAreaCm2, machinedAreaCm2: rcInfo.millingAreaCm2, massKg,
+    });
     const addonCost = addons.reduce((a, x) => a + x.cost, 0);
     return {
       machineMin, presetMult, tolMult, complexity, machMult, machining,
@@ -1983,8 +2012,7 @@ export default function App() {
   }, [
     analysis, selectedGroup, scopedStrategy, scopedBodyIndex, estPreset,
     estTolerance, estComplexity, excluded, customMaterials, materials, matPriceKg,
-    setupCharge, rateHr, rateCardActive, costingProfile, grindingSel,
-    platingSel, hardeningSel, powderSel, customAddons,
+    setupCharge, rateHr, rateCardActive, costingProfile, addonSels,
   ]);
 
   // ---- EST-4 (ARD R1): per-part Excel export with cost split ------------
@@ -2027,7 +2055,7 @@ export default function App() {
         // mode purely for the informational machined-area number.
         const rcInfoP = plan
           ? rateCardBreakdown(plan.setups, profile, {
-              grinding: grindingSel, isOpExcluded,
+              grinding: false, isOpExcluded,
             })
           : null;
         const rcp = rateCardActive ? rcInfoP : null;
@@ -2181,7 +2209,7 @@ export default function App() {
             const setupsCharge = adj.includedSetups * setupCharge;
             const rcG = rateCardActive
               ? rateCardBreakdown(plan.setups, profile, {
-                  grinding: grindingSel, isOpExcluded,
+                  grinding: false, isOpExcluded,
                 })
               : null;
             costBatch = rcG
@@ -2275,31 +2303,18 @@ export default function App() {
           rate: profile.milling_rate_per_cm2, effectiveFrom: today,
           source: "rate card", confirmed: true,
         },
-        {
-          category: "Milling", sub: "With surface grinding", unit: `${sym}/cm²`,
-          rate: profile.milling_rate_grinding_per_cm2, effectiveFrom: today,
-          source: "rate card", confirmed: true,
-        },
-        {
-          category: "Add-on", sub: "Surface grinding", unit: `${sym}/cm²`,
-          rate: profile.addon_rates.grinding_per_cm2, effectiveFrom: today,
-          source: "rate card (placeholder)", confirmed: false,
-        },
-        {
-          category: "Add-on", sub: "Electroplating", unit: `${sym}/cm²`,
-          rate: profile.addon_rates.plating_per_cm2, effectiveFrom: today,
-          source: "rate card (placeholder)", confirmed: false,
-        },
-        {
-          category: "Add-on", sub: "Hardening", unit: `${sym}/kg`,
-          rate: profile.addon_rates.hardening_per_kg, effectiveFrom: today,
-          source: "rate card (placeholder)", confirmed: false,
-        },
-        {
-          category: "Add-on", sub: "Powder coating", unit: `${sym}/cm²`,
-          rate: profile.addon_rates.powder_per_cm2, effectiveFrom: today,
-          source: "rate card (placeholder)", confirmed: false,
-        },
+        ...addonLibraryFor(profile).map((p) => ({
+          category: "Add-on",
+          sub: p.name,
+          unit:
+            p.basis === "flat" ? `${sym} flat`
+              : p.basis === "per_kg" ? `${sym}/kg`
+                : `${sym}/cm²${p.area === "machined" ? " machined" : ""}`,
+          rate: p.rate,
+          effectiveFrom: p.effective_from,
+          source: p.source,
+          confirmed: p.confirmed,
+        })),
         ...profile.holeLibrary.map((r) => ({
           category: "Hole",
           sub: `Ø${r.diameter_mm} ${r.tolerance} × ${r.thickness_mm} mm — ${r.operation}`,
@@ -4347,9 +4362,24 @@ export default function App() {
                                       </div>
                                       );
                                     })}
+                                    {weldingOff ? (
+                                      <div className="ledger-row" style={{ opacity: 0.6 }}>
+                                        <span className="desc">
+                                          Welding — removed (parts supplied unwelded){" "}
+                                          <span
+                                            style={{ cursor: "pointer", textDecoration: "underline", fontSize: 11 }}
+                                            title="Put welding back into the job"
+                                            onClick={() => setWeldingOff(false)}
+                                          >
+                                            add back
+                                          </span>
+                                        </span>
+                                        <span className="amt">—</span>
+                                      </div>
+                                    ) : (
                                     <div
                                       className="ledger-row"
-                                      title="The analyzer's welding minutes per assembly — type your own number if you know it better"
+                                      title="The analyzer's welding minutes per assembly — type your own number if you know it better, or remove welding entirely if you supply the parts unwelded"
                                     >
                                       <span className="desc" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                                         Welding
@@ -4374,9 +4404,18 @@ export default function App() {
                                             reset
                                           </span>
                                         )}
+                                        <button
+                                          className="btn"
+                                          style={{ padding: "0 6px", fontSize: 12 }}
+                                          title="Remove welding — we supply the cut parts, the customer welds them"
+                                          onClick={() => setWeldingOff(true)}
+                                        >
+                                          ✕
+                                        </button>
                                       </span>
                                       <span className="amt">{inr(rollup.weldCost)}</span>
                                     </div>
+                                    )}
                                   </>
                                 )}
                                 <div className="ledger-row">
@@ -4764,7 +4803,7 @@ export default function App() {
                           <div className="row">
                             <span
                               className="k"
-                              title="Outsourced / secondary processes. Each one you add appears below, in the Quote ledger, and as a block in the Process Route."
+                              title="Outsourced / secondary processes from your rate-card library. Each one you add appears below (rate editable), in the Quote ledger, and as a block in the Process Route. Edit here and press Save to card to store it back in the library."
                             >
                               Add-on processes
                             </span>
@@ -4773,127 +4812,96 @@ export default function App() {
                               value=""
                               onChange={(e) => {
                                 const v = e.target.value;
-                                if (v === "grinding") setGrindingSel(true);
-                                else if (v === "plating") setPlatingSel("Ni");
-                                else if (v === "hardening") setHardeningSel("45 HRC");
-                                else if (v === "powder") setPowderSel("7035");
-                                else if (v === "custom")
-                                  setCustomAddons((a) => [...a, { name: "Custom process", cost: 0 }]);
+                                if (v === "__custom__") addCustomAddon();
+                                else if (v) addAddonFromLib(v);
                               }}
                             >
                               <option value="">+ Add process…</option>
-                              <option value="grinding" disabled={grindingSel}>Surface grinding</option>
-                              <option value="plating" disabled={!!platingSel}>Electroplating</option>
-                              <option value="hardening" disabled={!!hardeningSel}>Hardening</option>
-                              <option value="powder" disabled={!!powderSel}>Powder coating</option>
-                              <option value="custom">Custom (own name + price)…</option>
+                              {addonLib.map((p) => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                              <option value="__custom__">Custom (own name + rate)…</option>
                             </select>
                           </div>
-                          {grindingSel && (
-                            <div className="row">
-                              <span className="k">· Surface grinding</span>
-                              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                                <span style={{ fontSize: 11, color: "var(--text-2)" }}>
-                                  {rateCardActive
-                                    ? `in milling rate — ${sym}${costingProfile.milling_rate_grinding_per_cm2.toFixed(2)}/cm²`
-                                    : `${sym}${costingProfile.addon_rates.grinding_per_cm2.toFixed(2)}/cm² machined`}
-                                </span>
-                                <button className="btn" title="Remove" onClick={() => setGrindingSel(false)}>✕</button>
-                              </span>
-                            </div>
-                          )}
-                          {platingSel && (
-                            <div className="row">
-                              <span className="k">· Electroplating</span>
-                              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                                <select
-                                  className="mini-select"
-                                  value={platingSel}
-                                  onChange={(e) =>
-                                    setPlatingSel(e.target.value as "" | "Ni" | "Cr" | "Zn" | "Cd")
-                                  }
-                                  title={`${sym}${costingProfile.addon_rates.plating_per_cm2.toFixed(2)}/cm² of part surface — outsourced`}
-                                >
-                                  <option value="Ni">Nickel (Ni)</option>
-                                  <option value="Cr">Hard chrome (Cr)</option>
-                                  <option value="Zn">Zinc (Zn)</option>
-                                  <option value="Cd">Cadmium (Cd)</option>
-                                </select>
-                                <button className="btn" title="Remove" onClick={() => setPlatingSel("")}>✕</button>
-                              </span>
-                            </div>
-                          )}
-                          {hardeningSel !== "" && (
-                            <div className="row">
-                              <span className="k">· Hardening</span>
-                              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                                <input
-                                  className="num-input"
-                                  style={{ width: 84 }}
-                                  placeholder="e.g. 45 HRC"
-                                  value={hardeningSel}
-                                  onChange={(e) => setHardeningSel(e.target.value)}
-                                  title={`${sym}${costingProfile.addon_rates.hardening_per_kg.toFixed(0)}/kg of part weight`}
-                                />
-                                <button className="btn" title="Remove" onClick={() => setHardeningSel("")}>✕</button>
-                              </span>
-                            </div>
-                          )}
-                          {powderSel !== "" && (
-                            <div className="row">
-                              <span className="k">· Powder coat (RAL)</span>
-                              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                                <input
-                                  className="num-input"
-                                  style={{ width: 84 }}
-                                  placeholder="e.g. 7035"
-                                  value={powderSel}
-                                  onChange={(e) => setPowderSel(e.target.value)}
-                                  title={`${sym}${costingProfile.addon_rates.powder_per_cm2.toFixed(2)}/cm² of part surface`}
-                                />
-                                <button className="btn" title="Remove" onClick={() => setPowderSel("")}>✕</button>
-                              </span>
-                            </div>
-                          )}
-                          {customAddons.map((c, i) => (
-                            <div className="row" key={`ca-${i}`}>
-                              <span className="k" style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                                ·
-                                <input
-                                  className="num-input"
-                                  style={{ width: 108 }}
-                                  value={c.name}
-                                  title="Process name — appears in the ledger, route and documents"
-                                  onChange={(e) =>
-                                    setCustomAddons((a) =>
-                                      a.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)),
-                                    )
-                                  }
-                                />
-                              </span>
-                              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                                <input
-                                  className="num-input"
-                                  type="number"
-                                  style={{ width: 74 }}
-                                  value={c.cost}
-                                  title={`Manual price (${sym}) per piece`}
-                                  onChange={(e) =>
-                                    setCustomAddons((a) =>
-                                      a.map((x, j) => (j === i ? { ...x, cost: +e.target.value || 0 } : x)),
-                                    )
-                                  }
-                                />
-                                <button
-                                  className="btn"
-                                  title="Remove"
-                                  onClick={() => setCustomAddons((a) => a.filter((_, j) => j !== i))}
-                                >
-                                  ✕
-                                </button>
-                              </span>
-                            </div>
-                          ))}
+                          {addonSels.map((a) => {
+                            const unit =
+                              a.basis === "flat" ? `${sym} flat`
+                                : a.basis === "per_kg" ? `${sym}/kg`
+                                  : `${sym}/cm²`;
+                            return (
+                              <div
+                                key={a.uid}
+                                style={{
+                                  border: "1px solid var(--border)", borderRadius: 8,
+                                  padding: "6px 8px", margin: "4px 0",
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                                  {a.procId ? (
+                                    <span style={{ fontWeight: 600, fontSize: 12, flex: 1 }}>{a.name}</span>
+                                  ) : (
+                                    <input
+                                      className="num-input"
+                                      style={{ flex: 1, minWidth: 0 }}
+                                      value={a.name}
+                                      title="Process name — shows in the ledger, route and documents"
+                                      onChange={(e) => patchAddon(a.uid, { name: e.target.value })}
+                                    />
+                                  )}
+                                  <input
+                                    className="num-input"
+                                    style={{ width: 66 }}
+                                    placeholder="note"
+                                    value={a.param ?? ""}
+                                    title="Optional note (e.g. Ni, 45 HRC, RAL 7035)"
+                                    onChange={(e) => patchAddon(a.uid, { param: e.target.value })}
+                                  />
+                                  <button className="btn" title="Remove from this quote" onClick={() => removeAddon(a.uid)}>✕</button>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 11 }}>
+                                  <select
+                                    className="mini-select"
+                                    value={a.basis}
+                                    title="How this process is priced — per cm² of surface, per kg of weight, or a flat quoted amount"
+                                    onChange={(e) => patchAddon(a.uid, { basis: e.target.value as AddonBasis })}
+                                  >
+                                    <option value="per_cm2">per cm²</option>
+                                    <option value="per_kg">per kg</option>
+                                    <option value="flat">flat rate</option>
+                                  </select>
+                                  {a.basis === "per_cm2" && (
+                                    <select
+                                      className="mini-select"
+                                      value={a.area}
+                                      title="Which surface the rate applies to"
+                                      onChange={(e) => patchAddon(a.uid, { area: e.target.value as "surface" | "machined" })}
+                                    >
+                                      <option value="surface">external surface</option>
+                                      <option value="machined">machined surface</option>
+                                    </select>
+                                  )}
+                                  <input
+                                    className="num-input"
+                                    type="number"
+                                    step="0.01"
+                                    style={{ width: 66 }}
+                                    value={a.rate}
+                                    title={`Rate in ${unit}`}
+                                    onChange={(e) => patchAddon(a.uid, { rate: +e.target.value || 0 })}
+                                  />
+                                  <span style={{ color: "var(--text-2)" }}>{unit}</span>
+                                  <button
+                                    className="btn"
+                                    style={{ fontSize: 11, padding: "2px 8px" }}
+                                    title="Save this rate into the rate-card library so it's reused on the next quote (marks it confirmed/green)"
+                                    onClick={() => saveAddonToLib(a)}
+                                  >
+                                    Save to card
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
                           <div className="row">
                             <span className="k">Quantity (pcs)</span>
                             <input
@@ -5044,7 +5052,6 @@ export default function App() {
                                           <span className="rate-val">
                                             {sym}{estRc.millingRate.toFixed(2)}/cm²
                                           </span>
-                                          {grindingSel ? " (with grinding)" : ""}
                                         </span>
                                         <span className="amt">{inr(estRc.millingCost)}</span>
                                       </div>
@@ -5475,13 +5482,17 @@ export default function App() {
                                     <button
                                       className="rb-x"
                                       title="Remove this process (also clears it in Estimate settings)"
-                                      onClick={() => {
-                                        if (a.name.startsWith("Surface grinding")) setGrindingSel(false);
-                                        else if (a.name.startsWith("Electroplating")) setPlatingSel("");
-                                        else if (a.name.startsWith("Hardening")) setHardeningSel("");
-                                        else if (a.name.startsWith("Powder coating")) setPowderSel("");
-                                        else setCustomAddons((arr) => arr.filter((c) => c.name.trim() !== a.name));
-                                      }}
+                                      onClick={() =>
+                                        setAddonSels((arr) =>
+                                          arr.filter((s) => {
+                                            const label =
+                                              s.param && s.param.trim()
+                                                ? `${s.name.trim()} (${s.param.trim()})`
+                                                : s.name.trim();
+                                            return label !== a.name;
+                                          }),
+                                        )
+                                      }
                                     >
                                       ✕
                                     </button>
