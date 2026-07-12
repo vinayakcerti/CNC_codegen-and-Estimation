@@ -1100,7 +1100,34 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<"projects" | "part">("projects");
+  const [view, setView] = useState<"projects" | "part" | "shop">("projects");
+  // SHOP-3: machines the shop actually uses (names). Empty = show all.
+  const [myMachines, setMyMachines] = useState<Set<string>>(() => {
+    try {
+      const raw = lsGet("cnc.myMachines");
+      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggleMyMachine = (name: string) =>
+    setMyMachines((prev) => {
+      const n = new Set(prev);
+      if (n.has(name)) n.delete(name);
+      else n.add(name);
+      lsSet("cnc.myMachines", JSON.stringify([...n]));
+      return n;
+    });
+  // Machine dropdowns show only the curated machines (Shop Library) — the
+  // currently selected machine always stays visible so nothing breaks.
+  const filterMy = <T extends { name?: string }>(list: T[], current: string): T[] =>
+    myMachines.size === 0
+      ? list
+      : list.filter(
+          (m) => m.name === current || (m.name != null && myMachines.has(m.name)),
+        );
+  // Used by the Shop Library screen (SHOP-1 merge wires it through).
+  void toggleMyMachine;
   const [selOp, setSelOp] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<OpGeo | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -3157,7 +3184,11 @@ export default function App() {
           title="Part workspace"
           onClick={() => setView("part")}
         >◧</button>
-        <button title="Libraries">▤</button>
+        <button
+          className={view === "shop" ? "active" : ""}
+          title="Shop Library — your machines & rate cards"
+          onClick={() => setView("shop")}
+        >▤</button>
         <button title="Team">◈</button>
       </div>
 
@@ -3296,6 +3327,19 @@ export default function App() {
           />
         </div>
 
+        {view === "shop" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "28px 36px" }}>
+            <h1 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 18px" }}>
+              My Shop — Machines &amp; Rate Cards
+            </h1>
+            {/* SHOP-1 screen lands here once the agent branch merges. */}
+            <div style={{ fontSize: 13, color: "var(--text-2)" }}>
+              The Shop Library screen is being assembled — machine list, per-machine
+              parameters and rate cards, copy-between-machines, and the
+              “machines I use” selection will appear here.
+            </div>
+          </div>
+        )}
         {view === "projects" && (
           <div style={{ flex: 1, overflowY: "auto", padding: "28px 36px" }}>
             <h1 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 18px" }}>Projects</h1>
@@ -3555,8 +3599,8 @@ export default function App() {
                           disabled={loading || (materials.length === 0 && customMaterials.length === 0)}
                         />
                         <MachineSelect
-                          machines={machines}
-                          customMachines={customMachines}
+                          machines={filterMy(machines, machineSel)}
+                          customMachines={filterMy(customMachines, machineSel)}
                           value={machineSel}
                           onChange={changeMachine}
                           onAddCustom={addCustomMachine}
@@ -5039,8 +5083,8 @@ export default function App() {
                               </div>
                               <div className="rb-machine">
                                 <MachineSelect
-                                  machines={machines}
-                                  customMachines={customMachines}
+                                  machines={filterMy(machines, machineSel)}
+                                  customMachines={filterMy(customMachines, machineSel)}
                                   value={machineSel}
                                   onChange={changeMachine}
                                   onAddCustom={addCustomMachine}
@@ -5154,8 +5198,8 @@ export default function App() {
                                   </div>
                                   <div className="rb-machine">
                                     <MachineSelect
-                                      machines={machines}
-                                      customMachines={customMachines}
+                                      machines={filterMy(machines, routeMachines.turning ?? "")}
+                                      customMachines={filterMy(customMachines, routeMachines.turning ?? "")}
                                       value={routeMachines.turning ?? ""}
                                       onChange={(n) => setRouteMachine("turning", n)}
                                       onAddCustom={addCustomMachine}
