@@ -709,3 +709,31 @@ body { background: var(--bg-0); color: var(--text-0); }
 .assistant-input:focus { outline: none; border-color: var(--accent); }
 .assistant-input:disabled { opacity: 0.6; }
 .assistant-send { flex-shrink: 0; padding: 7px 12px; font-size: 12.5px; }
+
+/* ---- Shop Library screen (machines + per-machine rate cards) ---- */
+.shop-lib { display: flex; gap: 20px; padding: 16px; height: 100%; min-height: 0; overflow: hidden; }
+.shop-machines { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; }
+.shop-hint { font-size: 11px; color: var(--text-2); margin: -2px 0 6px; }
+.shop-machine-list { flex: 1; min-height: 0; overflow-y: auto; }
+.shop-machine-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 8px;
+  border-bottom: 1px solid var(--border); font-size: 13px; cursor: pointer;
+}
+.shop-machine-row:hover { background: var(--bg-2); }
+/* Selection = pastel green (same tokens as .model-card.sel) */
+.shop-machine-row.sel {
+  background: rgba(46,158,91,0.08);
+  box-shadow: 0 0 0 1px #8fd0ac inset; border-radius: 6px;
+}
+.shop-machine-row input[type="checkbox"] {
+  accent-color: #8fd0ac; margin: 0; flex-shrink: 0; cursor: pointer;
+}
+/* Empty "my machines" set = all machines implicitly on — greyed ticks */
+.shop-machine-row.implicit input[type="checkbox"] { opacity: 0.45; }
+.shop-machine-row .name {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.shop-detail { flex: 1; min-width: 0; overflow-y: auto; }
+.shop-note { font-size: 11px; color: var(--text-2); font-style: italic; margin: 6px 0 2px; }
+.shop-copy-row { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
