@@ -9,7 +9,7 @@ import type {
 import { PartViewer } from "./PartViewer";
 import {
   profileForMachine, rateCardBreakdown, updateProfile, audit, baseName,
-  inferTolerance,
+  inferTolerance, loadProfiles,
   type RateCardBreakdown,
 } from "./costing";
 import { CostLibraryPanel } from "./CostLibraryPanel";
@@ -560,6 +560,8 @@ interface EffortEstimateParams {
   };
   // ARD R4 add-on processes (grinding/plating/hardening/powder) — per piece.
   addons?: { name: string; cost: number }[];
+  // Route as a flow line, e.g. "CNC Milling → Welding → Electroplating (Ni)".
+  flow?: string;
 }
 
 function effortLabel(min: number): string {
@@ -624,6 +626,7 @@ ${(() => {
 <h2>Job summary</h2>
 <table class="summary">
   <tr><td>Material &amp; stock</td><td>${esc(p.materialLine)}</td></tr>
+${p.flow ? `  <tr><td>Process flow</td><td>${esc(p.flow)}</td></tr>` : ""}
   <tr><td>Machine</td><td>${esc(p.machine || "—")}</td></tr>
   <tr><td>Total machine time</td><td>${fmtMin(p.machineMin)}</td></tr>
   <tr><td>Setups</td><td>${p.setupCount}</td></tr>
@@ -1126,10 +1129,24 @@ export default function App() {
   // on first use. `costingNonce` re-reads after library edits.
   const [costingNonce, setCostingNonce] = useState(0);
   const [machineSelForCosting, setMachineSelForCosting] = useState("");
-  const costingProfile = useMemo(
-    () => profileForMachine(machineSelForCosting || "Default"),
+  // A shop can keep several rate cards (one per machine) — this pins the
+  // ACTIVE card for quoting; empty = follow the selected machine's own card.
+  const [rateCardId, setRateCardId] = useState<string>(
+    () => lsGet("cnc.costing.activeCard") || "",
+  );
+  const costingProfile = useMemo(() => {
+    if (rateCardId) {
+      const picked = loadProfiles().find((p) => p.id === rateCardId);
+      if (picked) return picked;
+    }
+    return profileForMachine(machineSelForCosting || "Default");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [machineSelForCosting, costingNonce],
+  }, [machineSelForCosting, costingNonce, rateCardId]);
+  // All saved rate cards, for the picker (refreshes on any profile edit).
+  const allRateCards = useMemo(
+    () => loadProfiles(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [costingNonce, machineSelForCosting],
   );
   const rateCardActive = costingProfile.model === "ratecard";
   // Surface grinding flag (ARD R2/R4 link): flips ₹0.60 → ₹0.80 per cm².
@@ -1139,6 +1156,9 @@ export default function App() {
   const [platingSel, setPlatingSel] = useState<"" | "Ni" | "Cr" | "Zn" | "Cd">("");
   const [hardeningSel, setHardeningSel] = useState(""); // spec, e.g. "45HRC"
   const [powderSel, setPowderSel] = useState("");       // RAL code
+  // Custom (operator-named) add-on processes with a manual price — join the
+  // route as blocks and the estimate as add-on lines. Session-scoped.
+  const [customAddons, setCustomAddons] = useState<{ name: string; cost: number }[]>([]);
   // Bodies excluded from machining (purchased parts / bolts), per part file.
   const [excludedBodies, setExcludedBodies] = useState<Set<string>>(new Set());
   const toggleBodyExcluded = (groupId: string) =>
@@ -1655,6 +1675,7 @@ export default function App() {
     setPlatingSel("");
     setHardeningSel("");
     setPowderSel("");
+    setCustomAddons([]);
     try {
       const rawB = localStorage.getItem(`cnc.excludedBodies.${fn}`);
       setExcludedBodies(new Set(rawB ? (JSON.parse(rawB) as string[]) : []));
@@ -1771,6 +1792,8 @@ export default function App() {
         name: `Powder coating (RAL ${powderSel.trim()})`,
         cost: costingProfile.addon_rates.powder_per_cm2 * envAreaCm2,
       });
+    for (const c of customAddons)
+      if (c.name.trim()) addons.push({ name: c.name.trim(), cost: c.cost || 0 });
     const addonCost = addons.reduce((a, x) => a + x.cost, 0);
     return {
       machineMin, presetMult, tolMult, complexity, machMult, machining,
@@ -1780,6 +1803,7 @@ export default function App() {
     analysis, strategy, estPreset, estTolerance, estComplexity, excluded,
     customMaterials, materials, stockMode, manualStock, matPriceKg, setupCharge, rateHr,
     rateCardActive, costingProfile, grindingSel, platingSel, hardeningSel, powderSel,
+    customAddons,
   ]);
 
   // Per-body estimate (scoped): same ledger math as estCore but from the
@@ -1858,6 +1882,8 @@ export default function App() {
         name: `Powder coating (RAL ${powderSel.trim()})`,
         cost: costingProfile.addon_rates.powder_per_cm2 * envAreaCm2,
       });
+    for (const c of customAddons)
+      if (c.name.trim()) addons.push({ name: c.name.trim(), cost: c.cost || 0 });
     const addonCost = addons.reduce((a, x) => a + x.cost, 0);
     return {
       machineMin, presetMult, tolMult, complexity, machMult, machining,
@@ -1867,7 +1893,7 @@ export default function App() {
     analysis, selectedGroup, scopedStrategy, scopedBodyIndex, estPreset,
     estTolerance, estComplexity, excluded, customMaterials, materials, matPriceKg,
     setupCharge, rateHr, rateCardActive, costingProfile, grindingSel,
-    platingSel, hardeningSel, powderSel,
+    platingSel, hardeningSel, powderSel, customAddons,
   ]);
 
   // ---- EST-4 (ARD R1): per-part Excel export with cost split ------------
@@ -2294,11 +2320,18 @@ export default function App() {
     const turnCost = (effTurnMin / 60) * turnRate;
     const customMin = customRouteSteps.reduce((s, c) => s + c.timeMin, 0);
     const customCost = customRouteSteps.reduce((s, c) => s + (c.timeMin / 60) * c.rateHr, 0);
-    const blockCount = 1 + (hasWeld ? 1 : 0) + (hasTurning ? 1 : 0) + customRouteSteps.length;
+    // ARD R4: selected add-on processes (grinding/plating/hardening/powder/
+    // custom) are route blocks too — outsourced, so they add cost, not
+    // machine minutes.
+    const addons = estCore.addons;
+    const addonCost = estCore.addonCost;
+    const blockCount =
+      1 + (hasWeld ? 1 : 0) + (hasTurning ? 1 : 0) + customRouteSteps.length + addons.length;
     const totalMin =
       estCore.machineMin + (hasWeld ? weldMin : 0) + (hasTurning ? effTurnMin : 0) + customMin;
     const blocksCost =
-      millingCost + (hasWeld ? weldCost : 0) + (hasTurning ? turnCost : 0) + customCost;
+      millingCost + (hasWeld ? weldCost : 0) + (hasTurning ? turnCost : 0) + customCost +
+      addonCost;
     // Same footer math as the Estimate ledger — material + setups + margin —
     // with all process blocks in place of the single machining line.
     const subtotal = blocksCost + estCore.materialCost + estCore.setupsCost;
@@ -2306,7 +2339,7 @@ export default function App() {
     const total = subtotal + margin;
     return {
       millingCost, hasWeld, weldMin, weldCost, turnedCount, hasTurning, turnCost,
-      autoTurnMin, effTurnMin,
+      autoTurnMin, effTurnMin, addons, addonCost,
       customMin, customCost, blockCount, totalMin, blocksCost, subtotal, margin, total,
     };
   }, [estCore, analysis, wmResult, weldRate, turnMin, turnRate, customRouteSteps, marginPct]);
@@ -3181,6 +3214,10 @@ export default function App() {
               <CostLibraryPanel
                 profile={costingProfile}
                 currency={sym}
+                partHoles={
+                  (selectedGroup && scopedEstCore ? scopedEstCore : estCore)
+                    ?.rcInfo?.holes ?? null
+                }
                 onClose={() => setCostPanelOpen(false)}
                 onChanged={() => setCostingNonce((n) => n + 1)}
               />
@@ -4300,6 +4337,15 @@ export default function App() {
                                       total,
                                     },
                                     addons: estAddons,
+                                    flow: [
+                                      "CNC Milling",
+                                      !scoped && wmResult && assemblyMode !== "assembled"
+                                        ? "Welding & Assembly"
+                                        : null,
+                                      ...estAddons.map((a) => a.name),
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" → "),
                                   }),
                                 )
                               }
@@ -4325,99 +4371,7 @@ export default function App() {
                             </button>
                           </div>
                           <div className="section-title">Estimate settings</div>
-                          <div className="row">
-                            <span className="k">Costing model</span>
-                            <select
-                              className="mini-select"
-                              value={costingProfile.model}
-                              onChange={(e) => {
-                                const v = e.target.value as "time" | "ratecard";
-                                updateProfile(
-                                  audit(
-                                    { ...costingProfile, model: v },
-                                    "model", costingProfile.model, v,
-                                  ),
-                                );
-                                setCostingNonce((n) => n + 1);
-                              }}
-                              title="Time-based: hours × your ₹/hr. Rate card: machined surface × ₹/cm² + per-hole prices from your library (per machine)."
-                            >
-                              <option value="time">Time-based ({sym}/hr)</option>
-                              <option value="ratecard">Rate card ({sym}/cm² + hole library)</option>
-                            </select>
-                          </div>
-                          {rateCardActive && (
-                            <>
-                              <div className="row">
-                                <span className="k">Rate card · {costingProfile.name}</span>
-                                <button className="btn" onClick={() => setCostPanelOpen(true)}>
-                                  Edit rate card…
-                                </button>
-                              </div>
-                              {estRc && estRc.estimatedCount > 0 && (
-                                <div className="scope-note" style={{ color: "#c07a2a" }}>
-                                  ⚠ {estRc.estimatedCount} hole price
-                                  {estRc.estimatedCount > 1 ? "s are" : " is"} estimated —
-                                  not confirmed by the shop. Open “Edit rate card…” to
-                                  confirm or correct them.
-                                </div>
-                              )}
-                            </>
-                          )}
-                          {/* ARD R4 add-on processes — available in BOTH costing
-                              models; rates live in the machine's rate card. */}
-                          <div className="row">
-                            <span className="k">Surface grinding</span>
-                            <input
-                              type="checkbox"
-                              checked={grindingSel}
-                              onChange={(e) => setGrindingSel(e.target.checked)}
-                              title={
-                                rateCardActive
-                                  ? `Flips the milling rate ${sym}${costingProfile.milling_rate_per_cm2.toFixed(2)} → ${sym}${costingProfile.milling_rate_grinding_per_cm2.toFixed(2)} per cm² (ARD R2)`
-                                  : `Adds ${sym}${costingProfile.addon_rates.grinding_per_cm2.toFixed(2)}/cm² of machined surface as an add-on line`
-                              }
-                            />
-                          </div>
-                          <div className="row">
-                            <span className="k">Electroplating</span>
-                            <select
-                              className="mini-select"
-                              value={platingSel}
-                              onChange={(e) =>
-                                setPlatingSel(e.target.value as "" | "Ni" | "Cr" | "Zn" | "Cd")
-                              }
-                              title={`${sym}${costingProfile.addon_rates.plating_per_cm2.toFixed(2)}/cm² of part surface (stock envelope) — outsourced`}
-                            >
-                              <option value="">None</option>
-                              <option value="Ni">Nickel (Ni)</option>
-                              <option value="Cr">Hard chrome (Cr)</option>
-                              <option value="Zn">Zinc (Zn)</option>
-                              <option value="Cd">Cadmium (Cd)</option>
-                            </select>
-                          </div>
-                          <div className="row">
-                            <span className="k">Hardening</span>
-                            <input
-                              className="num-input"
-                              style={{ width: 96 }}
-                              placeholder="e.g. 45 HRC"
-                              value={hardeningSel}
-                              onChange={(e) => setHardeningSel(e.target.value)}
-                              title={`${sym}${costingProfile.addon_rates.hardening_per_kg.toFixed(0)}/kg of part weight — enter the spec to enable`}
-                            />
-                          </div>
-                          <div className="row">
-                            <span className="k">Powder coat (RAL)</span>
-                            <input
-                              className="num-input"
-                              style={{ width: 96 }}
-                              placeholder="e.g. 7035"
-                              value={powderSel}
-                              onChange={(e) => setPowderSel(e.target.value)}
-                              title={`${sym}${costingProfile.addon_rates.powder_per_cm2.toFixed(2)}/cm² of part surface — enter the RAL shade to enable`}
-                            />
-                          </div>
+                          {/* Currency comes FIRST — everything below prices in it. */}
                           <div className="row">
                             <span className="k">Currency</span>
                             <select
@@ -4434,6 +4388,229 @@ export default function App() {
                               ))}
                             </select>
                           </div>
+                          {/* Costing model as two cards — Time-based is the default. */}
+                          {(() => {
+                            const setModel = (v: "time" | "ratecard") => {
+                              if (costingProfile.model === v) return;
+                              updateProfile(
+                                audit(
+                                  { ...costingProfile, model: v },
+                                  "model", costingProfile.model, v,
+                                ),
+                              );
+                              setCostingNonce((n) => n + 1);
+                            };
+                            return (
+                              <div style={{ display: "flex", gap: 8, margin: "6px 0" }}>
+                                <div
+                                  className={`model-card ${!rateCardActive ? "sel" : ""}`}
+                                  title="Machine hours × your hourly rate — the classic model"
+                                  onClick={() => setModel("time")}
+                                >
+                                  <div className="mc-name">
+                                    {!rateCardActive ? "✓ " : ""}Time-based
+                                  </div>
+                                  <div className="mc-sub">{sym}{rateHr}/hr × machine hours</div>
+                                </div>
+                                <div
+                                  className={`model-card ${rateCardActive ? "sel" : ""}`}
+                                  title="Machined surface × ₹/cm² + per-hole prices from your rate card"
+                                  onClick={() => setModel("ratecard")}
+                                >
+                                  <div className="mc-name">
+                                    {rateCardActive ? "✓ " : ""}Rate card
+                                  </div>
+                                  <div className="mc-sub">
+                                    {sym}/cm² + hole library
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                          {rateCardActive && (
+                            <>
+                              <div className="row">
+                                <span className="k">Rate card</span>
+                                {allRateCards.length > 1 ? (
+                                  <select
+                                    className="mini-select"
+                                    style={{ maxWidth: 170 }}
+                                    value={costingProfile.id}
+                                    title="Pick which machine's rate card prices this quote"
+                                    onChange={(e) => {
+                                      const id = e.target.value;
+                                      setRateCardId(id);
+                                      lsSet("cnc.costing.activeCard", id);
+                                      const p = allRateCards.find((x) => x.id === id);
+                                      // Choosing a card AS the pricing source
+                                      // implies rate-card mode for it.
+                                      if (p && p.model !== "ratecard")
+                                        updateProfile(
+                                          audit({ ...p, model: "ratecard" }, "model", p.model, "ratecard"),
+                                        );
+                                      setCostingNonce((n) => n + 1);
+                                    }}
+                                  >
+                                    {allRateCards.map((p) => (
+                                      <option key={p.id} value={p.id}>{p.name}</option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <span className="v">{costingProfile.name}</span>
+                                )}
+                              </div>
+                              <div className="row">
+                                <span className="k">Prices in this card</span>
+                                <button className="btn" onClick={() => setCostPanelOpen(true)}>
+                                  Edit rate card…
+                                </button>
+                              </div>
+                              {estRc && estRc.estimatedCount > 0 && (
+                                <div className="scope-note" style={{ color: "#c07a2a" }}>
+                                  ⚠ {estRc.estimatedCount} hole price
+                                  {estRc.estimatedCount > 1 ? "s are" : " is"} estimated —
+                                  not confirmed by the shop. Open “Edit rate card…” to
+                                  confirm or correct them.
+                                </div>
+                              )}
+                            </>
+                          )}
+                          {/* ARD R4 add-on processes — flow style: pick one from
+                              the dropdown, it becomes a row here, a line in the
+                              Quote ledger AND a block in the Process Route. */}
+                          <div className="row">
+                            <span
+                              className="k"
+                              title="Outsourced / secondary processes. Each one you add appears below, in the Quote ledger, and as a block in the Process Route."
+                            >
+                              Add-on processes
+                            </span>
+                            <select
+                              className="mini-select"
+                              value=""
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === "grinding") setGrindingSel(true);
+                                else if (v === "plating") setPlatingSel("Ni");
+                                else if (v === "hardening") setHardeningSel("45 HRC");
+                                else if (v === "powder") setPowderSel("7035");
+                                else if (v === "custom")
+                                  setCustomAddons((a) => [...a, { name: "Custom process", cost: 0 }]);
+                              }}
+                            >
+                              <option value="">+ Add process…</option>
+                              <option value="grinding" disabled={grindingSel}>Surface grinding</option>
+                              <option value="plating" disabled={!!platingSel}>Electroplating</option>
+                              <option value="hardening" disabled={!!hardeningSel}>Hardening</option>
+                              <option value="powder" disabled={!!powderSel}>Powder coating</option>
+                              <option value="custom">Custom (own name + price)…</option>
+                            </select>
+                          </div>
+                          {grindingSel && (
+                            <div className="row">
+                              <span className="k">· Surface grinding</span>
+                              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                <span style={{ fontSize: 11, color: "var(--text-2)" }}>
+                                  {rateCardActive
+                                    ? `in milling rate — ${sym}${costingProfile.milling_rate_grinding_per_cm2.toFixed(2)}/cm²`
+                                    : `${sym}${costingProfile.addon_rates.grinding_per_cm2.toFixed(2)}/cm² machined`}
+                                </span>
+                                <button className="btn" title="Remove" onClick={() => setGrindingSel(false)}>✕</button>
+                              </span>
+                            </div>
+                          )}
+                          {platingSel && (
+                            <div className="row">
+                              <span className="k">· Electroplating</span>
+                              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                <select
+                                  className="mini-select"
+                                  value={platingSel}
+                                  onChange={(e) =>
+                                    setPlatingSel(e.target.value as "" | "Ni" | "Cr" | "Zn" | "Cd")
+                                  }
+                                  title={`${sym}${costingProfile.addon_rates.plating_per_cm2.toFixed(2)}/cm² of part surface — outsourced`}
+                                >
+                                  <option value="Ni">Nickel (Ni)</option>
+                                  <option value="Cr">Hard chrome (Cr)</option>
+                                  <option value="Zn">Zinc (Zn)</option>
+                                  <option value="Cd">Cadmium (Cd)</option>
+                                </select>
+                                <button className="btn" title="Remove" onClick={() => setPlatingSel("")}>✕</button>
+                              </span>
+                            </div>
+                          )}
+                          {hardeningSel !== "" && (
+                            <div className="row">
+                              <span className="k">· Hardening</span>
+                              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                <input
+                                  className="num-input"
+                                  style={{ width: 84 }}
+                                  placeholder="e.g. 45 HRC"
+                                  value={hardeningSel}
+                                  onChange={(e) => setHardeningSel(e.target.value)}
+                                  title={`${sym}${costingProfile.addon_rates.hardening_per_kg.toFixed(0)}/kg of part weight`}
+                                />
+                                <button className="btn" title="Remove" onClick={() => setHardeningSel("")}>✕</button>
+                              </span>
+                            </div>
+                          )}
+                          {powderSel !== "" && (
+                            <div className="row">
+                              <span className="k">· Powder coat (RAL)</span>
+                              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                <input
+                                  className="num-input"
+                                  style={{ width: 84 }}
+                                  placeholder="e.g. 7035"
+                                  value={powderSel}
+                                  onChange={(e) => setPowderSel(e.target.value)}
+                                  title={`${sym}${costingProfile.addon_rates.powder_per_cm2.toFixed(2)}/cm² of part surface`}
+                                />
+                                <button className="btn" title="Remove" onClick={() => setPowderSel("")}>✕</button>
+                              </span>
+                            </div>
+                          )}
+                          {customAddons.map((c, i) => (
+                            <div className="row" key={`ca-${i}`}>
+                              <span className="k" style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                ·
+                                <input
+                                  className="num-input"
+                                  style={{ width: 108 }}
+                                  value={c.name}
+                                  title="Process name — appears in the ledger, route and documents"
+                                  onChange={(e) =>
+                                    setCustomAddons((a) =>
+                                      a.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)),
+                                    )
+                                  }
+                                />
+                              </span>
+                              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                <input
+                                  className="num-input"
+                                  type="number"
+                                  style={{ width: 74 }}
+                                  value={c.cost}
+                                  title={`Manual price (${sym}) per piece`}
+                                  onChange={(e) =>
+                                    setCustomAddons((a) =>
+                                      a.map((x, j) => (j === i ? { ...x, cost: +e.target.value || 0 } : x)),
+                                    )
+                                  }
+                                />
+                                <button
+                                  className="btn"
+                                  title="Remove"
+                                  onClick={() => setCustomAddons((a) => a.filter((_, j) => j !== i))}
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            </div>
+                          ))}
                           <div className="row">
                             <span className="k">Quantity (pcs)</span>
                             <input
@@ -4992,6 +5169,40 @@ export default function App() {
                                     <span className="v">{sym}{c.rateHr}/hr</span>
                                   </div>
                                   <div className="rb-sub">custom process</div>
+                                </div>
+                              </Fragment>
+                            ))}
+
+                            {/* Add-on process blocks (from Estimate settings —
+                                grinding/plating/hardening/powder/custom price) */}
+                            {routeCalc.addons.map((a) => (
+                              <Fragment key={`addon-${a.name}`}>
+                                <div className="route-connector" />
+                                <div className="route-block">
+                                  <div className="rb-head">
+                                    <span className="rb-num">{num()}</span>
+                                    <div className="rb-title">
+                                      <div className="rb-name" title={a.name}>{a.name}</div>
+                                      <div className="rb-station">Outsourced / secondary</div>
+                                    </div>
+                                    <span className="rb-cost">{inr(a.cost)}</span>
+                                    <button
+                                      className="rb-x"
+                                      title="Remove this process (also clears it in Estimate settings)"
+                                      onClick={() => {
+                                        if (a.name.startsWith("Surface grinding")) setGrindingSel(false);
+                                        else if (a.name.startsWith("Electroplating")) setPlatingSel("");
+                                        else if (a.name.startsWith("Hardening")) setHardeningSel("");
+                                        else if (a.name.startsWith("Powder coating")) setPowderSel("");
+                                        else setCustomAddons((arr) => arr.filter((c) => c.name.trim() !== a.name));
+                                      }}
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                  <div className="rb-sub">
+                                    add-on from Estimate settings · rate card pricing
+                                  </div>
                                 </div>
                               </Fragment>
                             ))}

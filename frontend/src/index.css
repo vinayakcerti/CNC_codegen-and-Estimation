@@ -432,6 +432,19 @@ body { background: var(--bg-0); color: var(--text-0); }
 /* Branded Quote generator modal (MVP-2) */
 .qm-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex;
   align-items: center; justify-content: center; z-index: 1000; }
+/* Rate-card admin panel: near-opaque so the table reads over the 3D scene
+   (a hint of translucency keeps context — tester feedback). */
+.qm-modal { background: color-mix(in srgb, var(--bg-1) 96%, transparent);
+  backdrop-filter: blur(10px); border: 1px solid var(--border-strong);
+  border-radius: 10px; padding: 14px 16px; max-height: 90vh; overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+/* Costing-model selector cards (Estimate settings) */
+.model-card { flex: 1; border: 1px solid var(--border-strong); border-radius: 8px;
+  padding: 8px 10px; cursor: pointer; user-select: none; background: var(--bg-1); }
+.model-card:hover { border-color: var(--text-2); }
+.model-card.sel { border-color: #4a90d9; box-shadow: 0 0 0 1px #4a90d9 inset; }
+.model-card .mc-name { font-size: 12px; font-weight: 600; color: var(--text-0); }
+.model-card .mc-sub { font-size: 11px; color: var(--text-2); margin-top: 2px; }
 .qm { background: var(--bg-1); border: 1px solid var(--border-strong); border-radius: 10px;
   width: 720px; max-width: 94vw; max-height: 90vh; display: flex; flex-direction: column;
   box-shadow: 0 20px 60px rgba(0,0,0,0.5); }

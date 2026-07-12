@@ -4,7 +4,8 @@
 import { useMemo, useRef, useState } from "react";
 import {
   audit, csvToLibrary, libraryToCsv, updateProfile,
-  type CostingProfile, type HoleCostRow, type ToleranceClass,
+  type CostingProfile, type HoleCostRow, type RateCardBreakdown,
+  type ToleranceClass,
 } from "./costing";
 
 const TOLS: ToleranceClass[] = ["H6", "H7", "H8", "H9", "H11", "free", "thread"];
@@ -12,18 +13,50 @@ const TOLS: ToleranceClass[] = ["H6", "H7", "H8", "H9", "H11", "free", "thread"]
 export function CostLibraryPanel({
   profile,
   currency,
+  partHoles = null,
   onClose,
   onChanged,
 }: {
   profile: CostingProfile;
   currency: string;
+  // The loaded part's hole lookups (rate-card breakdown) — surfaces a
+  // "confirm what you quote" list so the shop signs off the operations of
+  // THIS part first; the full library below is for everything else.
+  partHoles?: RateCardBreakdown["holes"] | null;
   onClose: () => void;
   // Bump a nonce in the parent so estimates re-read the stored profile.
   onChanged: () => void;
 }) {
   const [tolFilter, setTolFilter] = useState<string>("all");
   const [diaFilter, setDiaFilter] = useState<string>("");
+  const [partVals, setPartVals] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // One row per distinct (Ø, tolerance, depth) spec on the part — confirming
+  // a spec covers every hole of that size here and on future parts.
+  const partSpecs = useMemo(() => {
+    const m = new Map<
+      string,
+      {
+        dia: number; tolerance: ToleranceClass; thickness: number;
+        count: number; cost: number; estimated: boolean; note: string;
+      }
+    >();
+    for (const h of partHoles ?? []) {
+      const k = `${h.dia.toFixed(1)}|${h.tolerance}|${h.thickness.toFixed(1)}`;
+      const e = m.get(k);
+      if (e) {
+        e.count++;
+        e.estimated = e.estimated || h.estimated;
+      } else {
+        m.set(k, {
+          dia: h.dia, tolerance: h.tolerance, thickness: h.thickness,
+          count: 1, cost: h.cost, estimated: h.estimated, note: h.note,
+        });
+      }
+    }
+    return [...m.values()].sort((a, b) => a.dia - b.dia || a.thickness - b.thickness);
+  }, [partHoles]);
 
   const rows = useMemo(() => {
     let r = profile.holeLibrary;
@@ -73,6 +106,39 @@ export function CostLibraryPanel({
     commit(
       { ...profile, holeLibrary: profile.holeLibrary.filter((r) => r.id !== id) },
       "delete_row", JSON.stringify(before ?? {}), "",
+    );
+  }
+
+  // Confirm a part spec: update the matching library row, or seed a new
+  // CONFIRMED exact row — future lookups of this Ø/tol/depth go green.
+  function confirmPartSpec(
+    s: { dia: number; tolerance: ToleranceClass; thickness: number },
+    cost: number,
+  ) {
+    const today = new Date().toISOString().slice(0, 10);
+    const match = profile.holeLibrary.find(
+      (r) =>
+        r.tolerance === s.tolerance &&
+        Math.abs(r.diameter_mm - s.dia) < 0.26 &&
+        Math.abs(r.thickness_mm - s.thickness) < 0.51,
+    );
+    if (match) {
+      setRow(match.id, {
+        cost_inr: cost, confirmed: true,
+        source: "confirmed from part quote", effective_from: today,
+      }, "confirm_part_spec");
+      return;
+    }
+    const row: HoleCostRow = {
+      id: `part-${Date.now()}-${Math.round(s.dia * 10)}`,
+      diameter_mm: s.dia, tolerance: s.tolerance, thickness_mm: s.thickness,
+      operation: s.tolerance === "thread" ? "Tap" : "Drill+Ream",
+      cost_inr: cost, effective_from: today,
+      source: "confirmed from part quote", confirmed: true,
+    };
+    commit(
+      { ...profile, holeLibrary: [...profile.holeLibrary, row] },
+      "confirm_part_spec", "", JSON.stringify(row),
     );
   }
 
@@ -156,6 +222,81 @@ export function CostLibraryPanel({
             )}
           </label>
         </div>
+
+        {/* This part first: confirm the operations actually being quoted */}
+        {partSpecs.length > 0 && (
+          <>
+            <div className="qm-sect">
+              This part’s hole operations ({partSpecs.length} size
+              {partSpecs.length > 1 ? "s" : ""}) — confirm what you quote
+            </div>
+            <table className="dense-table" style={{ width: "100%" }}>
+              <thead>
+                <tr>
+                  <th>Ø (mm)</th><th>Tol</th><th>Depth (mm)</th><th>Holes</th>
+                  <th>Price ({currency})</th><th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {partSpecs.map((s) => {
+                  const k = `${s.dia.toFixed(1)}|${s.tolerance}|${s.thickness.toFixed(1)}`;
+                  return (
+                    <tr
+                      key={k}
+                      style={{
+                        background: s.estimated
+                          ? "rgba(192,122,42,0.14)"
+                          : "rgba(46,158,91,0.10)",
+                      }}
+                    >
+                      <td>{s.dia.toFixed(1)}</td>
+                      <td>{s.tolerance}</td>
+                      <td>{s.thickness.toFixed(1)}</td>
+                      <td>×{s.count}</td>
+                      <td>
+                        {s.estimated ? (
+                          <input
+                            className="num-input" type="number" style={{ width: 72 }}
+                            title={`Our estimate: ${s.cost} (${s.note}) — correct it if you know the real price`}
+                            value={partVals[k] ?? String(s.cost)}
+                            onChange={(e) =>
+                              setPartVals((v) => ({ ...v, [k]: e.target.value }))
+                            }
+                          />
+                        ) : (
+                          s.cost
+                        )}
+                      </td>
+                      <td>
+                        {s.estimated ? (
+                          <button
+                            className="btn"
+                            style={{ color: "#c07a2a" }}
+                            title="Save as a CONFIRMED library price for this Ø / tolerance / depth"
+                            onClick={() => {
+                              const v = parseFloat(partVals[k] ?? String(s.cost));
+                              if (Number.isFinite(v)) confirmPartSpec(s, v);
+                            }}
+                          >
+                            Confirm
+                          </button>
+                        ) : (
+                          <span style={{ color: "#2e9e5b", fontSize: 11, fontWeight: 600 }}>
+                            confirmed
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div style={{ fontSize: 11, color: "var(--text-2)", margin: "4px 0 6px" }}>
+              Confirming writes the price into the library below — every future
+              part with the same Ø/tolerance/depth prices green automatically.
+            </div>
+          </>
+        )}
 
         {/* Hole library */}
         <div className="qm-sect" style={{ display: "flex", alignItems: "center", gap: 8 }}>
