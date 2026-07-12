@@ -4289,8 +4289,12 @@ export default function App() {
                       };
                       // Toolpath-style: where the machining minutes go, by feature
                       // category + a tool-change line. Reconciles to `machining`.
+                      // Rate-card mode prices machining at the shop's ₹/cm², so
+                      // the time multipliers (preset/complexity/tolerance) don't
+                      // apply — keep the reference breakdown at ×1 so it doesn't
+                      // drift away from the (multiplier-free) rate-card total.
                       const machBreakdown = buildMachiningBreakdown(
-                        ledgerSetups, totalsForView, rateHr, machMult,
+                        ledgerSetups, totalsForView, rateHr, rateCardActive ? 1 : machMult,
                       );
                       const partTotal = material_ + machining; // block 1: material + machining
                       const subtotal = partTotal + setupsCost + estAddonCost;
@@ -4317,7 +4321,11 @@ export default function App() {
                       // competitive (×0.70) and conservative (×1.00) preset
                       // ends — complexity/tolerance stay as selected.
                       const totalAtPreset = (pm: number) => {
-                        const mach = (machineMin / 60) * rateHr * pm * complexity * tolMult;
+                        // Rate-card mode ignores the preset multiplier — machining is
+                        // the fixed ₹/cm² total, so the "range" collapses to one price.
+                        const mach = rateCardActive
+                          ? machining
+                          : (machineMin / 60) * rateHr * pm * complexity * tolMult;
                         // Add-ons are outsourced flat costs — preset-independent.
                         return (material_ + mach + setupsCost + estAddonCost) * (1 + marginPct / 100);
                       };
@@ -5073,9 +5081,10 @@ export default function App() {
                             <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                               <select
                                 className="mini-select"
-                                style={{ maxWidth: 148 }}
+                                style={{ maxWidth: 148, opacity: rateCardActive ? 0.5 : 1 }}
                                 value={estPreset}
-                                title="Scales the machining-time cost lines only"
+                                disabled={rateCardActive}
+                                title={rateCardActive ? "Rate card active — machining is priced at ₹/cm², so this multiplier is not applied" : "Scales the machining-time cost lines only"}
                                 onChange={(e) => {
                                   const v = e.target.value;
                                   changePreset(
@@ -5103,6 +5112,9 @@ export default function App() {
                               min={COMPLEXITY_MIN}
                               max={COMPLEXITY_MAX}
                               step={0.05}
+                              disabled={rateCardActive}
+                              style={rateCardActive ? { opacity: 0.5 } : undefined}
+                              title={rateCardActive ? "Rate card active — machining is priced at ₹/cm², so complexity is not applied" : undefined}
                               value={Number.isFinite(estComplexity) ? estComplexity : ""}
                               onChange={(e) => changeComplexity(+e.target.value)}
                             />
@@ -5111,8 +5123,10 @@ export default function App() {
                             <span className="k">Tolerance class</span>
                             <select
                               className="mini-select"
-                              style={{ maxWidth: 170 }}
+                              style={{ maxWidth: 170, opacity: rateCardActive ? 0.5 : 1 }}
                               value={estTolerance}
+                              disabled={rateCardActive}
+                              title={rateCardActive ? "Rate card active — machining is priced at ₹/cm², so tolerance is not applied" : undefined}
                               onChange={(e) => {
                                 const v = e.target.value;
                                 changeTolerance(
@@ -5126,9 +5140,10 @@ export default function App() {
                               <option value="precision">Precision (×1.60)</option>
                             </select>
                           </div>
-                          <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 6 }}>
-                            machining ×{machMult.toFixed(2)} = preset {presetMult.toFixed(2)} ×
-                            complexity {complexity.toFixed(2)} × tolerance {tolMult.toFixed(2)}
+                          <div style={{ fontSize: 11, color: rateCardActive ? "#c07a2a" : "var(--text-2)", marginTop: 6 }}>
+                            {rateCardActive
+                              ? "Rate card active — machining is priced at the shop's ₹/cm², so preset / complexity / tolerance do not change the total. Switch to Time-based (above) to use them."
+                              : `machining ×${machMult.toFixed(2)} = preset ${presetMult.toFixed(2)} × complexity ${complexity.toFixed(2)} × tolerance ${tolMult.toFixed(2)}`}
                           </div>
 
                           <div className="section-title">Quote ledger</div>
@@ -5148,7 +5163,7 @@ export default function App() {
                               // feature category, then Positioning / Tool changes /
                               // Machine setup — the four components of machineMin, so
                               // these rows sum exactly to the machining cost above.
-                              const multTag = machMult !== 1 ? ` × ${machMult.toFixed(2)}` : "";
+                              const multTag = (!rateCardActive && machMult !== 1) ? ` × ${machMult.toFixed(2)}` : "";
                               const bd = machBreakdown;
                               return (
                                 <>
