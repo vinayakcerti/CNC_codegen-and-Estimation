@@ -614,8 +614,12 @@ function effortEstimateHtml(p: EffortEstimateParams): string {
 ${(() => {
   const co = p.company;
   if (!co || (!co.logo && !co.name)) return "";
-  const mark = co.logo
-    ? `<img src="${co.logo}" alt="logo" style="max-height:52px;max-width:180px;object-fit:contain">`
+  // Only embed the logo if it's a real image data URL — defense-in-depth so
+  // the one attribute interpolation can't carry markup even if the stored
+  // value were ever tampered with.
+  const safeLogo = co.logo && /^data:image\//.test(co.logo) ? co.logo : "";
+  const mark = safeLogo
+    ? `<img src="${esc(safeLogo)}" alt="logo" style="max-height:52px;max-width:180px;object-fit:contain">`
     : `<div style="font-size:17px;font-weight:700">${esc(co.name || "")}</div>`;
   const addr = co.address
     ? `<div style="font-size:11px;color:var(--mut);white-space:pre-line;margin-top:3px">${esc(co.address)}</div>`
@@ -1020,6 +1024,41 @@ function OpPanel({ op, onClose }: { op: StrategyOp; onClose: () => void }) {
 
 // Inline "+ Add process" form on the Route tab. Name and a positive time
 // are required; rate defaults to a generic bench rate.
+// First-run "wow": a staged loader so the wait reads as the tool WORKING
+// (reading geometry → detecting features → planning → pricing) instead of a
+// bare spinner. Stages advance on a timer — cosmetic, not tied to real
+// progress — and the last stage holds until analysis actually returns.
+function AnalyzingStages() {
+  const STAGES = [
+    "Reading the 3D geometry",
+    "Detecting holes, slots & pockets",
+    "Planning setups & tools",
+    "Pricing the job",
+  ];
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    // Hold on the final stage; earlier ones tick by so it feels alive.
+    const t = setInterval(() => setI((n) => Math.min(n + 1, STAGES.length - 1)), 1400);
+    return () => clearInterval(t);
+  }, [STAGES.length]);
+  return (
+    <div className="analyzing">
+      <div className="ring" />
+      <div className="az-stages">
+        {STAGES.map((s, n) => (
+          <div
+            key={s}
+            className={`az-stage ${n < i ? "done" : n === i ? "active" : ""}`}
+          >
+            <span className="dot">{n < i ? "✓" : ""}</span>
+            {s}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AddProcessForm({
   onAdd,
   onCancel,
@@ -3484,8 +3523,8 @@ export default function App() {
                 </div>
               )}
               {loading && (
-                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-1)" }}>
-                  Analysing part…
+                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <AnalyzingStages />
                 </div>
               )}
               {analysis && !loading && (
@@ -4168,6 +4207,63 @@ export default function App() {
                         `${analysis.material} stock ${stockDims}${stockTag} — ${massKg.toFixed(1)} kg @ ${sym}${matPriceKg}/kg`;
                       return (
                         <>
+                          {/* Hero price — the ANSWER, first thing the user sees.
+                              Weldment job total when it's ready, else this
+                              part's (batch-aware) grand total. */}
+                          {(() => {
+                            const jobReady =
+                              !scoped && rollup &&
+                              (assemblyMode === "assembled" || rollup.ready);
+                            // A weldment whose per-part plans aren't computed yet:
+                            // the billet total treats the whole envelope as one
+                            // solid block, which over-quotes the welded job — so
+                            // label it "rough" and point at the compute button.
+                            const roughWeldment = !scoped && !!rollup && !jobReady;
+                            const heroAmt = jobReady
+                              ? assemblyMode === "assembled"
+                                ? rollup.assembledTotal
+                                : rollup.total
+                              : N > 1
+                                ? unitCost
+                                : total;
+                            const heroLabel = jobReady
+                              ? "Estimated job price"
+                              : roughWeldment
+                                ? "Rough estimate (whole block)"
+                                : N > 1
+                                  ? `Estimated price / pc (${N} pcs)`
+                                  : "Estimated price";
+                            const heroSub = jobReady
+                              ? `${rollup.groupCount} parts · welded assembly${rollup.NA > 1 ? ` · ×${rollup.NA}` : ""}`
+                              : roughWeldment
+                                ? "Press “Compute exact per-part plans” for the real welded-job price"
+                                : scoped && selectedGroup
+                                  ? `${scopeLabel(selectedGroup)} · 1 pc`
+                                  : `${analysis.material} · ${strategy.setups.length} setup${strategy.setups.length === 1 ? "" : "s"}`;
+                            return (
+                              <div
+                                className="hero-price"
+                                style={roughWeldment ? { borderColor: "#c07a2a" } : undefined}
+                              >
+                                <div className="hp-main">
+                                  <div className="hp-label">{heroLabel}</div>
+                                  <div
+                                    className="hp-amount"
+                                    style={roughWeldment ? { color: "#c07a2a" } : undefined}
+                                  >
+                                    {inr(heroAmt)}
+                                  </div>
+                                  <div className="hp-sub">{heroSub}</div>
+                                </div>
+                                {!jobReady && !roughWeldment && (
+                                  <div className="hp-range">
+                                    typical range<br />
+                                    <b>{inr(rangeLow)}</b> – <b>{inr(rangeHigh)}</b>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                           {selectedGroup && (
                             <div className="scope-note">
                               {scoped

@@ -36,7 +36,7 @@ except ImportError:
 
 from modules.machine_capability import normalize_machine_capabilities
 
-from modules.step_parser import parse_step_auto
+from modules.step_parser import parse_step_auto, validate_step_payload
 from modules.dfm_score import compute_dfm_score
 from modules.operation_planner import plan_operations
 from modules.time_estimator import estimate_time, estimate_time_per_operation
@@ -911,6 +911,11 @@ async def weldment(file: UploadFile = File(...)):
     """Full weldment breakdown: split bodies, group, per-part ops, assembly
     ops, time. Serialized for the frontend BOM + group inspector."""
     data = await file.read()
+    # Same size/binary/truncation guard every other upload path gets — this
+    # endpoint fed raw bytes straight to OCCT, an unbounded-size DoS gap.
+    guard = validate_step_payload(data)
+    if not guard.get("success"):
+        raise HTTPException(status_code=400, detail=guard.get("message", "Invalid STEP file."))
     result = analyze_weldment(data, file.filename)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "Weldment analysis failed."))

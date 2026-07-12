@@ -144,6 +144,50 @@ body { background: var(--bg-0); color: var(--text-0); }
   max-width: 440px;
 }
 
+/* ---- Staged "analysing" experience (first-run wow) ---- */
+.analyzing {
+  display: flex; flex-direction: column; align-items: center; gap: 20px;
+  color: var(--text-1);
+}
+.analyzing .ring {
+  width: 54px; height: 54px; border-radius: 50%;
+  border: 3px solid var(--bg-3); border-top-color: var(--accent);
+  animation: az-spin 0.9s linear infinite;
+}
+@keyframes az-spin { to { transform: rotate(360deg); } }
+.analyzing .az-stages { display: flex; flex-direction: column; gap: 9px; min-width: 220px; }
+.analyzing .az-stage {
+  display: flex; align-items: center; gap: 10px; font-size: 13px;
+  color: var(--text-2); transition: color 0.3s;
+}
+.analyzing .az-stage .dot {
+  width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid var(--border-strong); display: flex;
+  align-items: center; justify-content: center; font-size: 10px;
+}
+.analyzing .az-stage.done { color: var(--green); }
+.analyzing .az-stage.done .dot { border-color: var(--green); background: var(--green); color: #0b1f16; }
+.analyzing .az-stage.active { color: var(--text-0); font-weight: 600; }
+.analyzing .az-stage.active .dot { border-color: var(--accent); animation: az-pulse 1s ease-in-out infinite; }
+@keyframes az-pulse { 0%,100% { box-shadow: 0 0 0 0 var(--accent-bg); } 50% { box-shadow: 0 0 0 5px transparent; } }
+
+/* ---- Hero price banner (Estimate answer, up top) ---- */
+.hero-price {
+  display: flex; align-items: center; gap: 16px;
+  background: linear-gradient(135deg, var(--accent-bg), var(--bg-2));
+  border: 1px solid var(--accent); border-radius: 12px;
+  padding: 14px 18px; margin-bottom: 14px;
+}
+.hero-price .hp-main { flex: 1; min-width: 0; }
+.hero-price .hp-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); }
+.hero-price .hp-amount { font-size: 30px; font-weight: 700; color: var(--accent); line-height: 1.1; margin-top: 2px; }
+.hero-price .hp-sub { font-size: 12px; color: var(--text-1); margin-top: 3px; }
+.hero-price .hp-range {
+  text-align: right; font-size: 11px; color: var(--text-2);
+  border-left: 1px solid var(--border); padding-left: 14px; flex-shrink: 0;
+}
+.hero-price .hp-range b { color: var(--text-0); font-size: 13px; }
+
 /* ---- Strategy op rows + rollups ---- */
 .op-row {
   display: flex; gap: 8px; align-items: baseline; padding: 8px 0;

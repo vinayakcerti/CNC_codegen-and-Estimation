@@ -96,8 +96,12 @@ function quoteHtml(o: {
   const sub = o.qty * o.unit;
   const taxAmt = sub * (o.tax.rate / 100);
   const total = sub + taxAmt;
-  const logo = o.company.logo
-    ? `<img src="${o.company.logo}" alt="logo" style="max-height:56px;max-width:190px;object-fit:contain">`
+  // Only embed a genuine image data URL (defense-in-depth for the one
+  // attribute interpolation in the doc).
+  const safeLogo =
+    o.company.logo && /^data:image\//.test(o.company.logo) ? o.company.logo : "";
+  const logo = safeLogo
+    ? `<img src="${esc(safeLogo)}" alt="logo" style="max-height:56px;max-width:190px;object-fit:contain">`
     : `<div style="font-size:20px;font-weight:700">${esc(o.company.name || "Your Company")}</div>`;
   const custLines = [o.customer.company || o.customer.name, o.customer.address,
     o.customer.gstin ? "GSTIN/TRN: " + o.customer.gstin : "",
