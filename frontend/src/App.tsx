@@ -4251,6 +4251,23 @@ export default function App() {
                       // Under a body scope the ledger switches to the scoped
                       // plan + body stock (scopedEstCore); Route stays whole-job.
                       const scoped = !!(selectedGroup && scopedEstCore);
+                      // Body scoped but its per-part plan hasn't computed yet:
+                      // show a neutral placeholder instead of the whole-assembly
+                      // price (which read as "not scoping"). Resolves to the
+                      // per-body ledger below the moment scopedEstCore lands.
+                      if (selectedGroup && !scoped) {
+                        return (
+                          <div className="hero-price" style={{ borderStyle: "dashed", opacity: 0.8 }}>
+                            <div className="hp-main">
+                              <div className="hp-label">Computing this plate's plan…</div>
+                              <div className="hp-sub">
+                                {scopeLabel(selectedGroup)} — isolating this body's features,
+                                setups and price. Clear the scope (×) for the whole-assembly quote.
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
                       const {
                         machineMin, presetMult, tolMult, complexity, machMult,
                         machining, stockSize, massKg, materialCost: material_, setupsCost,
@@ -4398,15 +4415,13 @@ export default function App() {
                               </div>
                             );
                           })()}
-                          {selectedGroup && (
+                          {selectedGroup && scoped && (
                             <div className="scope-note">
-                              {scoped
-                                ? `Per-body estimate — ${scopeLabel(selectedGroup)}, 1 pc` +
-                                  (selectedGroup.quantity > 1
-                                    ? ` (assembly has ×${selectedGroup.quantity} — multiply for the set)`
-                                    : "") +
-                                  ". Clear the scope for the whole-assembly quote."
-                                : "Scoped plan loading — showing whole-assembly estimate."}
+                              {`Per-body estimate — ${scopeLabel(selectedGroup)}, 1 pc` +
+                                (selectedGroup.quantity > 1
+                                  ? ` (assembly has ×${selectedGroup.quantity} — multiply for the set)`
+                                  : "") +
+                                ". Clear the scope for the whole-assembly quote."}
                             </div>
                           )}
                           {/* ASSY-ROLLUP: THE number for a weldment — exact
