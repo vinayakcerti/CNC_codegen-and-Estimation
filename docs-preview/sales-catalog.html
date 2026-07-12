@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CNC Plan &amp; Process Pro — Demo Flow &amp; User Catalog</title>
+<style>
+  :root{
+    --bg:#14171b; --panel:#1c1f24; --panel2:#22262c; --line:#33383f; --line2:#444a52;
+    --t0:#e8eaed; --t1:#a8adb5; --t2:#6b7078;
+    --blue:#4a90d9; --bluebg:#14304d; --green:#2e9e5b; --greenbg:#133a2b;
+    --orange:#c07a2a; --orangebg:#3a2f13; --accent:#a9c9f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--t0);
+    font:15px/1.6 -apple-system,"Segoe UI",Roboto,sans-serif;}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 28px 80px;}
+  h1{font-size:30px;margin:0 0 4px;letter-spacing:-.01em}
+  .lede{color:var(--t1);font-size:16px;margin:0 0 6px}
+  .tag{color:var(--t2);font-size:13px;margin:0 0 30px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--t2);
+    margin:44px 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  .pill{display:inline-block;font-size:11px;padding:2px 9px;border-radius:20px;
+    background:var(--bluebg);color:var(--blue);margin-left:8px;vertical-align:middle}
+
+  /* Step cards */
+  .step{display:grid;grid-template-columns:390px 1fr;gap:26px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:20px;margin-bottom:20px;}
+  .step .mock{background:var(--bg);border:1px solid var(--line);border-radius:10px;
+    overflow:hidden;height:230px;position:relative}
+  .step .num{display:inline-flex;width:30px;height:30px;border-radius:50%;
+    background:var(--blue);color:#0b1420;font-weight:700;align-items:center;
+    justify-content:center;font-size:15px;margin-bottom:8px}
+  .step h3{margin:0 0 6px;font-size:19px}
+  .step p{margin:0 0 8px;color:var(--t1)}
+  .step .say{background:var(--bluebg);border-left:3px solid var(--blue);
+    padding:8px 12px;border-radius:0 8px 8px 0;color:var(--t0);font-size:14px}
+  .step .say b{color:var(--accent)}
+  .mono{font-variant-numeric:tabular-nums}
+
+  /* Mock UI atoms */
+  .bar{height:26px;background:var(--panel);border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:6px;padding:0 8px;font-size:9px;color:var(--t2)}
+  .dotr{width:7px;height:7px;border-radius:50%}
+  .chip{font-size:9px;padding:1px 6px;border-radius:4px;background:var(--panel2);color:var(--t1)}
+  .chip.g{background:var(--greenbg);color:var(--green);border:1px solid var(--green)}
+  .chip.o{background:var(--orangebg);color:var(--orange);border:1px solid var(--orange)}
+  .chip.b{background:var(--bluebg);color:var(--blue)}
+
+  table{width:100%;border-collapse:collapse;margin:6px 0 0}
+  .cat td,.cat th{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left;
+    font-size:14px;vertical-align:top}
+  .cat th{color:var(--t2);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  .cat td:first-child{color:var(--accent);white-space:nowrap;font-weight:600}
+  .legend{display:flex;gap:20px;flex-wrap:wrap;margin:8px 0 0;font-size:13px;color:var(--t1)}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:middle}
+  .footer{margin-top:40px;color:var(--t2);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+  .note{background:var(--orangebg);border:1px solid var(--orange);border-radius:10px;
+    padding:12px 16px;color:var(--t0);font-size:13.5px;margin:8px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>CNC Plan &amp; Process Pro <span class="pill">Demo flow &amp; user catalog</span></h1>
+  <p class="lede">Upload a 3D CAD file &rarr; get a machining plan and a price in under a minute. No CAM, no spreadsheet.</p>
+  <p class="tag">A one-screen story for a sales demo, and a quick how-to for new users. Colour code throughout:
+    <span class="chip b">blue = the answer</span> <span class="chip g">green = confirmed</span>
+    <span class="chip o">orange = our estimate, please confirm</span></p>
+
+  <h2>The 6-step demo — tell this story in 3 minutes</h2>
+
+  <!-- STEP 1 -->
+  <div class="step">
+    <div class="mock">
+      <div class="bar"><span class="dotr" style="background:#e06060"></span><span class="dotr" style="background:#e0a63b"></span><span class="dotr" style="background:#43b581"></span>&nbsp; localhost:5173</div>
+      <svg viewBox="0 0 390 204" width="100%" height="204">
+        <rect width="390" height="204" fill="#14171b"/>
+        <text x="16" y="26" fill="#e8eaed" font-size="12" font-family="sans-serif" font-weight="600">Projects</text>
+        <rect x="16" y="40" width="150" height="120" rx="8" fill="#22262c" stroke="#33383f"/>
+        <rect x="30" y="54" width="122" height="60" rx="4" fill="#14171b"/>
+        <polygon points="46,96 96,80 130,90 80,108" fill="#3a4048" stroke="#565e68"/>
+        <rect x="118" y="46" width="42" height="12" rx="6" fill="#22262c"/><text x="123" y="55" fill="#a8adb5" font-size="7">28 Bodies</text>
+        <text x="30" y="130" fill="#e8eaed" font-size="8" font-weight="600">SLIDE BASE-1812</text>
+        <text x="30" y="142" fill="#6b7078" font-size="7">Weldment · sample</text>
+        <rect x="178" y="40" width="120" height="120" rx="8" fill="#1c1f24" stroke="#33383f" stroke-dasharray="4 3"/>
+        <text x="228" y="96" fill="#6b7078" font-size="20">+</text>
+        <text x="205" y="118" fill="#6b7078" font-size="8">Upload STEP</text>
+      </svg>
+    </div>
+    <div>
+      <span class="num">1</span>
+      <h3>Drop in the drawing</h3>
+      <p>Open the app, drag in a STEP file (the 3D drawing every CAD system exports) or click a sample. That's the only thing the customer has to do.</p>
+      <div class="say">Say: &ldquo;<b>You give it the 3D file the designer already sent you</b> — no re-drawing, no CAM setup.&rdquo;</div>
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="step">
+    <div class="mock">
+      <svg viewBox="0 0 390 230" width="100%" height="230">
+        <rect width="390" height="230" fill="#14171b"/>
+        <circle cx="195" cy="74" r="20" fill="none" stroke="#2a2f36" stroke-width="3"/>
+        <path d="M195 54 a20 20 0 0 1 20 20" fill="none" stroke="#4a90d9" stroke-width="3"/>
+        <g font-family="sans-serif" font-size="11">
+          <circle cx="150" cy="120" r="7" fill="#2e9e5b"/><text x="147.5" y="124" fill="#0b1f16" font-size="9">&#10003;</text>
+          <text x="166" y="124" fill="#2e9e5b">Reading the 3D geometry</text>
+          <circle cx="150" cy="144" r="7" fill="#2e9e5b"/><text x="147.5" y="148" fill="#0b1f16" font-size="9">&#10003;</text>
+          <text x="166" y="148" fill="#2e9e5b">Detecting holes, slots &amp; pockets</text>
+          <circle cx="150" cy="168" r="7" fill="#2e9e5b"/><text x="147.5" y="172" fill="#0b1f16" font-size="9">&#10003;</text>
+          <text x="166" y="172" fill="#2e9e5b">Planning setups &amp; tools</text>
+          <circle cx="150" cy="192" r="7" fill="none" stroke="#4a90d9" stroke-width="2"/>
+          <text x="166" y="196" fill="#e8eaed" font-weight="700">Pricing the job</text>
+        </g>
+      </svg>
+    </div>
+    <div>
+      <span class="num">2</span>
+      <h3>It reads the part for you</h3>
+      <p>In seconds it recognises every hole, slot, pocket and face, works out how many setups the job needs, and which tools to use — the thinking a senior programmer does by eye.</p>
+      <div class="say">Say: &ldquo;<b>This is the estimator's brain</b> — feature recognition, setups, tooling — happening automatically.&rdquo;</div>
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="step">
+    <div class="mock">
+      <div class="bar">Overview &nbsp;·&nbsp; Strategy &nbsp;·&nbsp; Estimate &nbsp;·&nbsp; Route</div>
+      <svg viewBox="0 0 390 204" width="100%" height="204">
+        <rect width="390" height="204" fill="#14171b"/>
+        <polygon points="30,120 210,70 250,86 70,150" fill="#3a4048" stroke="#565e68"/>
+        <polygon points="30,120 70,150 70,168 30,138" fill="#2e343b" stroke="#565e68"/>
+        <polygon points="70,150 250,86 250,104 70,168" fill="#333940" stroke="#565e68"/>
+        <circle cx="120" cy="118" r="4" fill="#4a90d9"/><circle cx="150" cy="107" r="4" fill="#4a90d9"/>
+        <rect x="266" y="20" width="110" height="164" rx="6" fill="#1c1f24" stroke="#33383f"/>
+        <text x="274" y="36" fill="#6b7078" font-size="7">BODIES — 28 IN 13 GROUPS</text>
+        <g font-size="7.5" font-family="sans-serif">
+          <text x="274" y="54" fill="#e8eaed">Gusset ×2</text><text x="352" y="54" fill="#a8adb5">13m</text>
+          <text x="274" y="70" fill="#e8eaed">Shaft ×8</text><rect x="300" y="63" width="26" height="9" rx="2" fill="#3a2f13" stroke="#c07a2a"/><text x="303" y="70" fill="#c07a2a" font-size="6">bought</text>
+          <text x="274" y="86" fill="#e8eaed">Bracket ×1</text><text x="352" y="86" fill="#a8adb5">22m</text>
+          <text x="274" y="102" fill="#e8eaed">Plate ×3</text><text x="352" y="102" fill="#a8adb5">21m</text>
+          <text x="274" y="118" fill="#e8eaed">Plate ×1</text><text x="352" y="118" fill="#a8adb5">37m</text>
+        </g>
+      </svg>
+    </div>
+    <div>
+      <span class="num">3</span>
+      <h3>See it in 3D, part by part</h3>
+      <p>The whole weldment splits into its parts. Rotate the model, click any feature to highlight it. Anything you <em>buy</em> instead of machine (bolts, shafts) — one click marks it <span class="chip o">purchased</span> and drops it from the cost.</p>
+      <div class="say">Say: &ldquo;It knows a 28-body weldment is really 13 different parts — and lets you exclude what you buy in.&rdquo;</div>
+    </div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div class="step">
+    <div class="mock">
+      <svg viewBox="0 0 390 204" width="100%" height="204">
+        <rect width="390" height="204" fill="#14171b"/>
+        <rect x="16" y="16" width="358" height="70" rx="10" fill="#14304d" stroke="#4a90d9"/>
+        <text x="30" y="36" fill="#6b7078" font-size="9">ESTIMATED PRICE</text>
+        <text x="30" y="64" fill="#4a90d9" font-size="30" font-weight="700" font-family="sans-serif">&#8377;96,217</text>
+        <text x="30" y="80" fill="#a8adb5" font-size="9">13 parts · welded assembly</text>
+        <line x1="270" y1="26" x2="270" y2="76" stroke="#33383f"/>
+        <text x="286" y="44" fill="#6b7078" font-size="8">typical range</text>
+        <text x="286" y="60" fill="#e8eaed" font-size="11" font-weight="700">&#8377;92k – &#8377;99k</text>
+        <g font-family="sans-serif" font-size="9">
+          <text x="18" y="110" fill="#a8adb5">Material stock</text><text x="330" y="110" fill="#e8eaed">&#8377;19,095</text>
+          <text x="18" y="128" fill="#a8adb5">Milling — 2000 cm² @ <tspan fill="#c07a2a">&#8377;0.60/cm²</tspan></text><text x="330" y="128" fill="#e8eaed">&#8377;1,200</text>
+          <text x="18" y="146" fill="#a8adb5">Holes — from your rate card</text><text x="330" y="146" fill="#e8eaed">&#8377;2,101</text>
+          <text x="18" y="164" fill="#a8adb5">Welding · Setup · Add-ons</text><text x="330" y="164" fill="#e8eaed">&#8377;5,000</text>
+        </g>
+        <rect x="16" y="176" width="358" height="20" rx="4" fill="#1c1f24"/>
+        <text x="24" y="190" fill="#e8eaed" font-size="9" font-weight="700">Grand Total</text><text x="322" y="190" fill="#4a90d9" font-size="11" font-weight="700">&#8377;96,217</text>
+      </svg>
+    </div>
+    <div>
+      <span class="num">4</span>
+      <h3>The price — up top, instantly</h3>
+      <p>A clear headline price is the first thing you see, with a typical range beside it. Below, a full breakdown: material, machining, holes, welding, setups. Every rate is <span class="chip o">orange</span> until your shop confirms it.</p>
+      <div class="say">Say: &ldquo;<b>This is the &lsquo;wow&rsquo;</b> — a defensible number in under a minute, itemised so you can stand behind it.&rdquo;</div>
+    </div>
+  </div>
+
+  <!-- STEP 5 -->
+  <div class="step">
+    <div class="mock">
+      <svg viewBox="0 0 390 204" width="100%" height="204">
+        <rect width="390" height="204" fill="#14171b"/>
+        <text x="16" y="26" fill="#e8eaed" font-size="11" font-weight="700">My Shop — Machines &amp; Rate Cards</text>
+        <rect x="16" y="38" width="120" height="150" rx="6" fill="#1c1f24" stroke="#33383f"/>
+        <g font-size="8" font-family="sans-serif">
+          <rect x="20" y="44" width="112" height="18" rx="4" fill="#133a2b" stroke="#8fd0ac"/>
+          <text x="30" y="56" fill="#e8eaed">&#9745; Jyoti VMC K2X8</text>
+          <text x="30" y="76" fill="#a8adb5">&#9745; HAAS VF-2</text>
+          <text x="30" y="94" fill="#6b7078">&#9744; Mazak VCN</text>
+          <text x="30" y="112" fill="#6b7078">&#9744; DMG MORI</text>
+          <text x="30" y="130" fill="#6b7078">&#9744; Ace MCV-450</text>
+          <text x="26" y="176" fill="#4a90d9">+ Add machine</text>
+        </g>
+        <rect x="148" y="38" width="226" height="150" rx="6" fill="#1c1f24" stroke="#33383f"/>
+        <text x="158" y="54" fill="#6b7078" font-size="7">MACHINE PARAMETERS</text>
+        <g font-size="8" font-family="sans-serif">
+          <text x="158" y="70" fill="#a8adb5">Controller</text><text x="320" y="70" fill="#e8eaed">Siemens 828D</text>
+          <text x="158" y="84" fill="#a8adb5">Max spindle</text><text x="332" y="84" fill="#e8eaed">10000 rpm</text>
+        </g>
+        <text x="158" y="106" fill="#6b7078" font-size="7">RATE CARD — hole prices</text>
+        <rect x="158" y="112" width="208" height="16" fill="#133a2b"/><text x="164" y="123" fill="#2e9e5b" font-size="7.5">&#9632; &#8377;800 · Ø24 H7 · confirmed</text>
+        <rect x="158" y="130" width="208" height="16" fill="#3a2f13"/><text x="164" y="141" fill="#c07a2a" font-size="7.5">&#9632; &#8377;667 · Ø20 H7 · estimated → Confirm</text>
+        <rect x="158" y="148" width="208" height="16" fill="#3a2f13"/><text x="164" y="159" fill="#c07a2a" font-size="7.5">&#9632; &#8377;400 · Ø24×25 · estimated → Confirm</text>
+        <text x="158" y="180" fill="#4a90d9" font-size="8">Copy prices from another machine ▾</text>
+      </svg>
+    </div>
+    <div>
+      <span class="num">5</span>
+      <h3>It becomes <em>their</em> shop</h3>
+      <p>Each shop picks the machines they own, enters their real prices once, and the app remembers. Green means <span class="chip g">confirmed</span>. They can copy a rate card to a second machine, or edit a copy of any machine (e.g. same Ace body, Siemens controller) without losing the defaults.</p>
+      <div class="say">Say: &ldquo;<b>Every quote comes out in their numbers</b>, not ours. Enter once, reuse forever.&rdquo;</div>
+    </div>
+  </div>
+
+  <!-- STEP 6 -->
+  <div class="step">
+    <div class="mock">
+      <svg viewBox="0 0 390 204" width="100%" height="204">
+        <rect width="390" height="204" fill="#14171b"/>
+        <g font-family="sans-serif">
+          <rect x="24" y="30" width="150" height="150" rx="8" fill="#ffffff"/>
+          <rect x="36" y="42" width="80" height="10" rx="2" fill="#4a90d9"/>
+          <text x="36" y="74" fill="#333" font-size="8" font-weight="700">QUOTATION</text>
+          <line x1="36" y1="82" x2="162" y2="82" stroke="#ddd"/>
+          <text x="36" y="98" fill="#666" font-size="6.5">SLIDE BASE-1812 · 10 pcs</text>
+          <text x="36" y="118" fill="#333" font-size="6.5">Machining ......... &#8377;72,000</text>
+          <text x="36" y="130" fill="#333" font-size="6.5">Welding ........... &#8377;25,000</text>
+          <text x="36" y="142" fill="#333" font-size="6.5">Margin (20%) ...... &#8377;19,400</text>
+          <line x1="36" y1="150" x2="162" y2="150" stroke="#333"/>
+          <text x="36" y="166" fill="#111" font-size="8" font-weight="700">Total  &#8377;1,16,400</text>
+        </g>
+        <g font-size="8" font-family="sans-serif">
+          <rect x="196" y="40" width="170" height="26" rx="6" fill="#22262c" stroke="#33383f"/>
+          <text x="208" y="57" fill="#e8eaed">&#8681; Export Excel (cost split)</text>
+          <rect x="196" y="74" width="170" height="26" rx="6" fill="#a9c9f0"/>
+          <text x="208" y="91" fill="#17263a" font-weight="700">Prepare branded Quote (PDF)</text>
+          <rect x="196" y="108" width="170" height="26" rx="6" fill="#22262c" stroke="#33383f"/>
+          <text x="208" y="125" fill="#e8eaed">&#8681; Effort Estimate (internal)</text>
+          <rect x="196" y="142" width="170" height="26" rx="6" fill="#22262c" stroke="#33383f"/>
+          <text x="208" y="159" fill="#e8eaed">&#8681; Draft G-code (starting point)</text>
+        </g>
+      </svg>
+    </div>
+    <div>
+      <span class="num">6</span>
+      <h3>Hand the customer a document</h3>
+      <p>One click produces a branded PDF quotation on the shop's own letterhead, a per-part Excel cost-split, an internal effort sheet, or a draft G-code starting point. Batch pricing is built in — the per-piece price drops as quantity rises.</p>
+      <div class="say">Say: &ldquo;From a 3D file to a <b>customer-ready quote on your letterhead</b> — the whole loop, in one tool.&rdquo;</div>
+    </div>
+  </div>
+
+  <!-- CATALOG -->
+  <h2>User catalog — what each screen does</h2>
+  <table class="cat">
+    <tr><th>Screen</th><th>What it's for</th><th>Key actions</th></tr>
+    <tr><td>Projects</td><td>Your saved parts and the upload point.</td><td>Upload STEP · open a sample</td></tr>
+    <tr><td>Overview</td><td>3D model, material &amp; machine pick, and the Bodies list for weldments.</td><td>Rotate · pick material/machine · ⊘ mark a part &ldquo;purchased&rdquo;</td></tr>
+    <tr><td>Strategy</td><td>The machining plan — setups, operations, tools and times.</td><td>Click an op to see it on the part &amp; edit feeds/speeds</td></tr>
+    <tr><td>Estimate</td><td>The price. Headline number, full breakdown, batch pricing.</td><td>Pick Time-based or Rate-card · set quantity · add-on processes</td></tr>
+    <tr><td>Route</td><td>Multi-process jobs — milling + welding + plating + turning as one routed quote.</td><td>Add a process · assign a machine per stage</td></tr>
+    <tr><td>My Shop</td><td>Your machines and their rate cards. The heart of &ldquo;your numbers&rdquo;.</td><td>Tick machines you own · edit prices · copy card · export backup</td></tr>
+  </table>
+
+  <div class="note"><b>The one rule to teach a new user:</b> orange means &ldquo;this is our estimate — check it&rdquo;, green means &ldquo;you confirmed it&rdquo;. Spend five minutes turning your common hole sizes green and every future quote is instant and exact.</div>
+
+  <h2>Colour legend (used everywhere)</h2>
+  <div class="legend">
+    <span><span class="sw" style="background:#4a90d9"></span>Blue — the answer / totals</span>
+    <span><span class="sw" style="background:#2e9e5b"></span>Green — confirmed by you</span>
+    <span><span class="sw" style="background:#c07a2a"></span>Orange — our estimate, please confirm</span>
+    <span><span class="sw" style="background:#a9c9f0"></span>Pastel blue — main action button</span>
+  </div>
+
+  <div class="footer">
+    CNC Plan &amp; Process Pro — internal demo &amp; onboarding catalog. The mockups above mirror the live screens
+    (dark theme, real layout). Drop in real screenshots per step for a customer-facing edition.
+    Sits alongside <b>mindmap.html</b> (product map) and <b>architecture.html</b> (system + roadmap) in this folder.
+  </div>
+</div>
+</body>
+</html>
