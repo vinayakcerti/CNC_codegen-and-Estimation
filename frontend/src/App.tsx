@@ -326,6 +326,25 @@ function fmtNum(v: number) {
   return Number(v.toFixed(1)).toString();
 }
 
+// Mass display: "NNN g" under 1 kg, else "N.NN kg" (customer spec).
+function fmtMass(grams: number | null | undefined): string {
+  if (grams == null || !Number.isFinite(grams)) return "—";
+  if (grams < 1000) return `${Math.round(grams)} g`;
+  return `${(grams / 1000).toFixed(2)} kg`;
+}
+
+// Volume with thousands separators, e.g. "2,121 cm³" (matches Toolpath).
+function fmtVolCm3(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${Math.round(v).toLocaleString("en-US")} cm³`;
+}
+
+// Machined (machinable) surface area, e.g. "501 cm²".
+function fmtAreaCm2(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${Math.round(v).toLocaleString("en-US")} cm²`;
+}
+
 function groupDims(g: WeldmentGroup) {
   return `${fmtNum(g.dims_mm.length)} × ${fmtNum(g.dims_mm.width)} × ${fmtNum(g.dims_mm.height)}`;
 }
@@ -1739,6 +1758,18 @@ export default function App() {
     setPostWeldInit(true);
   }, [strategy, wmResult, postWeldInit]);
 
+  // Selected-material density (g/cm³) — the SAME lookup the estimate ledger
+  // uses (custom material wins, then library, then 2.7 default). Drives the
+  // Overview "Part mass" line so it never disagrees with the Estimate tab.
+  const partDensity = useMemo(() => {
+    if (!analysis) return 2.7;
+    return (
+      customMaterials.find((m) => m.name === analysis.material)?.density ??
+      materials.find((m) => m.name === analysis.material)?.density ??
+      2.7
+    );
+  }, [analysis, customMaterials, materials]);
+
   const rollup = useMemo(() => {
     if (!analysis || !wmResult || wmResult.groups.length <= 1) return null;
     const complexity = Number.isFinite(estComplexity)
@@ -3035,6 +3066,16 @@ export default function App() {
                 <div className="dims">
                   {wmResult.total_bodies} bodies · {wmResult.groups.length} groups
                 </div>
+                {wmResult.reporting && (
+                  <div
+                    className="dims"
+                    title={`Assembly total mass = Σ(every body volume × ${partDensity} g/cm³). Machined area = total machinable surface. Volume = ${fmtVolCm3(wmResult.reporting.total_volume_cm3)}.`}
+                  >
+                    {fmtMass(wmResult.reporting.total_volume_cm3 * partDensity)}
+                    {" · "}
+                    {fmtAreaCm2(wmResult.reporting.machined_area_cm2_total)}
+                  </div>
+                )}
               </div>
               <span className="t">{fmtNum(wmResult.total_machining_time_min)} min</span>
             </div>
@@ -3066,6 +3107,14 @@ export default function App() {
                     )}
                   </div>
                   <div className="dims">{groupDims(g)} mm</div>
+                  <div
+                    className="dims"
+                    title={`Per body: volume ${fmtVolCm3(g.volume_cm3)}, mass = volume × ${partDensity} g/cm³${g.quantity > 1 ? ` (×${g.quantity} in the assembly)` : ""}.`}
+                  >
+                    {fmtMass(g.volume_cm3 * partDensity)}
+                    {g.machined_area_cm2 != null && ` · ${fmtAreaCm2(g.machined_area_cm2)}`}
+                    {g.quantity > 1 && ` /pc`}
+                  </div>
                   {g.feature_counts && (
                     <div
                       className="dims"
@@ -3927,7 +3976,11 @@ export default function App() {
                             </div>
                             <div className="row"><span className="k">Bodies</span><span className="v">{bodyLabel(selectedGroup)}</span></div>
                             <div className="row"><span className="k">Dimensions</span><span className="v">{groupDims(selectedGroup)} mm</span></div>
-                            <div className="row"><span className="k">Volume</span><span className="v">{fmtNum(selectedGroup.volume_cm3)} cm³</span></div>
+                            <div className="row"><span className="k">Volume</span><span className="v">{fmtVolCm3(selectedGroup.volume_cm3)}{selectedGroup.quantity > 1 ? " /pc" : ""}</span></div>
+                            <div className="row" title={`Per body = volume × ${partDensity} g/cm³ (same density as the Estimate tab).`}><span className="k">Mass</span><span className="v">{fmtMass(selectedGroup.volume_cm3 * partDensity)}{selectedGroup.quantity > 1 ? " /pc" : ""}</span></div>
+                            {selectedGroup.machined_area_cm2 != null && (
+                              <div className="row" title="Machinable surface area of this body."><span className="k">Machined area</span><span className="v">{fmtAreaCm2(selectedGroup.machined_area_cm2)}</span></div>
+                            )}
                             <div className="row"><span className="k">Faces</span><span className="v">{selectedGroup.faces}</span></div>
                             <div className="row"><span className="k">Machining</span><span className="v">{fmtNum(selectedGroup.machining_min_per_pc)} min/pc</span></div>
 
@@ -3989,7 +4042,9 @@ export default function App() {
                                 H<input className="num-input" readOnly value={analysis.dimensions_mm.height ?? ""} />
                               </label>
                             </div>
-                            <div className="row"><span className="k">Part vol</span><span className="v">{analysis.volumes_cm3.part} cm³</span></div>
+                            <div className="row"><span className="k">Part volume</span><span className="v">{fmtVolCm3(analysis.reporting?.volume_cm3 ?? analysis.volumes_cm3.part)}</span></div>
+                            <div className="row" title="Machinable surface area that will be machined (cm² counterpart of the Machinable surface %)."><span className="k">Machined area</span><span className="v">{fmtAreaCm2(analysis.reporting?.machined_area_cm2_total)}</span></div>
+                            <div className="row" title={`Finished-part mass = part volume × ${partDensity} g/cm³ (same density as the Estimate tab).`}><span className="k">Part mass</span><span className="v">{fmtMass((analysis.reporting?.volume_cm3 ?? analysis.volumes_cm3.part ?? 0) * partDensity)}</span></div>
 
                             {renderSetupsSection()}
                             {renderHolesSection()}

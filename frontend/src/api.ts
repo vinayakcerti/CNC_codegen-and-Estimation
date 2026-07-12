@@ -144,6 +144,16 @@ export interface AnalyzeResult {
   filename: string;
   dimensions_mm: { length: number; width: number; height: number };
   volumes_cm3: { stock: number; part: number };
+  // Per-part reporting rollup (Overview): finished volume, machined
+  // (machinable) surface area in cm², and finished-part mass. mass uses the
+  // resolved material's density — the same basis as the Estimate ledger.
+  reporting?: {
+    volume_cm3: number | null;
+    machined_area_cm2_total: number | null;
+    mass_g: number | null;
+    mass_kg: number | null;
+    density_g_cm3: number | null;
+  };
   topology: { solids: number; faces: number; edges: number; vertices: number };
   parser: string;
   candidates: Candidate[];
@@ -183,6 +193,11 @@ export interface WeldmentGroup {
   body_indices: number[];
   dims_mm: { length: number; width: number; height: number };
   volume_cm3: number;
+  // Per-body reporting (ONE representative body of the group): mass and
+  // machinable surface area. mass_g/kg use the steel weldment density basis.
+  mass_g?: number | null;
+  mass_kg?: number | null;
+  machined_area_cm2?: number | null;
   faces: number;
   machining_min_per_pc: number;
   features: { feature_type: string; count: number; note: string }[];
@@ -203,6 +218,17 @@ export interface WeldmentResult {
   total_assembly_time_min: number;
   total_time_min: number;
   groups: WeldmentGroup[];
+  // Assembly-level reporting rollup: exact totals summed over EVERY body
+  // (authoritative — the per-group rows use a representative body, so they
+  // need not sum to this exactly). Mass uses the steel weldment density.
+  reporting?: {
+    density_g_cm3: number;
+    material_basis: string;
+    total_volume_cm3: number;
+    total_mass_g: number;
+    total_mass_kg: number;
+    machined_area_cm2_total: number | null;
+  };
   assembly_operations: { phase: string; operation: string; tool_equipment: string; note: string }[];
   warnings: string[];
 }

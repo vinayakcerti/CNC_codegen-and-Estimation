@@ -207,6 +207,10 @@ def _validated_msa(file_bytes: bytes) -> dict | None:
                 per_body.append({
                     "body_index": bi,
                     "pct": round(100.0 * (1 - b_blocked / b_total), 1),
+                    # Machinable (machined) surface area of this body in cm²
+                    # (total face area minus blocked, mm² → cm²). Feeds the
+                    # weldment per-body reporting rollup.
+                    "machined_area_cm2": round((b_total - b_blocked) / 100.0, 1),
                 })
             if b_notes:
                 from collections import Counter
@@ -223,6 +227,9 @@ def _validated_msa(file_bytes: bytes) -> dict | None:
             "method": "validated_classifier",
             "exclusions": exclusions[:12],
             "per_body": per_body,
+            # Assembly machinable (machined) surface area in cm² (mm² → cm²).
+            "machined_area_cm2_total": round(
+                (total_area - blocked_area) / 100.0, 1),
             "plannable_pct": (
                 round(100.0 * _feat_plannable / _feat_total, 1)
                 if _feat_total > 0 else None
@@ -684,6 +691,36 @@ def _hole_groups(candidates):
     return out
 
 
+def _mass_g(volume_cm3, density_g_cm3):
+    """Part mass in grams = volume(cm³) × density(g/cm³). Reuses the SAME
+    density basis the estimate ledger uses (material record's density, g/cm³),
+    so this display and the Estimate tab's stock-mass line never disagree."""
+    try:
+        v = float(volume_cm3 or 0.0)
+        d = float(density_g_cm3 or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0 or d <= 0:
+        return None
+    return round(v * d, 1)
+
+
+def _machined_area_cm2(total_area_mm2, msa_pct):
+    """Machined (machinable) surface area in cm² — the reachable-and-machined
+    surface, i.e. the cm² counterpart of the Overview 'Machinable surface %'.
+    total_area is the summed per-face area (mm²) from the tessellation walk;
+    msa_pct is the same machinable fraction already shown on screen."""
+    try:
+        total = float(total_area_mm2 or 0.0)
+        pct = float(msa_pct) if msa_pct is not None else 100.0
+    except (TypeError, ValueError):
+        return None
+    if total <= 0:
+        return None
+    # mm² → cm² is /100; scale by the machinable fraction.
+    return round(total * (pct / 100.0) / 100.0, 1)
+
+
 _SAMPLES_DIR = os.path.join(_REPO_ROOT, "test_samples")
 
 
@@ -824,6 +861,15 @@ async def analyze(
         if msa_detail:
             msa_pct = msa_detail["pct"]
 
+    # Reporting rollup (customer request): the machined (machinable) surface
+    # area in cm² and the finished-part mass. Machined area = summed per-face
+    # area × machinable fraction; mass = part volume × material density (SAME
+    # density the estimate ledger uses, so the two never disagree).
+    _part_vol_cm3 = parse.get("part_volume_cm3")
+    _total_area_mm2 = sum(face_areas) if face_areas else 0.0
+    _machined_area = _machined_area_cm2(_total_area_mm2, msa_pct)
+    _part_mass_g = _mass_g(_part_vol_cm3, mat.get("density"))
+
     # Turned-part summary (Epic 20 v1): planned lathe minutes for the
     # Route tab's Turning block. Empty for pure milling parts.
     _turn_cands = [c for c in candidates if (c.get("feature_type") or "") in
@@ -866,6 +912,15 @@ async def analyze(
         "volumes_cm3": {
             "stock": parse.get("stock_volume_cm3"),
             "part": parse.get("part_volume_cm3"),
+        },
+        # Per-part reporting rollup for the Overview panel.
+        "reporting": {
+            "volume_cm3": _part_vol_cm3,
+            "machined_area_cm2_total": _machined_area,
+            "mass_g": _part_mass_g,
+            "mass_kg": (round(_part_mass_g / 1000.0, 3)
+                        if _part_mass_g is not None else None),
+            "density_g_cm3": mat.get("density"),
         },
         "topology": {
             "solids": solids,
@@ -923,6 +978,17 @@ async def weldment(file: UploadFile = File(...)):
     job = result["job"]
     bodies_raw = {b["body_index"]: b for b in result.get("bodies_raw", [])}
 
+    # Reporting rollup: weldments are steel fabrications (material_guess is
+    # always "Steel"), so mass uses the steel density from the material
+    # library (7.85 g/cm³ — same basis the estimate ledger defaults to for
+    # steel). Per-body machinable area comes from the validated surface walk.
+    _WELD_DENSITY_G_CM3 = 7.85
+    _msa = _validated_msa(data)
+    _area_by_body = {
+        pb["body_index"]: pb.get("machined_area_cm2")
+        for pb in (_msa.get("per_body") if _msa else []) or []
+    }
+
     def _group_json(g):
         rep = g.representative
         raw = bodies_raw.get(rep.body_index) or {}
@@ -950,6 +1016,8 @@ async def weldment(file: UploadFile = File(...)):
                         s.get("depth_mm") or 0)] += 1
         for (L, W, D), n in _slot_keys.most_common(4):
             _brief.append(f"{n}× slot {L:g}×{W:g} × {D:g} deep")
+        _rep_mass_g = _mass_g(rep.volume_cm3, _WELD_DENSITY_G_CM3)
+        _rep_area = _area_by_body.get(rep.body_index)
         return {
             "group_id": g.group_id,
             "classification": g.classification,
@@ -957,6 +1025,13 @@ async def weldment(file: UploadFile = File(...)):
             "body_indices": g.body_indices,
             "dims_mm": {"length": rep.length_mm, "width": rep.width_mm, "height": rep.height_mm},
             "volume_cm3": rep.volume_cm3,
+            # Per-body reporting: mass (of ONE representative body) and its
+            # machinable surface area. mass_g is per piece; multiply by
+            # quantity for the group's contribution to the assembly.
+            "mass_g": _rep_mass_g,
+            "mass_kg": (round(_rep_mass_g / 1000.0, 3)
+                        if _rep_mass_g is not None else None),
+            "machined_area_cm2": _rep_area,
             "faces": rep.faces_count,
             "machining_min_per_pc": rep.machining_time_min,
             "features": rep.features,
@@ -975,6 +1050,25 @@ async def weldment(file: UploadFile = File(...)):
             "features_brief": _brief or None,
         }
 
+    groups_json = [_group_json(g) for g in job.groups]
+
+    # Assembly totals: mass = Σ (per-body volume × steel density) over EVERY
+    # body (per-piece × group quantity); machined area = validated-walk total
+    # (falls back to summing per-body areas when the walk lacks a grand total).
+    _total_volume_cm3 = 0.0
+    _total_mass_g = 0.0
+    for part in job.parts:
+        _total_volume_cm3 += float(part.volume_cm3 or 0.0)
+        _pm = _mass_g(part.volume_cm3, _WELD_DENSITY_G_CM3)
+        if _pm is not None:
+            _total_mass_g += _pm
+    _assembly_area = None
+    if _msa and _msa.get("machined_area_cm2_total") is not None:
+        _assembly_area = _msa["machined_area_cm2_total"]
+    elif _area_by_body:
+        _assembly_area = round(
+            sum(v for v in _area_by_body.values() if v is not None), 1)
+
     return {
         "success": True,
         "filename": job.filename,
@@ -982,7 +1076,17 @@ async def weldment(file: UploadFile = File(...)):
         "total_machining_time_min": job.total_machining_time_min,
         "total_assembly_time_min": job.total_assembly_time_min,
         "total_time_min": job.total_time_min,
-        "groups": [_group_json(g) for g in job.groups],
+        "groups": groups_json,
+        # Assembly-level reporting rollup (customer request): total mass in kg
+        # and grams, total finished volume, and total machinable surface area.
+        "reporting": {
+            "density_g_cm3": _WELD_DENSITY_G_CM3,
+            "material_basis": "Steel (default weldment material)",
+            "total_volume_cm3": round(_total_volume_cm3, 1),
+            "total_mass_g": round(_total_mass_g, 1),
+            "total_mass_kg": round(_total_mass_g / 1000.0, 3),
+            "machined_area_cm2_total": _assembly_area,
+        },
         "assembly_operations": job.assembly_operations,
         "warnings": job.warnings,
     }
