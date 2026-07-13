@@ -83,9 +83,19 @@ export interface MaterialOpts {
 // detections deduped), "raw" plans every detection — most conservative.
 export type PlanBasis = "grouped" | "raw";
 
+// Manual (raw billet) stock: facing depths and side edge-milling on the
+// backend plan follow these dims instead of the automatic +5 mm/side preset.
+export interface ManualStockOpt {
+  mode: "manual";
+  length: number;
+  width: number;
+  height: number;
+}
+
 export interface AnalyzeOpts {
   material?: MaterialOpts;
   machine?: MachineOpts;
+  stock?: ManualStockOpt;
 }
 
 export interface StrategyOpts extends AnalyzeOpts {
@@ -96,8 +106,14 @@ export interface StrategyOpts extends AnalyzeOpts {
 export interface StockBlock {
   mode: string;
   preset: string;
-  allowance_mm: number;
+  allowance_mm: number | null;
   size_mm: { length: number; width: number; height: number };
+  // Manual (raw billet) stock: per-side allowances actually applied, plus
+  // validation state (e.g. stock smaller than the part).
+  allowances_mm?: Record<string, number>;
+  valid?: boolean;
+  errors?: string[];
+  edge_milling?: boolean;
 }
 
 export interface ToolInfo {
@@ -492,6 +508,7 @@ function buildOpts(opts?: AnalyzeOpts): {
   if (opts?.material?.materialJson) form.material_json = opts.material.materialJson;
   if (opts?.machine?.machineName) query.machine = opts.machine.machineName;
   if (opts?.machine?.machineJson) form.machine_json = opts.machine.machineJson;
+  if (opts?.stock) form.stock_json = JSON.stringify(opts.stock);
   return { query, form };
 }
 

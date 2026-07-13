@@ -4,7 +4,7 @@ import { api, SAMPLE_NAME } from "./api";
 import type {
   AnalyzeResult, StrategyResult, StrategyOp, StrategySetup, Material, OpGeo, Mesh,
   WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts, MaterialOpts, PlanBasis,
-  FeatureGeometry, FeatureCounts, Candidate, AssistantContext,
+  FeatureGeometry, FeatureCounts, Candidate, AssistantContext, ManualStockOpt,
 } from "./api";
 import { PartViewer } from "./PartViewer";
 import {
@@ -2773,11 +2773,29 @@ export default function App() {
 
   async function runAnalysis(
     file: File,
-    opts?: { material?: MaterialOpts; preserveTab?: boolean; machine?: MachineOpts },
+    opts?: {
+      material?: MaterialOpts;
+      preserveTab?: boolean;
+      machine?: MachineOpts;
+      // Explicit stock override for this run: "auto" forces the automatic
+      // preset, an object is the manual raw-billet dims. Omitted = derive
+      // from the current stock-mode state.
+      stock?: ManualStockOpt | "auto";
+    },
   ) {
     const mat = opts?.material ?? materialOptsFor(material);
     const mach = opts?.machine ?? machineOptsFor(machineSel);
     const isNewFile = partFile !== file; // material/machine re-runs pass the same File
+    // Manual stock rides along on re-runs of the SAME part (the raw-billet
+    // workflow: facing depths + side edge-milling follow the entered dims).
+    // A new file always starts from automatic stock.
+    const stockReq: ManualStockOpt | undefined = isNewFile
+      ? undefined
+      : opts?.stock !== undefined
+        ? (opts.stock === "auto" ? undefined : opts.stock)
+        : stockMode === "manual" && manualStock
+          ? { mode: "manual", ...manualStock }
+          : undefined;
     setLoading(true);
     setError(null);
     setView("part");
@@ -2796,7 +2814,7 @@ export default function App() {
       scopedCacheRef.current.clear();
     }
     try {
-      const a = await api.analyze(file, { material: mat, machine: mach });
+      const a = await api.analyze(file, { material: mat, machine: mach, stock: stockReq });
       setAnalysis(a);
       // Stock config: reset on a new part; survive material/machine re-runs.
       if (isNewFile) setStockMode("auto");
@@ -2819,7 +2837,9 @@ export default function App() {
       // landing before this older whole-assembly plan does.
       const stratToken = ++stratReqRef.current;
       setBasisLoading(false); // a full re-analysis supersedes any basis refetch
-      const s = await api.strategy(file, { material: mat, machine: mach, basis: estBasisRef.current });
+      const s = await api.strategy(file, {
+        material: mat, machine: mach, basis: estBasisRef.current, stock: stockReq,
+      });
       if (stratReqRef.current === stratToken) setStrategy(s);
       if (!opts?.preserveTab) setTab("overview");
       setSelOp(null);
@@ -2867,6 +2887,12 @@ export default function App() {
         material: materialOptsFor(material),
         machine: machineOptsFor(machineSel),
         basis,
+        // Keep the active stock context — a basis flip must not silently
+        // drop the manual raw-billet plan.
+        stock:
+          stockMode === "manual" && manualStock
+            ? { mode: "manual", ...manualStock }
+            : undefined,
       });
       if (stratReqRef.current !== token) return;
       setStrategy(s);
@@ -3862,9 +3888,22 @@ export default function App() {
                             className="mini-select"
                             value={stockMode}
                             disabled={!analysis.stock}
-                            onChange={(e) =>
-                              setStockMode(e.target.value === "manual" ? "manual" : "auto")
-                            }
+                            onChange={(e) => {
+                              const v = e.target.value === "manual" ? "manual" : "auto";
+                              setStockMode(v);
+                              // Re-plan with the new stock context: manual = raw
+                              // billet (facing depths + side edge-milling follow
+                              // the dims); auto = the +5 mm/side preset.
+                              if (partFile) {
+                                void runAnalysis(partFile, {
+                                  preserveTab: true,
+                                  stock:
+                                    v === "manual" && manualStock
+                                      ? { mode: "manual", ...manualStock }
+                                      : "auto",
+                                });
+                              }
+                            }}
                           >
                             <option value="auto">Automatic</option>
                             <option value="manual">Manual</option>
@@ -3882,22 +3921,48 @@ export default function App() {
                           </select>
                         </div>
                         {stockMode === "manual" && manualStock ? (
-                          <div className="stock-dims" title="Manual stock size (mm)">
-                            {(["length", "width", "height"] as const).map((k, i) => (
-                              <label className="stock-dim" key={k}>
-                                {"LWH"[i]}
-                                <input
-                                  className="num-input"
-                                  type="number"
-                                  min={0}
-                                  value={manualStock[k]}
-                                  onChange={(e) =>
-                                    setManualStock({ ...manualStock, [k]: numOr0(e.target.value) })
-                                  }
-                                />
-                              </label>
-                            ))}
-                          </div>
+                          <>
+                            <div className="stock-dims" title="Manual stock size (mm) — commit (blur/Enter) re-plans facing depths and side stock removal">
+                              {(["length", "width", "height"] as const).map((k, i) => (
+                                <label className="stock-dim" key={k}>
+                                  {"LWH"[i]}
+                                  <input
+                                    className="num-input"
+                                    type="number"
+                                    min={0}
+                                    value={manualStock[k]}
+                                    onChange={(e) =>
+                                      setManualStock({ ...manualStock, [k]: numOr0(e.target.value) })
+                                    }
+                                    onBlur={() => {
+                                      // Commit → re-plan so facing depths, edge
+                                      // milling and the estimate follow the stock
+                                      // (the tester's "not recognised" fix).
+                                      if (partFile && manualStock.length > 0 && manualStock.width > 0 && manualStock.height > 0) {
+                                        void runAnalysis(partFile, {
+                                          preserveTab: true,
+                                          stock: { mode: "manual", ...manualStock },
+                                        });
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                    }}
+                                  />
+                                </label>
+                              ))}
+                            </div>
+                            {analysis.stock?.errors && analysis.stock.errors.length > 0 ? (
+                              <div style={{ fontSize: 11, color: "#c0392b", marginTop: 4 }}>
+                                {analysis.stock.errors.join(" ")}
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 4 }}>
+                                Raw billet — facing depths and side stock removal (edge
+                                milling) follow these dims and are costed in the estimate.
+                              </div>
+                            )}
+                          </>
                         ) : (
                           <div className="row">
                             <span className="k">Stock size</span>

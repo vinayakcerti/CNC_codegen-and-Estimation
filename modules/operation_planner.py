@@ -193,7 +193,17 @@ def estimate_path_length(feature, operation_type, tool=None, variant=""):
             dia      = tool_dia if tool_dia > 0 else 50.0   # default: T8 50 mm
             stepover = dia * (0.9 if operation_type == "Face Mill Finish" else 0.75)
             passes   = max(1, math.ceil(width / stepover))
-            return passes * (length + dia) * qty
+            level_path = passes * (length + dia)
+            if operation_type == "Face Mill Finish":
+                # Finish is always a single skim at the final surface.
+                return level_path * qty
+            # Rough clears the stock allowance in axial levels (≤2.5 mm per
+            # level, 0.5 mm left for the finish skim). The legacy 1 mm default
+            # allowance stays a single level, so plans without stock data are
+            # unchanged; a 5 mm allowance roughs in 2 levels, 10 mm in 4.
+            rough_depth = max((depth or 0.0) - 0.5, 0.0)
+            levels = max(1, math.ceil(rough_depth / 2.5)) if rough_depth > 0 else 1
+            return level_path * levels * qty
         return 300.0
 
     if ftype == "Edge Milling":

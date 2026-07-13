@@ -11,6 +11,7 @@ Run (from repo root, cnc-cadquery env):
 """
 from __future__ import annotations
 
+import copy
 import os
 import sys
 import tempfile
@@ -47,6 +48,7 @@ from modules.weldment.weldment_analyzer import analyze_weldment
 from modules.workholding import recommend_workholding
 from modules.body_scope import filter_candidates_to_body
 from modules.turning_planner import plan_turning_operations, turning_summary
+from modules.stock_allowance import analyze_rectangular_stock
 
 app = FastAPI(title="CNC Plan & Process Pro API", version="0.1.0")
 
@@ -585,6 +587,14 @@ def _cand_float(c: dict, *keys) -> float:
 def _same_location(a: dict, b: dict) -> bool:
     """Two noisy detections of the same physical place — ported from the
     review UI's _same_review_location (proximity scaled by feature size)."""
+    # Features on DIFFERENT setup faces are never the same physical spot.
+    # Facing candidates carry no z, so a top and a bottom facing with
+    # identical dims collapsed to one (tester bug §5.3: the grouped basis
+    # lost the Bottom setup and half the facing work).
+    _sa = str(a.get("work_setup_label") or a.get("setup_label") or "").strip()
+    _sb = str(b.get("work_setup_label") or b.get("setup_label") or "").strip()
+    if _sa and _sb and _sa != _sb:
+        return False
     ax, ay = _cand_float(a, "x_pos", "center_x"), _cand_float(a, "y_pos", "center_y")
     bx, by = _cand_float(b, "x_pos", "center_x"), _cand_float(b, "y_pos", "center_y")
     az, bz = _cand_float(a, "z_pos", "center_z"), _cand_float(b, "z_pos", "center_z")
@@ -826,6 +836,209 @@ def tools_list():
     }
 
 
+_STOCK_ALLOWANCE_MM = 5.0
+
+
+def _resolve_stock_request(stock_json: str | None, parse: dict):
+    """Resolve the request's stock config against the parsed part envelope.
+
+    Returns (stock_dict, include_edge_milling, stock_block). Bug fix per
+    Bug_Face_Mill_Under_Estimate.docx: facing depth must follow the stock
+    allowance — never the 1 mm detection default — and a manual (raw billet)
+    stock must also cost the SIDE stock as Edge Milling rows.
+
+    Default (no stock_json): Automatic +5 mm/side billet. Facing depths follow
+    the +5 allowance, but no edge rows are synthesized — the Streamlit-era
+    policy ("non-raw workflow should not auto-add edge milling") keeps default
+    plans at the classic Top/Bottom setups.
+    Manual stock_json (the tester's finishing-size workflow) is the raw-billet
+    path: per-axis allowances from the given dims drive facing depths AND
+    Edge Milling rows on every axis with allowance > tolerance.
+    """
+    _L = parse.get("length_mm") or 0
+    _W = parse.get("width_mm") or 0
+    _H = parse.get("height_mm") or 0
+    manual = None
+    if stock_json:
+        try:
+            _raw = json.loads(stock_json)
+            if isinstance(_raw, dict) and str(_raw.get("mode", "")).lower() == "manual":
+                manual = {
+                    "length": float(_raw.get("length") or 0),
+                    "width": float(_raw.get("width") or 0),
+                    "height": float(_raw.get("height") or 0),
+                    "part_offset_x": float(_raw.get("part_offset_x") or 0),
+                    "part_offset_y": float(_raw.get("part_offset_y") or 0),
+                    "part_offset_z": float(_raw.get("part_offset_z") or 0),
+                }
+        except (ValueError, TypeError):
+            manual = None
+
+    if manual:
+        analysis = analyze_rectangular_stock(manual, (_L, _W, _H))
+        block = {
+            "mode": "Manual",
+            "preset": "Manual stock (raw billet)",
+            "allowance_mm": None,
+            "size_mm": {
+                "length": round(manual["length"], 2),
+                "width": round(manual["width"], 2),
+                "height": round(manual["height"], 2),
+            },
+            "allowances_mm": {k: round(v, 3) for k, v in
+                              (analysis.get("allowances") or {}).items()},
+            "valid": analysis.get("valid", False),
+            "errors": analysis.get("errors") or [],
+            "edge_milling": analysis.get("valid", False),
+        }
+        return manual, True, block
+
+    _allow = _STOCK_ALLOWANCE_MM
+    auto = {
+        "length": round(_L + 2 * _allow, 3),
+        "width": round(_W + 2 * _allow, 3),
+        "height": round(_H + 2 * _allow, 3),
+    }
+    block = {
+        "mode": "Automatic",
+        "preset": "Default Stock (+5 mm/side)",
+        "allowance_mm": _allow,
+        "size_mm": {
+            "length": round(_L + 2 * _allow, 2),
+            "width": round(_W + 2 * _allow, 2),
+            "height": round(_H + 2 * _allow, 2),
+        },
+        "valid": True,
+        "errors": [],
+        "edge_milling": False,
+    }
+    return auto, False, block
+
+
+def _apply_stock_to_candidates(candidates, stock_cfg, include_edge, parse):
+    """Stock-allowance application for the web endpoints — depth/edge ONLY.
+
+    Deliberately NOT modules/stock_allowance.apply_stock_allowance_to_candidates:
+    that module also performs orientation candidate-set reselection (it can
+    replace the whole candidate list with a different axis-frame set), which
+    erases the turning/exact candidates the web pipeline adds after the sets
+    are built — verified to corrupt 15/37 samples (turned parts lost their
+    lathe plans entirely). Here we do only the stock math the tester's bug
+    needs, on top of the endpoint pipeline's own candidates:
+
+    - facing candidates: dims -> stock face, depth -> the z allowance
+      (kept at the detected default when the allowance is under 1 mm);
+    - manual raw billet on a single prismatic solid: 4 Edge Milling rows
+      (side setup labels, per-axis allowance depth), same schema the
+      stock_allowance module emits.
+
+    Guards: turned parts (requires_lathe — their end faces are lathe-faced
+    and rectangular side-milling on round stock is nonsense) and multibody
+    weldments (per-body stock is planned in the assembly ledger) are
+    returned UNTOUCHED except nothing at all — no depth change, no edges."""
+    _tol = 0.01
+    try:
+        _is_lathe = any(c.get("requires_lathe") for c in candidates)
+        _multibody = (parse.get("solids_count") or 1) > 1
+        if _is_lathe or _multibody:
+            return candidates
+        _L = float(parse.get("length_mm") or 0)
+        _W = float(parse.get("width_mm") or 0)
+        _H = float(parse.get("height_mm") or 0)
+        analysis = analyze_rectangular_stock(stock_cfg, (_L, _W, _H))
+        if not analysis.get("valid"):
+            return candidates
+        allow = analysis.get("allowances") or {}
+        stock_l = float(stock_cfg.get("length") or 0)
+        stock_w = float(stock_cfg.get("width") or 0)
+
+        adjusted = copy.deepcopy(candidates)
+        for cand in adjusted:
+            if "face mill" not in str(cand.get("feature_type") or "").lower():
+                continue
+            setup = str(cand.get("setup_label") or "")
+            if setup not in ("Top", "Bottom"):
+                continue  # rotated-frame facing rows keep their detected depth
+            face_allow = allow.get("z_plus" if setup == "Top" else "z_minus", 0.0)
+            if face_allow <= _tol:
+                continue  # stock == part on this axis: keep the detected skim
+            cand["feature_type"] = "Face Milling"
+            if stock_l > _tol:
+                cand["length"] = round(stock_l, 3)
+            if stock_w > _tol:
+                cand["width"] = round(stock_w, 3)
+            # Under 1 mm the detected finishing default stays (doc note 8).
+            if face_allow >= 1.0:
+                cand["depth"] = round(face_allow, 3)
+            cand["detection_note"] = (
+                (cand.get("detection_note") or "")
+                + f" Depth from stock placement: {setup} allowance = "
+                f"{face_allow:.3f} mm."
+            ).strip()
+
+        if not include_edge:
+            return adjusted
+
+        # Manual raw billet: one Edge Milling row per side face with
+        # allowance — same schema modules/stock_allowance emits, dims in the
+        # part frame (length = face span, width = part height, depth = the
+        # side allowance).
+        _xr = parse.get("x_range") or (0.0, _L)
+        _yr = parse.get("y_range") or (0.0, _W)
+        _zr = parse.get("z_range") or (0.0, _H)
+        _zmid = (float(_zr[0]) + float(_zr[1])) / 2.0
+        for side, axis, setup, span, depth_key, pos in (
+            ("X-", "X", "Left",  _W, "x_minus", (float(_xr[0]), (float(_yr[0]) + float(_yr[1])) / 2.0)),
+            ("X+", "X", "Right", _W, "x_plus",  (float(_xr[1]), (float(_yr[0]) + float(_yr[1])) / 2.0)),
+            ("Y-", "Y", "Front", _L, "y_minus", ((float(_xr[0]) + float(_xr[1])) / 2.0, float(_yr[0]))),
+            ("Y+", "Y", "Back",  _L, "y_plus",  ((float(_xr[0]) + float(_xr[1])) / 2.0, float(_yr[1]))),
+        ):
+            side_allow = allow.get(depth_key, 0.0)
+            if side_allow <= _tol or span <= _tol or _H <= _tol:
+                continue
+            # Side-face rectangle in CAD coords — drives the 3D highlight.
+            if axis == "X":
+                _vb = {"x_min": pos[0], "x_max": pos[0],
+                       "y_min": float(_yr[0]), "y_max": float(_yr[1]),
+                       "z_min": float(_zr[0]), "z_max": float(_zr[1])}
+            else:
+                _vb = {"x_min": float(_xr[0]), "x_max": float(_xr[1]),
+                       "y_min": pos[1], "y_max": pos[1],
+                       "z_min": float(_zr[0]), "z_max": float(_zr[1])}
+            adjusted.append({
+                "visual_bounds": _vb,
+                "candidate_id": f"STK_EDGE_{side}",
+                "feature_name": f"Edge milling {side} stock allowance",
+                "feature_type": "Edge Milling",
+                "quantity": 1,
+                "x_pos": round(pos[0], 3),
+                "y_pos": round(pos[1], 3),
+                "z_pos": round(_zmid, 3),
+                "diameter": None,
+                "length": round(span, 3),
+                "width": round(_H, 3),
+                "depth": round(side_allow, 3),
+                "tolerance_note": "",
+                "priority": 1,
+                "confidence": "derived",
+                "setup_label": setup,
+                "detection_source": "stock_allowance",
+                "edge_axis": axis,
+                "edge_side": side,
+                "detection_note": (
+                    f"Derived from configured stock: {side} allowance = "
+                    f"{side_allow:.3f} mm."
+                ),
+                "accepted": False,
+                "ignored": False,
+            })
+        return adjusted
+    except Exception:
+        # Planning must never die on stock math — fall back to the raw
+        # detection candidates (the pre-fix behavior).
+        return candidates
+
+
 @app.post("/api/analyze")
 async def analyze(
     file: UploadFile = File(...),
@@ -833,6 +1046,7 @@ async def analyze(
     machine: str | None = None,
     machine_json: str | None = Form(default=None),
     material_json: str | None = Form(default=None),
+    stock_json: str | None = Form(default=None),
 ):
     """Single entry point: parse a STEP file and return the full overview
     (dimensions, topology, detected features, machinability, mesh, and a
@@ -847,6 +1061,11 @@ async def analyze(
 
     tools, mat, mach = _default_context(material, machine, machine_json, material_json)
     candidates = parse.get("candidate_features", [])
+    # Stock-aware planning (Bug_Face_Mill_Under_Estimate): facing depths follow
+    # the stock allowance instead of the 1 mm detection default; a manual raw
+    # billet additionally costs the side stock as Edge Milling rows.
+    _stock_cfg, _edge_on, stock_block = _resolve_stock_request(stock_json, parse)
+    candidates = _apply_stock_to_candidates(candidates, _stock_cfg, _edge_on, parse)
     dfm = compute_dfm_score(candidates, tools, mat, mach)
     mesh, face_areas = _tessellate(data)
     msa_pct = _machinable_surface_pct(candidates, dfm, face_areas)
@@ -885,21 +1104,8 @@ async def analyze(
         )
         turning_block = turning_summary(_t_ops)
 
-    # Stock sizing: automatic preset = part envelope + per-side allowance
-    _L = parse.get("length_mm") or 0
-    _W = parse.get("width_mm") or 0
-    _H = parse.get("height_mm") or 0
-    _allow = 5.0
-    stock_block = {
-        "mode": "Automatic",
-        "preset": "Default Stock (+5 mm/side)",
-        "allowance_mm": _allow,
-        "size_mm": {
-            "length": round(_L + 2 * _allow, 2),
-            "width": round(_W + 2 * _allow, 2),
-            "height": round(_H + 2 * _allow, 2),
-        },
-    }
+    # Stock sizing: stock_block already resolved above (default automatic
+    # +5 mm/side, or the request's manual raw-billet dims + allowances).
 
     return {
         "success": True,
@@ -1101,6 +1307,7 @@ async def strategy(
     basis: str = "raw",
     machine_json: str | None = Form(default=None),
     material_json: str | None = Form(default=None),
+    stock_json: str | None = Form(default=None),
 ):
     """Operation plan grouped by setup with per-op tool + cycle time —
     the Strategy screen's data. With body_index, the plan is scoped to
@@ -1112,6 +1319,13 @@ async def strategy(
 
     tools, mat, mach = _default_context(material, machine, machine_json, material_json)
     candidates = parse.get("candidate_features", [])
+    if body_index is None:
+        # Whole-part plan: facing depths (and manual-stock edge rows) follow
+        # the stock allowance — the SAME adjustment /api/analyze applies, so
+        # the feature table and the strategy plan always agree. Scoped bodies
+        # keep their per-body billets (assembly ledger owns that stock).
+        _stock_cfg, _edge_on, _ = _resolve_stock_request(stock_json, parse)
+        candidates = _apply_stock_to_candidates(candidates, _stock_cfg, _edge_on, parse)
     if basis == "grouped":
         candidates = _group_candidates_for_planning(candidates)
 
