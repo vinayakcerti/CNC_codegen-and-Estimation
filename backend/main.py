@@ -1066,6 +1066,12 @@ async def analyze(
     # billet additionally costs the side stock as Edge Milling rows.
     _stock_cfg, _edge_on, stock_block = _resolve_stock_request(stock_json, parse)
     candidates = _apply_stock_to_candidates(candidates, _stock_cfg, _edge_on, parse)
+    # Truthful flag: guards (turned part / multibody / invalid stock) can
+    # suppress edge rows after the request said "manual" — report what was
+    # actually applied, not what was asked for.
+    stock_block["edge_milling"] = any(
+        c.get("feature_type") == "Edge Milling" for c in candidates
+    )
     dfm = compute_dfm_score(candidates, tools, mat, mach)
     mesh, face_areas = _tessellate(data)
     msa_pct = _machinable_surface_pct(candidates, dfm, face_areas)

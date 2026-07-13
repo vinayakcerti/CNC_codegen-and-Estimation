@@ -1,5 +1,7 @@
 """Starting-part semantics for billet, casting, weldment, and rework planning."""
 
+import copy
+
 from modules.geometry_transform import infer_work_transform
 from modules.stock_allowance import (
     analyze_rectangular_stock,
@@ -65,13 +67,22 @@ def prepare_candidates_for_starting_part(
             stock,
             transform.work_spans,
         )
-    prepared = apply_stock_allowance_to_candidates(
-        candidates,
-        stock,
-        part_dims,
-        include_edge_milling=is_raw,
-        apply_raw_stock_allowance=is_raw,
-    )
+    if is_raw:
+        prepared = apply_stock_allowance_to_candidates(
+            candidates,
+            stock,
+            part_dims,
+            include_edge_milling=True,
+            apply_raw_stock_allowance=True,
+        )
+    else:
+        # Casting / weldment / rework: candidates are EXISTING geometry until
+        # the operator selects machining — annotate only, never run the stock
+        # module. Its orientation candidate-set reselection can replace the
+        # detected list wholesale (e.g. SLIDE BASE 156 -> 77 candidates),
+        # which broke "weldment policy should preserve detected review
+        # candidates". Non-raw semantics require the review list untouched.
+        prepared = copy.deepcopy(candidates or [])
 
     for candidate in prepared:
         candidate["starting_part_type"] = starting_part_type

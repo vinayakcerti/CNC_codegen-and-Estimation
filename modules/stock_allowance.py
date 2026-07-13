@@ -257,8 +257,12 @@ def apply_stock_allowance_to_candidates(
                 )
                 face_allowance = z_plus if work_setup == "Top" else z_minus
                 cand["feature_type"] = "Face Milling"
-                cand["depth"] = round(face_allowance, 3)
+                # Sub-tolerance stock noise (e.g. stock 100.005 vs part 100.0)
+                # must not overwrite a real detected facing depth with ~0 —
+                # mirror the edge-milling tolerance gate: only allowances
+                # above tolerance restate the facing depth.
                 if face_allowance > tolerance:
+                    cand["depth"] = round(face_allowance, 3)
                     note = cand.get("detection_note") or ""
                     stock_note = (
                         f"Depth adjusted from configured stock placement: "

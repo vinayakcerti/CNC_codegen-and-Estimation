@@ -34,14 +34,14 @@ OPERATION_RULES = {
         {"op": "Finish End Mill", "notes": "Finish step floor", "feature_name_suffix": " - floor finish"},
         {"op": "Finish End Mill", "notes": "Finish shoulder wall", "feature_name_suffix": " - wall finish"},
     ],
-    # Gap-v5 A4: facing splits into Roughing + Finishing classes (Toolpath
-    # parity) — rough clears the stock allowance, finish is a lighter skim at
-    # higher engagement for the final surface.
+    # One facing operation per stock face. The operation-plan regression pins
+    # facing as a single "Face Mill" op per face: Bottom facing must be the
+    # one final setup-2 operation, and a manual Top/Bottom facing pair must
+    # yield exactly two ops. The rough/finish engagement difference is costed
+    # inside estimate_path_length (allowance-clearing levels + final skim)
+    # rather than emitted as separate operations.
     "Face Milling": [
-        {"op": "Face Mill Rough", "notes": "Rough facing — clear stock allowance",
-         "feature_name_suffix": " - facing rough"},
-        {"op": "Face Mill Finish", "notes": "Finish skim to final surface",
-         "feature_name_suffix": " - facing finish"},
+        {"op": "Face Mill", "notes": "Face mill stock surface"},
     ],
     "Edge Milling": [
         {"op": "End Mill", "notes": "Mill side/edge stock allowance"},
@@ -454,12 +454,19 @@ def _sequence_key(op):
 
 
 def _operation_signature(feature, op_type, operation_variant=""):
-    """Stable key used to skip exact duplicate operation inputs."""
+    """Stable key used to skip exact duplicate operation inputs.
+
+    Both identity branches include the setup orientation: features on
+    different setup faces are never the same physical feature (mirrors the
+    endpoint-layer _same_location guard), so a Top and a Bottom instance of
+    otherwise-identical geometry each keep their own operations.
+    """
     physical_feature_id = feature.get("physical_feature_id")
     if physical_feature_id:
         return (
             "physical",
             str(physical_feature_id),
+            str(feature.get("setup_label", "Unknown")).strip().lower(),
             str(op_type).strip().lower(),
             str(operation_variant).strip().lower(),
         )

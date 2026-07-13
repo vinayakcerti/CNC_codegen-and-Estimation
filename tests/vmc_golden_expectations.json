@@ -84,9 +84,10 @@
       "bbox_mm": [685.0, 140.5, 200.0],
       "stock_mm": [685.0, 140.5, 200.0],
       "work_axes_from_cad": ["x", "y", "z"],
-      "detected_counts": {"Face milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 2},
-      "adjusted_counts": {"Face Milling": 2, "Hole": 4, "Slot": 97, "Pocket": 1, "Step": 5, "Chamfer": 2},
-      "grouping": {"starting_part_type": "Weldment / Fabricated Part", "slot_review_locations": 38}
+      "rebaselined": "2026-07-13: goldens were frozen 2026-06-18; slot detection on this exact part then changed deliberately (ec76eef tenon slots on SLIDE BASE, df20f45 false-positive guard, b8a8d38 billet-path slot gates). Counts recomputed from current detection, stable across reruns; per-part semantic gate (feature_detection 31/31) green; the billet path on weldments is a drift canary, production quoting uses the per-body classifier.",
+      "detected_counts": {"Face milling": 2, "Hole": 2, "Slot": 148, "Step": 3, "Chamfer": 1},
+      "adjusted_counts": {"Face Milling": 2, "Hole": 4, "Slot": 63, "Pocket": 1, "Step": 5, "Chamfer": 2},
+      "grouping": {"starting_part_type": "Weldment / Fabricated Part", "slot_review_locations": 20}
     }
   ]
 }
