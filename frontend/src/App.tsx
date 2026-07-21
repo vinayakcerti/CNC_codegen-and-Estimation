@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import { api, SAMPLES, type SampleInfo } from "./api";
+import { getThumb, putThumb, renderMeshThumb } from "./thumbs";
 import type {
   AnalyzeResult, StrategyResult, StrategyOp, StrategySetup, Material, OpGeo, Mesh,
   WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts, MaterialOpts, PlanBasis,
@@ -1255,6 +1256,14 @@ export default function App() {
   // Module launcher selection — machining is the only live module, so it's
   // the default (its samples/uploads render below the cards).
   const [activeModule, setActiveModule] = useState<ModuleKey>("machining");
+  // Part thumbnails: bumped whenever a new snapshot lands so cards refresh.
+  const [thumbNonce, setThumbNonce] = useState(0);
+  // Multi-upload background pipeline: remaining files analyse one at a time
+  // (never while an interactive analysis runs) purely to cache their card
+  // thumbnails; status drives the card subtitle.
+  const [partStatus, setPartStatus] = useState<Record<string, "queued" | "analyzing" | "ready" | "error">>({});
+  const thumbQueueRef = useRef<File[]>([]);
+  const thumbBusyRef = useRef(false);
   // SHOP-3: machines the shop actually uses (names). Empty = show all.
   const [myMachines, setMyMachines] = useState<Set<string>>(() => {
     try {
@@ -2876,6 +2885,20 @@ export default function App() {
     try {
       const a = await api.analyze(file, { material: mat, machine: mach, stock: stockReq });
       setAnalysis(a);
+      // Snapshot the part for its Projects card (idle — never blocks the UI).
+      if (a.mesh) {
+        const thumbName = file.name;
+        const thumbMesh = a.mesh;
+        setTimeout(() => {
+          if (!getThumb(thumbName)) {
+            const u = renderMeshThumb(thumbMesh);
+            if (u) {
+              putThumb(thumbName, u);
+              setThumbNonce((x) => x + 1);
+            }
+          }
+        }, 60);
+      }
       // Route steps are per part: a new part loads ITS saved steps (empty
       // for a first-time part) instead of inheriting the previous part's.
       if (isNewFile) setCustomRouteSteps(loadCustomRouteSteps(file.name));
@@ -3051,11 +3074,50 @@ export default function App() {
       const seen = new Set(prev.map(key));
       return [...prev, ...files.filter((f) => !seen.has(key(f)))];
     });
-    // Open the first one immediately so there's instant feedback; the rest
-    // wait as cards on Projects.
+    // The rest queue for background analysis so their cards get real
+    // thumbnails one by one (Toolpath-style) while the first part is open.
+    const rest = files.slice(1).filter((f) => !getThumb(f.name));
+    if (rest.length) {
+      thumbQueueRef.current.push(...rest);
+      setPartStatus((cur) => {
+        const next = { ...cur };
+        rest.forEach((f) => { next[f.name] = "queued"; });
+        return next;
+      });
+    }
+    // Open the first one immediately so there's instant feedback.
     void runAnalysis(files[0]);
     e.target.value = ""; // let the same files be re-picked later
   }
+
+  // Drain the thumbnail queue one file at a time. Paused while an
+  // interactive analysis is running — the backend processes one CAD job at a
+  // time, so background work must never queue ahead of the user's click.
+  useEffect(() => {
+    if (loading || thumbBusyRef.current) return;
+    const next = thumbQueueRef.current[0];
+    if (!next) return;
+    thumbBusyRef.current = true;
+    thumbQueueRef.current = thumbQueueRef.current.slice(1);
+    setPartStatus((c) => ({ ...c, [next.name]: "analyzing" }));
+    void (async () => {
+      try {
+        if (!getThumb(next.name)) {
+          const a = await api.analyze(next);
+          if (a.mesh) {
+            const u = renderMeshThumb(a.mesh);
+            if (u) putThumb(next.name, u);
+          }
+        }
+        setPartStatus((c) => ({ ...c, [next.name]: "ready" }));
+      } catch {
+        setPartStatus((c) => ({ ...c, [next.name]: "error" }));
+      } finally {
+        thumbBusyRef.current = false;
+        setThumbNonce((x) => x + 1); // refresh cards + trigger the next item
+      }
+    })();
+  }, [loading, thumbNonce, uploadedParts]);
 
   async function loadSample(sample: SampleInfo) {
     setLoading(true);
@@ -3704,46 +3766,65 @@ export default function App() {
                   <div style={{ fontSize: 26, color: "var(--text-2)" }}>+</div>
                   <div className="card-sub">Upload STEP (one or many)</div>
                 </div>
-                {uploadedParts.map((f, i) => (
-                  <div
-                    className="part-card"
-                    key={`${f.name}:${f.size}:${i}`}
-                    onClick={() => void runAnalysis(f)}
-                    title={f.name}
-                  >
-                    <div className="thumb">
-                      <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
-                        <polygon points="16,44 80,26 104,40 40,58" fill="#3a4048" stroke="#565e68" />
-                        <polygon points="16,44 40,58 40,66 16,52" fill="#2e343b" stroke="#565e68" />
-                        <polygon points="40,58 104,40 104,48 40,66" fill="#333940" stroke="#565e68" />
-                      </svg>
+                {uploadedParts.map((f, i) => {
+                  const thumb = getThumb(f.name);
+                  const st = partStatus[f.name];
+                  return (
+                    <div
+                      className="part-card"
+                      key={`${f.name}:${f.size}:${i}`}
+                      onClick={() => void runAnalysis(f)}
+                      title={f.name}
+                    >
+                      <div className="thumb">
+                        {thumb ? (
+                          <img src={thumb} alt="" className="thumb-img" />
+                        ) : (
+                          <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
+                            <polygon points="16,44 80,26 104,40 40,58" fill="#3a4048" stroke="#565e68" />
+                            <polygon points="16,44 40,58 40,66 16,52" fill="#2e343b" stroke="#565e68" />
+                            <polygon points="40,58 104,40 104,48 40,66" fill="#333940" stroke="#565e68" />
+                          </svg>
+                        )}
+                      </div>
+                      <div className="card-name">{f.name.replace(/\.(step|stp)$/i, "")}</div>
+                      <div className="card-sub">
+                        {st === "queued" && "Queued for analysis…"}
+                        {st === "analyzing" && "Analysing…"}
+                        {st === "error" && "Analysis failed — click to retry"}
+                        {(st === "ready" || !st) &&
+                          `${(f.size / 1024).toFixed(0)} KB · click to open`}
+                      </div>
                     </div>
-                    <div className="card-name">{f.name.replace(/\.(step|stp)$/i, "")}</div>
-                    <div className="card-sub">
-                      {(f.size / 1024).toFixed(0)} KB · click to analyse
+                  );
+                })}
+                {SAMPLES.map((s) => {
+                  const thumb = getThumb(s.file);
+                  return (
+                    <div
+                      className="part-card"
+                      key={s.file}
+                      id={`card-sample-${s.file}`}
+                      onClick={() => void loadSample(s)}
+                    >
+                      <div className="thumb">
+                        <span className="sample-badge">Sample file</span>
+                        {s.bodies > 1 && <span className="body-badge">{s.bodies} Bodies</span>}
+                        {thumb ? (
+                          <img src={thumb} alt="" className="thumb-img" />
+                        ) : (
+                          <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
+                            <polygon points="12,42 78,24 108,38 42,58" fill="#3a4048" stroke="#565e68" />
+                            <polygon points="12,42 42,58 42,66 12,50" fill="#2e343b" stroke="#565e68" />
+                            <polygon points="42,58 108,38 108,46 42,66" fill="#333940" stroke="#565e68" />
+                          </svg>
+                        )}
+                      </div>
+                      <div className="card-name">{s.title}</div>
+                      <div className="card-sub">{s.sub}</div>
                     </div>
-                  </div>
-                ))}
-                {SAMPLES.map((s) => (
-                  <div
-                    className="part-card"
-                    key={s.file}
-                    id={`card-sample-${s.file}`}
-                    onClick={() => void loadSample(s)}
-                  >
-                    <div className="thumb">
-                      <span className="sample-badge">Sample file</span>
-                      {s.bodies > 1 && <span className="body-badge">{s.bodies} Bodies</span>}
-                      <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
-                        <polygon points="12,42 78,24 108,38 42,58" fill="#3a4048" stroke="#565e68" />
-                        <polygon points="12,42 42,58 42,66 12,50" fill="#2e343b" stroke="#565e68" />
-                        <polygon points="42,58 108,38 108,46 42,66" fill="#333940" stroke="#565e68" />
-                      </svg>
-                    </div>
-                    <div className="card-name">{s.title}</div>
-                    <div className="card-sub">{s.sub}</div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
             )}
