@@ -49,3 +49,4 @@ test_samples/
 
 # Confidential strategy documents - never in the shared repo (tester has access)
 _bmad-output/planning-artifacts/private/
+.codex-runtime/
