@@ -1,7 +1,7 @@
 # Architect Brief — Productionizing CNC Plan & Process Pro
 
 **Prepared by:** Vinayak Panchaman (developer/founder)
-**Date:** 14 July 2026 (rev. 2 — 21 July 2026: goals list, data inventory, module entitlements, admin expansion)
+**Date:** 14 July 2026 (rev. 3 — 21 July 2026: goals list, data inventory incl. thumbnails, starter user-DB schema, module entitlements, admin expansion)
 **Purpose:** Everything you need to design the production deployment, subscription system, and release pipeline. I built the application; I need you to design how it runs as a commercial SaaS.
 
 ---
@@ -62,6 +62,7 @@ The uncomfortable truth first: **today almost nothing is stored server-side.** T
 | **Machine / tool / material libraries** (global content) | JSON files in the git repo (`backend/machines_library.json` ~28 market machines with maker/controller data, `data/default_*.json`), read at request time. Updating = code deploy. | Postgres, **admin-managed and versioned**. Admin adds a machine (e.g. a Micromatic partnership feed) → every subscriber sees it without a release. Needs custom-field flexibility (JSONB) so new attributes don't require migrations. |
 | **User's custom machines, rate cards, materials, settings** | **Browser localStorage** (`cnc.customMachines`, `cnc.rateCard…`, currency, costing model). One browser, one PC; clearing browser data destroys it; invisible to us for support. | Postgres, keyed to the account. Rate cards: global **defaults** managed by admin, each account's own rate card is theirs. This migration is mandatory for single-device licensing to make sense. |
 | **Per-part UI state** (feature exclusions, route steps, assembly mode) | localStorage keyed by filename (`cnc.excluded.<file>`, `cnc.customRouteSteps.byPart`, `cnc.assyMode.<file>`) | Postgres rows on the stored part/project, so it follows the login. |
+| **Part thumbnails** (card preview images) | localStorage (`cnc.thumbs.v1`, small PNGs rendered client-side after analysis) | Object storage next to the STEP file, generated server-side on ingest — so a user's project cards look right on any device. |
 | **Users / devices / sessions / subscriptions / invite codes** | **Do not exist.** Tester gate is one shared nginx basic-auth password. | Postgres: users, orgs (a company may have several logins later), device bindings (R2), subscriptions + entitlements (R3/R8), invite codes (R1). |
 | **Operator history / audit log** | Does not exist. | Postgres append-only events: login, device change, upload, analysis, quote produced, admin action — timestamped (Goal 8). |
 | **Legacy** | `cnc_planner.db` (SQLite) — unused by the web API; Streamlit leftover. | Drop. Do not migrate. |
@@ -124,6 +125,23 @@ I develop continuously and need to ship safely while users are live:
 - Postgres (or your recommendation) for: users, sessions/devices, subscriptions/invoices, projects (uploaded parts + saved plans/quotes), usage counters, custom machines/tools/rate-cards (migrating out of localStorage).
 - Uploaded STEP files: where do they live (object storage? disk?), retention policy, and privacy — customers' CAD files are commercially sensitive; India data-residency preferences apply.
 - Backups + restore procedure.
+
+**Starter schema — my sketch of the user database (refine/replace as you see fit; it exists so nothing in Section 4 is left homeless):**
+
+| Table | Holds | Notes |
+|---|---|---|
+| `users` | email, password hash, name, status | one row per login |
+| `orgs` | company name, GST no. | a company may get multiple logins later |
+| `devices` | user, device fingerprint, bound_at, last_seen | R2 single-device enforcement; admin-resettable |
+| `sessions` | user, device, token, revoked_at | server-side revocable |
+| `invite_codes` | code, plan, expires_at, used_by | R1 trial provisioning |
+| `entitlements` | account, module, plan, expiry | R3/R8 — one row per owned module |
+| `parts` | owner, filename, sha256, object-storage key, size, thumbnail key, uploaded_at | the user's stored STEP files (quota counts these) |
+| `part_state` | part, exclusions, route steps, assembly mode | today's per-part localStorage |
+| `quotes` | part (+file sha), machine/material/rate-card snapshot, itemised ledger JSON, total, created_by, created_at | **immutable** — Goal 6 |
+| `rate_cards` / `machines` / `tools` / `materials` | admin-managed global libraries (JSONB attrs) + per-account copies | R5 global push + custom fields |
+| `audit_events` | who, action, entity, timestamp, detail JSON | append-only — Goal 8 |
+| `usage_counters` | account, month, quotes/analyses/AI calls/storage bytes | quota + metering |
 
 ### R8. Module entitlements — the platform vision (design in from day one)
 The product is becoming a multi-discipline manufacturing quoting platform, expanding both vertically (deeper CNC features) and horizontally (new disciplines). The UI already ships a module launcher:
