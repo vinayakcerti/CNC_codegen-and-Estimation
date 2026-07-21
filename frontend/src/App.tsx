@@ -3727,7 +3727,7 @@ export default function App() {
                     title={m.live ? `Open ${m.name}` : "Coming soon — click for details"}
                     onClick={() => setActiveModule(m.key)}
                   >
-                    <div className="mod-icon-tile"><ModuleGlyph k={m.key} /></div>
+                    <div className="mod-glyph"><ModuleGlyph k={m.key} /></div>
                     <div className="mod-name">{m.name}</div>
                     <div className="mod-sub">{m.sub}</div>
                     <span className="mod-badge">{m.live ? "Licensed" : "🔒 Coming soon"}</span>

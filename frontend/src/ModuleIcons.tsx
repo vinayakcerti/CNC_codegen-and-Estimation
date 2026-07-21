@@ -110,7 +110,7 @@ const GLYPHS: Record<string, ({ size }: { size: number }) => JSX.Element> = {
   printing: Printing,
 };
 
-export function ModuleGlyph({ k, size = 30 }: { k: string; size?: number }) {
+export function ModuleGlyph({ k, size = 72 }: { k: string; size?: number }) {
   const G = GLYPHS[k];
   return G ? <G size={size} /> : null;
 }
