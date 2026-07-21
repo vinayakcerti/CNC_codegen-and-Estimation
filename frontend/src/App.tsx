@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
-import { api, SAMPLE_NAME } from "./api";
+import { api, SAMPLES, type SampleInfo } from "./api";
 import type {
   AnalyzeResult, StrategyResult, StrategyOp, StrategySetup, Material, OpGeo, Mesh,
   WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts, MaterialOpts, PlanBasis,
@@ -280,28 +280,51 @@ interface CustomRouteStep {
   station: string;
 }
 
-function loadCustomRouteSteps(): CustomRouteStep[] {
+// Operator-added route steps are PER PART, keyed by filename. The old
+// global "cnc.customRouteSteps" list leaked one part's added processes onto
+// every other part (a fresh sample opened with stations pre-added) — that
+// legacy key is deliberately ignored.
+function isRouteStep(s: unknown): s is CustomRouteStep {
+  const c = s as CustomRouteStep;
+  return (
+    !!c &&
+    typeof c.id === "string" &&
+    typeof c.name === "string" &&
+    c.name.length > 0 &&
+    Number.isFinite(c.timeMin) &&
+    c.timeMin >= 0 &&
+    Number.isFinite(c.rateHr) &&
+    c.rateHr >= 0 &&
+    typeof c.station === "string"
+  );
+}
+
+function loadRouteStepsMap(): Record<string, CustomRouteStep[]> {
   try {
-    const raw = lsGet("cnc.customRouteSteps");
-    const arr: unknown = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(arr)) return [];
-    return arr.filter((s): s is CustomRouteStep => {
-      const c = s as CustomRouteStep;
-      return (
-        !!c &&
-        typeof c.id === "string" &&
-        typeof c.name === "string" &&
-        c.name.length > 0 &&
-        Number.isFinite(c.timeMin) &&
-        c.timeMin >= 0 &&
-        Number.isFinite(c.rateHr) &&
-        c.rateHr >= 0 &&
-        typeof c.station === "string"
-      );
-    });
+    const raw = lsGet("cnc.customRouteSteps.byPart");
+    const map: unknown = raw ? JSON.parse(raw) : {};
+    if (!map || typeof map !== "object" || Array.isArray(map)) return {};
+    const out: Record<string, CustomRouteStep[]> = {};
+    for (const [part, arr] of Object.entries(map as Record<string, unknown>)) {
+      if (Array.isArray(arr)) out[part] = arr.filter(isRouteStep);
+    }
+    return out;
   } catch {
-    return [];
+    return {};
   }
+}
+
+function loadCustomRouteSteps(part: string | null): CustomRouteStep[] {
+  if (!part) return [];
+  return loadRouteStepsMap()[part] ?? [];
+}
+
+function saveCustomRouteSteps(part: string | null, steps: CustomRouteStep[]) {
+  if (!part) return;
+  const map = loadRouteStepsMap();
+  if (steps.length) map[part] = steps;
+  else delete map[part];
+  lsSet("cnc.customRouteSteps.byPart", JSON.stringify(map));
 }
 
 function loadWeldRate(): number {
@@ -1396,8 +1419,9 @@ export default function App() {
   // before the lathe module lands. Session-only by design.
   const [turnMin, setTurnMin] = useState(0);
   const [turnRate, setTurnRate] = useState(600);
-  // Operator-added process blocks (persisted under cnc.customRouteSteps).
-  const [customRouteSteps, setCustomRouteSteps] = useState<CustomRouteStep[]>(loadCustomRouteSteps);
+  // Operator-added process blocks — per part (cnc.customRouteSteps.byPart),
+  // (re)loaded whenever a different part's analysis lands.
+  const [customRouteSteps, setCustomRouteSteps] = useState<CustomRouteStep[]>([]);
   const [addingProcess, setAddingProcess] = useState(false);
 
   function changeWeldRate(v: number) {
@@ -1412,7 +1436,7 @@ export default function App() {
     };
     setCustomRouteSteps((cur) => {
       const next = [...cur, step];
-      lsSet("cnc.customRouteSteps", JSON.stringify(next));
+      saveCustomRouteSteps(analysis?.filename ?? null, next);
       return next;
     });
     setAddingProcess(false);
@@ -1421,7 +1445,7 @@ export default function App() {
   function removeRouteStep(id: string) {
     setCustomRouteSteps((cur) => {
       const next = cur.filter((c) => c.id !== id);
-      lsSet("cnc.customRouteSteps", JSON.stringify(next));
+      saveCustomRouteSteps(analysis?.filename ?? null, next);
       return next;
     });
   }
@@ -2816,6 +2840,9 @@ export default function App() {
     try {
       const a = await api.analyze(file, { material: mat, machine: mach, stock: stockReq });
       setAnalysis(a);
+      // Route steps are per part: a new part loads ITS saved steps (empty
+      // for a first-time part) instead of inheriting the previous part's.
+      if (isNewFile) setCustomRouteSteps(loadCustomRouteSteps(file.name));
       // Stock config: reset on a new part; survive material/machine re-runs.
       if (isNewFile) setStockMode("auto");
       const sz = a.stock?.size_mm;
@@ -2994,11 +3021,11 @@ export default function App() {
     e.target.value = ""; // let the same files be re-picked later
   }
 
-  async function loadSample() {
+  async function loadSample(sample: SampleInfo) {
     setLoading(true);
     setError(null);
     try {
-      const file = await api.sampleFile(SAMPLE_NAME);
+      const file = await api.sampleFile(sample.file);
       await runAnalysis(file);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sample failed");
@@ -3576,24 +3603,68 @@ export default function App() {
         {view === "projects" && (
           <div style={{ flex: 1, overflowY: "auto", padding: "28px 36px" }}>
             <h1 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 18px" }}>Projects</h1>
+
+            {/* Module launcher — the platform vision up front. Machining is
+                live; the rest are entitlement-gated modules (see architect
+                brief R8) shown locked until purchasable. */}
+            <div className="project-group" style={{ marginBottom: 22 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Modules</div>
+              <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 14 }}>
+                Your manufacturing modules — buy individually or as the full suite
+              </div>
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                <div className="module-card active" title="Open CNC Machining">
+                  <div className="mod-icon">⚙️</div>
+                  <div className="mod-name">CNC Machining</div>
+                  <div className="mod-sub">Mill, turn, drill — plan &amp; quote</div>
+                  <span className="mod-badge">Licensed</span>
+                </div>
+                <div className="module-card locked" title="Coming soon">
+                  <div className="mod-icon">🔥</div>
+                  <div className="mod-name">Fabrication &amp; Welding</div>
+                  <div className="mod-sub">Weldments, frames, assemblies</div>
+                  <span className="mod-badge">🔒 Coming soon</span>
+                </div>
+                <div className="module-card locked" title="Coming soon">
+                  <div className="mod-icon">📐</div>
+                  <div className="mod-name">Sheet Metal &amp; Laser</div>
+                  <div className="mod-sub">Laser, plasma, bending</div>
+                  <span className="mod-badge">🔒 Coming soon</span>
+                </div>
+                <div className="module-card locked" title="Coming soon">
+                  <div className="mod-icon">🧊</div>
+                  <div className="mod-name">3D Printing</div>
+                  <div className="mod-sub">Additive quoting</div>
+                  <span className="mod-badge">🔒 Coming soon</span>
+                </div>
+              </div>
+            </div>
+
             <div className="project-group">
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Samples</div>
               <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 14 }}>
                 Bundled demo parts — click to analyse
               </div>
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-                <div className="part-card" id="card-sample" onClick={loadSample}>
-                  <div className="thumb">
-                    <span className="body-badge">28 Bodies</span>
-                    <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
-                      <polygon points="12,42 78,24 108,38 42,58" fill="#3a4048" stroke="#565e68" />
-                      <polygon points="12,42 42,58 42,66 12,50" fill="#2e343b" stroke="#565e68" />
-                      <polygon points="42,58 108,38 108,46 42,66" fill="#333940" stroke="#565e68" />
-                    </svg>
+                {SAMPLES.map((s) => (
+                  <div
+                    className="part-card"
+                    key={s.file}
+                    id={`card-sample-${s.file}`}
+                    onClick={() => void loadSample(s)}
+                  >
+                    <div className="thumb">
+                      {s.bodies > 1 && <span className="body-badge">{s.bodies} Bodies</span>}
+                      <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
+                        <polygon points="12,42 78,24 108,38 42,58" fill="#3a4048" stroke="#565e68" />
+                        <polygon points="12,42 42,58 42,66 12,50" fill="#2e343b" stroke="#565e68" />
+                        <polygon points="42,58 108,38 108,46 42,66" fill="#333940" stroke="#565e68" />
+                      </svg>
+                    </div>
+                    <div className="card-name">{s.title}</div>
+                    <div className="card-sub">{s.sub}</div>
                   </div>
-                  <div className="card-name">3100171001_01 SLIDE BASE-1812</div>
-                  <div className="card-sub">Weldment · uploaded sample</div>
-                </div>
+                ))}
                 <div className="part-card upload" onClick={() => fileRef.current?.click()}>
                   <div style={{ fontSize: 26, color: "var(--text-2)" }}>+</div>
                   <div className="card-sub">Upload STEP (one or many)</div>
@@ -3661,8 +3732,8 @@ export default function App() {
                     </button>
                     <div style={{ marginTop: 14, fontSize: 12 }}>
                       or{" "}
-                      <a id="load-sample" onClick={loadSample} style={{ color: "var(--accent)", cursor: "pointer" }}>
-                        load the SLIDE BASE sample
+                      <a id="load-sample" onClick={() => void loadSample(SAMPLES[0])} style={{ color: "var(--accent)", cursor: "pointer" }}>
+                        load the {SAMPLES[0].title} sample
                       </a>
                     </div>
                   </div>

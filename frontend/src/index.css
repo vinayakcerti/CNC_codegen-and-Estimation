@@ -415,6 +415,24 @@ body { background: var(--bg-0); color: var(--text-0); }
   border-style: dashed; min-height: 148px;
 }
 
+/* ---- Module launcher (Projects screen) ---- */
+.module-card {
+  width: 190px; background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 12px; position: relative;
+}
+.module-card.active { border-color: var(--accent); cursor: pointer; }
+.module-card.active:hover { background: var(--bg-3); }
+.module-card.locked { opacity: 0.55; }
+.module-card .mod-icon { font-size: 22px; margin-bottom: 8px; }
+.module-card .mod-name { font-size: 13px; font-weight: 600; }
+.module-card .mod-sub { font-size: 11px; color: var(--text-2); margin-top: 3px; min-height: 28px; }
+.module-card .mod-badge {
+  display: inline-block; margin-top: 8px; font-size: 10px;
+  padding: 2px 8px; border-radius: 10px;
+  background: var(--bg-3); color: var(--text-1);
+}
+.module-card.active .mod-badge { background: var(--accent); color: #fff; }
+
 /* ---- Body scope (multibody weldments) ---- */
 .scope-chip {
   display: inline-flex; align-items: center; gap: 6px;

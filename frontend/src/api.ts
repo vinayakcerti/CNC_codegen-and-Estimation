@@ -489,7 +489,27 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const SAMPLE_NAME = "3100171001_01 SLIDE BASE-1812 ( FOR TOOL LOADER ).STEP";
+// Bundled demo parts (synthetic drawings only — never customer/vendor CAD).
+export interface SampleInfo {
+  file: string;      // filename under the backend's samples dir
+  title: string;     // card title
+  sub: string;       // card subtitle
+  bodies: number;    // body-count badge (1 = no badge)
+}
+export const SAMPLES: SampleInfo[] = [
+  {
+    file: "02_plate_4_through_holes_d10.step",
+    title: "Drilled Block",
+    sub: "Milling · 4 through holes Ø10",
+    bodies: 1,
+  },
+  {
+    file: "W01_tee_bracket_weldment.step",
+    title: "Tee Bracket Weldment",
+    sub: "Weldment · base, web + 2 gussets",
+    bodies: 4,
+  },
+];
 
 async function sampleFile(name: string): Promise<File> {
   const blob = await fetch(`${BASE}/api/sample/${encodeURIComponent(name)}`).then((r) => {

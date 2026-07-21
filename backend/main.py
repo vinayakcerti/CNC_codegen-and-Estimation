@@ -734,12 +734,21 @@ def _machined_area_cm2(total_area_mm2, msa_pct):
 _SAMPLES_DIR = os.path.join(_REPO_ROOT, "test_samples")
 
 
+# Only these ship as one-click samples. Everything else in test_samples/ is
+# internal test data — some of it customer/vendor CAD that must never be
+# served (the folder itself is untracked in git for the same reason).
+_BUNDLED_SAMPLES = {
+    "02_plate_4_through_holes_d10.step",
+    "W01_tee_bracket_weldment.step",
+}
+
+
 @app.get("/api/sample/{name}")
 def sample(name: str):
     """Serve a bundled sample STEP so the UI has a one-click 'try it' path."""
     safe = os.path.basename(name)
     path = os.path.join(_SAMPLES_DIR, safe)
-    if not safe.lower().endswith((".step", ".stp")) or not os.path.isfile(path):
+    if safe not in _BUNDLED_SAMPLES or not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Sample not found.")
     return FileResponse(path, filename=safe, media_type="application/octet-stream")
 

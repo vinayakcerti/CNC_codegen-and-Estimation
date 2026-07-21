@@ -1,6 +1,6 @@
 # VMC Feature Detection Regression Report
 
-**Date:** 2026-07-13  
+**Date:** 2026-07-21  
 **Branch:** v2-feature-review-engine  
 **Options:** `(none)`  
 
@@ -59,6 +59,7 @@ These files exist in `test_samples/` but have no entry in `feature_detection_exp
 - `T01_lathe_stepped_shaft.step`
 - `T02_lathe_shaft_with_groove.step`
 - `T03_lathe_tapered_shaft.step`
+- `W01_tee_bracket_weldment.step`
 - `X01_complex_freeform_surface_part.step`
 
 ## Failure Details
