@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
 import { api, SAMPLES, type SampleInfo } from "./api";
 import { getThumb, putThumb, renderMeshThumb } from "./thumbs";
+import { ModuleGlyph } from "./ModuleIcons";
 import type {
   AnalyzeResult, StrategyResult, StrategyOp, StrategySetup, Material, OpGeo, Mesh,
   WeldmentResult, WeldmentGroup, MachineInfo, MachineOpts, MaterialOpts, PlanBasis,
@@ -277,29 +278,29 @@ const TURNED_RE = /^(shaft|tube)$/i;
 // the rest are the platform roadmap, entitlement-gated at launch (brief R8).
 type ModuleKey = "machining" | "fabrication" | "sheetmetal" | "printing";
 const MODULES: {
-  key: ModuleKey; icon: string; name: string; sub: string; live: boolean; blurb: string;
+  key: ModuleKey; name: string; sub: string; live: boolean; blurb: string;
 }[] = [
   {
-    key: "machining", icon: "⚙️", name: "CNC Machining",
+    key: "machining", name: "CNC Machining",
     sub: "Mill, turn, drill — plan & quote", live: true,
     blurb: "",
   },
   {
-    key: "fabrication", icon: "🔥", name: "Fabrication & Welding",
+    key: "fabrication", name: "Fabrication & Welding",
     sub: "Weldments, frames, assemblies", live: false,
     blurb: "Quote welded fabrications end to end: per-plate cutting and machining, "
       + "weld time by joint, assembly and post-weld finishing. The weldment engine "
       + "that already powers CNC Machining's assembly quotes becomes a full module.",
   },
   {
-    key: "sheetmetal", icon: "📐", name: "Sheet Metal & Laser",
+    key: "sheetmetal", name: "Sheet Metal & Laser",
     sub: "Laser, plasma, bending", live: false,
     blurb: "Laser, plasma and waterjet quoting from DXF or STEP: cut length x "
       + "thickness x material, piercings, bends and finishing — the same "
       + "defensible, itemised pricing you get for machining today.",
   },
   {
-    key: "printing", icon: "🧊", name: "3D Printing",
+    key: "printing", name: "3D Printing",
     sub: "Additive quoting", live: false,
     blurb: "Additive quoting from part volume, supports, orientation and machine "
       + "hours - FDM/SLA/SLS rate cards with the same ledger-style breakdown.",
@@ -3726,7 +3727,7 @@ export default function App() {
                     title={m.live ? `Open ${m.name}` : "Coming soon — click for details"}
                     onClick={() => setActiveModule(m.key)}
                   >
-                    <div className="mod-icon">{m.icon}</div>
+                    <div className="mod-icon-tile"><ModuleGlyph k={m.key} /></div>
                     <div className="mod-name">{m.name}</div>
                     <div className="mod-sub">{m.sub}</div>
                     <span className="mod-badge">{m.live ? "Licensed" : "🔒 Coming soon"}</span>
@@ -3739,8 +3740,8 @@ export default function App() {
               const m = MODULES.find((x) => x.key === activeModule)!;
               return (
                 <div className="project-group">
-                  <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
-                    {m.icon} {m.name} — coming soon
+                  <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+                    <ModuleGlyph k={m.key} size={20} /> {m.name} — coming soon
                   </div>
                   <div style={{ fontSize: 12, color: "var(--text-2)", maxWidth: 560, lineHeight: 1.6 }}>
                     {m.blurb}

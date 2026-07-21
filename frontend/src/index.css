@@ -434,7 +434,26 @@ body { background: var(--bg-0); color: var(--text-0); }
 .module-card.locked { opacity: 0.55; }
 .module-card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .module-card.locked.sel { opacity: 0.8; }
-.module-card .mod-icon { font-size: 22px; margin-bottom: 8px; }
+/* Neomorphic icon tile: soft-embossed rounded square, gradient glyph on top.
+   Dark theme is :root default; light overrides below. */
+.module-card .mod-icon-tile {
+  width: 54px; height: 54px; border-radius: 15px;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(145deg, var(--bg-3), var(--bg-1));
+  box-shadow:
+    4px 4px 10px rgba(0, 0, 0, 0.45),
+    -3px -3px 8px rgba(255, 255, 255, 0.05),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  margin-bottom: 10px;
+}
+:root[data-theme="light"] .module-card .mod-icon-tile {
+  background: linear-gradient(145deg, #ffffff, #e8edf4);
+  box-shadow:
+    4px 4px 10px rgba(148, 163, 184, 0.45),
+    -4px -4px 10px rgba(255, 255, 255, 0.95),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+.module-card.locked .mod-icon-tile { filter: saturate(0.35); }
 .module-card .mod-name { font-size: 13px; font-weight: 600; }
 .module-card .mod-sub { font-size: 11px; color: var(--text-2); margin-top: 3px; min-height: 28px; }
 .module-card .mod-badge {
