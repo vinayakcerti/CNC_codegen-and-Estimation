@@ -272,6 +272,39 @@ const TURNED_RE = /^(shaft|tube)$/i;
 
 // Operator-added route steps (deburr, anodize, inspection...). Persisted —
 // a shop's post-processes are stable across parts.
+// Module launcher catalog (Projects screen). Only "machining" is live —
+// the rest are the platform roadmap, entitlement-gated at launch (brief R8).
+type ModuleKey = "machining" | "fabrication" | "sheetmetal" | "printing";
+const MODULES: {
+  key: ModuleKey; icon: string; name: string; sub: string; live: boolean; blurb: string;
+}[] = [
+  {
+    key: "machining", icon: "⚙️", name: "CNC Machining",
+    sub: "Mill, turn, drill — plan & quote", live: true,
+    blurb: "",
+  },
+  {
+    key: "fabrication", icon: "🔥", name: "Fabrication & Welding",
+    sub: "Weldments, frames, assemblies", live: false,
+    blurb: "Quote welded fabrications end to end: per-plate cutting and machining, "
+      + "weld time by joint, assembly and post-weld finishing. The weldment engine "
+      + "that already powers CNC Machining's assembly quotes becomes a full module.",
+  },
+  {
+    key: "sheetmetal", icon: "📐", name: "Sheet Metal & Laser",
+    sub: "Laser, plasma, bending", live: false,
+    blurb: "Laser, plasma and waterjet quoting from DXF or STEP: cut length x "
+      + "thickness x material, piercings, bends and finishing — the same "
+      + "defensible, itemised pricing you get for machining today.",
+  },
+  {
+    key: "printing", icon: "🧊", name: "3D Printing",
+    sub: "Additive quoting", live: false,
+    blurb: "Additive quoting from part volume, supports, orientation and machine "
+      + "hours - FDM/SLA/SLS rate cards with the same ledger-style breakdown.",
+  },
+];
+
 interface CustomRouteStep {
   id: string;
   name: string;
@@ -1219,6 +1252,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"projects" | "part" | "shop">("projects");
+  // Module launcher selection — machining is the only live module, so it's
+  // the default (its samples/uploads render below the cards).
+  const [activeModule, setActiveModule] = useState<ModuleKey>("machining");
   // SHOP-3: machines the shop actually uses (names). Empty = show all.
   const [myMachines, setMyMachines] = useState<Set<string>>(() => {
     try {
@@ -3605,41 +3641,51 @@ export default function App() {
             <h1 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 18px" }}>Projects</h1>
 
             {/* Module launcher — the platform vision up front. Machining is
-                live; the rest are entitlement-gated modules (see architect
-                brief R8) shown locked until purchasable. */}
+                live (selected by default → its samples/uploads show below);
+                clicking a locked module opens its coming-soon panel instead.
+                Entitlement-gated for real at launch (architect brief R8). */}
             <div className="project-group" style={{ marginBottom: 22 }}>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Modules</div>
               <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 14 }}>
                 Your manufacturing modules — buy individually or as the full suite
               </div>
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-                <div className="module-card active" title="Open CNC Machining">
-                  <div className="mod-icon">⚙️</div>
-                  <div className="mod-name">CNC Machining</div>
-                  <div className="mod-sub">Mill, turn, drill — plan &amp; quote</div>
-                  <span className="mod-badge">Licensed</span>
-                </div>
-                <div className="module-card locked" title="Coming soon">
-                  <div className="mod-icon">🔥</div>
-                  <div className="mod-name">Fabrication &amp; Welding</div>
-                  <div className="mod-sub">Weldments, frames, assemblies</div>
-                  <span className="mod-badge">🔒 Coming soon</span>
-                </div>
-                <div className="module-card locked" title="Coming soon">
-                  <div className="mod-icon">📐</div>
-                  <div className="mod-name">Sheet Metal &amp; Laser</div>
-                  <div className="mod-sub">Laser, plasma, bending</div>
-                  <span className="mod-badge">🔒 Coming soon</span>
-                </div>
-                <div className="module-card locked" title="Coming soon">
-                  <div className="mod-icon">🧊</div>
-                  <div className="mod-name">3D Printing</div>
-                  <div className="mod-sub">Additive quoting</div>
-                  <span className="mod-badge">🔒 Coming soon</span>
-                </div>
+                {MODULES.map((m) => (
+                  <div
+                    key={m.key}
+                    className={`module-card ${m.live ? "active" : "locked"} ${activeModule === m.key ? "sel" : ""}`}
+                    title={m.live ? `Open ${m.name}` : "Coming soon — click for details"}
+                    onClick={() => setActiveModule(m.key)}
+                  >
+                    <div className="mod-icon">{m.icon}</div>
+                    <div className="mod-name">{m.name}</div>
+                    <div className="mod-sub">{m.sub}</div>
+                    <span className="mod-badge">{m.live ? "Licensed" : "🔒 Coming soon"}</span>
+                  </div>
+                ))}
               </div>
             </div>
 
+            {activeModule !== "machining" && (() => {
+              const m = MODULES.find((x) => x.key === activeModule)!;
+              return (
+                <div className="project-group">
+                  <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
+                    {m.icon} {m.name} — coming soon
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-2)", maxWidth: 560, lineHeight: 1.6 }}>
+                    {m.blurb}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 10 }}>
+                    Modules can be purchased individually or together as the full
+                    suite. Want early access?{" "}
+                    <span style={{ color: "var(--accent)" }}>Tell us — it shapes what we build first.</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {activeModule === "machining" && (
             <div className="project-group">
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Samples</div>
               <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 14 }}>
@@ -3671,8 +3717,9 @@ export default function App() {
                 </div>
               </div>
             </div>
+            )}
 
-            {uploadedParts.length > 0 && (
+            {activeModule === "machining" && uploadedParts.length > 0 && (
               <div className="project-group" style={{ marginTop: 18 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
                   Your uploads ({uploadedParts.length})
