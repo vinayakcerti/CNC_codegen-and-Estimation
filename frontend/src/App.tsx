@@ -3488,10 +3488,13 @@ export default function App() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div className="topbar">
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            {/* Part context (filename, tabs, scope, assistant) belongs to the
+                part WORKSPACE — on Projects/Shop the topbar stays app-level
+                even while a part is loaded in the background. */}
             <span style={{ fontWeight: 500, fontSize: 14 }}>
-              {analysis ? analysis.filename : "CNC Plan & Process Pro"}
+              {view === "part" && analysis ? analysis.filename : "CNC Plan & Process Pro"}
             </span>
-            {analysis && (
+            {view === "part" && analysis && (
               <div className="tabs">
                 {(["overview", "strategy", "estimate", "route"] as Tab[]).map((t) => (
                   <button
@@ -3510,7 +3513,7 @@ export default function App() {
                 ))}
               </div>
             )}
-            {analysis?.is_multibody && (
+            {view === "part" && analysis?.is_multibody && (
               <span
                 className={`scope-chip ${selectedGroup ? "scoped" : ""}`}
                 title={selectedGroup ? `Scoped to ${scopeLabel(selectedGroup)} — click ✕ to reset` : "Analysis covers the whole assembly"}
@@ -3525,7 +3528,7 @@ export default function App() {
                 )}
               </span>
             )}
-            {analysis && (
+            {view === "part" && analysis && (
               <button
                 className={`btn ${assistantOpen ? "primary" : ""}`}
                 title="Ask about the current plan"
@@ -3550,7 +3553,7 @@ export default function App() {
                 Upload STEP
               </button>
             )}
-            {analysis && strategy && (
+            {view === "part" && analysis && strategy && (
               <button
                 className="btn"
                 disabled={excelBusy}
@@ -3560,7 +3563,7 @@ export default function App() {
                 {excelBusy ? "Building…" : "⭳ Export Excel"}
               </button>
             )}
-            {analysis && (
+            {view === "part" && analysis && (
               <button className="btn primary" onClick={() => setQuoteOpen(true)}>Prepare Quote</button>
             )}
             {costPanelOpen && (
@@ -3773,7 +3776,15 @@ export default function App() {
                     <div
                       className="part-card"
                       key={`${f.name}:${f.size}:${i}`}
-                      onClick={() => void runAnalysis(f)}
+                      onClick={() => {
+                        // The part that's already open just resumes — no
+                        // re-analysis, its work (tab, scope, plan) is intact.
+                        if (partFile && partFile.name === f.name && partFile.size === f.size && analysis) {
+                          setView("part");
+                        } else {
+                          void runAnalysis(f);
+                        }
+                      }}
                       title={f.name}
                     >
                       <div className="thumb">
