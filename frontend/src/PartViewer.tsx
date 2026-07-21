@@ -30,6 +30,9 @@ export interface Highlight {
   width: number;
   depth: number;
   feature_type: string;
+  // Edge Milling only: which side face the allowance slab sits on
+  // ("X-","X+","Y-","Y+") — orients the highlight vertically.
+  edge_side?: string | null;
 }
 
 // Orients the camera to look at `center` from direction `dir` whenever `dir`
@@ -583,6 +586,32 @@ function HighlightMarker({ hl, meshTopZ, partSize, color = "#4a9eff" }: { hl: Hi
 
   const L = num(hl.length, 10);
   const W = num(hl.width, 10);
+
+  // Edge Milling: the slab is the SIDE stock allowance — it stands
+  // vertically against the named face (length = face span, width = part
+  // height, depth = allowance thickness), centered just outside the part.
+  const edge = hl.edge_side;
+  if (edge === "X-" || edge === "X+" || edge === "Y-" || edge === "Y+") {
+    const t = Math.max(num(hl.depth, 0), 1); // allowance thickness
+    const sign = edge.endsWith("+") ? 1 : -1;
+    const alongX = edge.startsWith("Y"); // Y± faces run along X
+    const size: [number, number, number] = alongX ? [L, t, W] : [t, L, W];
+    const offset: [number, number, number] = alongX
+      ? [0, (sign * t) / 2, 0]
+      : [(sign * t) / 2, 0, 0];
+    return (
+      <group position={[x, y, z]} renderOrder={10}>
+        <mesh position={offset} renderOrder={10}>
+          <boxGeometry args={size} />
+          <meshStandardMaterial
+            color={color} emissive={color} emissiveIntensity={0.5}
+            transparent opacity={0.55} depthWrite={false} depthTest={false}
+          />
+        </mesh>
+      </group>
+    );
+  }
+
   return (
     <group position={[x, y, z]} renderOrder={10}>
       {isArea ? (

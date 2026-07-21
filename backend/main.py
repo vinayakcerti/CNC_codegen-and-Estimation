@@ -1007,6 +1007,14 @@ def _apply_stock_to_candidates(candidates, stock_cfg, include_edge, parse):
                        "z_min": float(_zr[0]), "z_max": float(_zr[1])}
             adjusted.append({
                 "visual_bounds": _vb,
+                # Raw-CAD-frame center of the allowance slab — the strategy
+                # geo payload reads cad_position for the 3D highlight (x_pos/
+                # y_pos alone lose z, which dropped the slab to the top face).
+                "cad_position": {
+                    "x": round(pos[0], 3),
+                    "y": round(pos[1], 3),
+                    "z": round(_zmid, 3),
+                },
                 "candidate_id": f"STK_EDGE_{side}",
                 "feature_name": f"Edge milling {side} stock allowance",
                 "feature_type": "Edge Milling",
@@ -1432,6 +1440,9 @@ async def strategy(
                 "depth": f.get("depth") or 0,
                 "feature_type": f.get("feature_type", ""),
                 "candidate_id": cand.get("candidate_id"),
+                # Which side face an Edge Milling slab sits on ("X-".."Y+") —
+                # the viewer orients the highlight vertically from this.
+                "edge_side": cand.get("edge_side"),
                 # Validated geometry for the op panel's Geometry section:
                 # L/D, through/blind, depth below top, drill-tip cone,
                 # counterbore, slot opening direction.
@@ -1471,6 +1482,9 @@ async def strategy(
                 # Lets the UI look up the candidate's exact face meshes
                 # (analyze response carries face_mesh_data per candidate).
                 "candidate_id": c.get("candidate_id"),
+                # Which side face an Edge Milling slab sits on ("X-".."Y+") —
+                # the viewer orients the highlight vertically from this.
+                "edge_side": c.get("edge_side"),
             }
     # Turned regions (19-2/19-3) plan on the lathe, not the mill. Split
     # them out so the milling planner sees only milled work, then append

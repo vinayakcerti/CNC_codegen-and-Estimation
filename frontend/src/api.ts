@@ -337,6 +337,9 @@ export interface OpGeo {
   width: number;
   depth: number;
   feature_type: string;
+  // Which side face an Edge Milling slab sits on ("X-","X+","Y-","Y+") —
+  // the viewer stands the highlight up against that face.
+  edge_side?: string | null;
   // Links the op back to its analyze-response candidate, whose
   // face_mesh_data provides the exact-face 3D highlight.
   candidate_id?: string | null;
