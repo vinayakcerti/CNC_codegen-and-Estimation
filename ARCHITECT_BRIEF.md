@@ -1,8 +1,21 @@
 # Architect Brief — Productionizing CNC Plan & Process Pro
 
 **Prepared by:** Vinayak Panchaman (developer/founder)
-**Date:** 14 July 2026
+**Date:** 14 July 2026 (rev. 2 — 21 July 2026: goals list, data inventory, module entitlements, admin expansion)
 **Purpose:** Everything you need to design the production deployment, subscription system, and release pipeline. I built the application; I need you to design how it runs as a commercial SaaS.
+
+---
+
+## 0. Goals — the checklist this design must satisfy
+
+1. **Trial cohort now:** give the product to ~10 trial companies with login + password. Admin provisions accounts (email) or issues an invite code the company registers with.
+2. **Three environments:** dev (my machine) → test/staging (deployed, testers verify) → production (paying users), with CI running the regression suite between them and manual promote to prod.
+3. **Real databases:** Postgres (or your recommendation) for all account/business data; object storage for CAD files. Nothing user-generated may live only in the browser or on one disk.
+4. **A clear data home for every category** — see the Data Inventory (Section 4). Every row must have a designed home, retention rule, and owner.
+5. **STEP files persist:** a customer re-sending the same drawing a month later must open instantly from the user's stored files — no re-upload needed.
+6. **Nothing that worked disappears:** produced plans/quotes/estimates are immutable history — dated, reproducible, linked to the exact file version they priced.
+7. **Per-user storage quota:** each account stores at least 15–20 STEP files (you propose the MB cap and eviction/upgrade policy).
+8. **Operator history:** who did what, when — every analysis, quote, edit, login, device change in a queryable audit log with timestamps.
 
 ---
 
@@ -38,12 +51,29 @@ This is the most important section for capacity planning:
 - **Bursty concurrency.** A handful of concurrent analyses can saturate a small box. Blocking work currently runs on the async event loop (known defect — a fix on our side is planned), so one user's analysis stalls others.
 - **A July 2026 performance audit** (available on request) found the same file re-parsed up to ~9× per page load with no caching; we will fix the redundancy in app code, but the architecture should still assume: *long-running CPU jobs that must not run inside the web request path*. The audit's recommendation, and my ask to you: **job queue + worker processes** (e.g. Redis + RQ/Celery/arq, or equivalent) with the API returning job status, and the frontend polling or using SSE/WebSocket. Please validate or propose better.
 
-## 4. Requirements — what I need designed
+## 4. Data inventory — where everything lives today vs. where it must live
+
+The uncomfortable truth first: **today almost nothing is stored server-side.** The current app is stateless — that's why it works for solo testing and why it cannot onboard 10 companies without your design.
+
+| Data category | Where it is TODAY | Where it must live in PRODUCTION |
+|---|---|---|
+| **STEP files (customer CAD)** | **Not stored at all.** Uploaded per request, written to a temp file for analysis, discarded. Every re-open = re-upload; every tab switch re-sends the file. | Object storage (S3-compatible — DO Spaces / R2 / MinIO), per-account prefix, quota 15–20 files (Goal 7). Commercially sensitive: private bucket, signed URLs, India-region preference, retention policy needed. |
+| **Analysis results / plans / quotes** | Browser memory only — gone on refresh. Nothing is reproducible after the session. | Postgres. Quotes/estimates become **immutable dated records** (Goal 6) linked to the stored STEP file hash, the machine/material/rate-card used, and the user who ran it. |
+| **Machine / tool / material libraries** (global content) | JSON files in the git repo (`backend/machines_library.json` ~28 market machines with maker/controller data, `data/default_*.json`), read at request time. Updating = code deploy. | Postgres, **admin-managed and versioned**. Admin adds a machine (e.g. a Micromatic partnership feed) → every subscriber sees it without a release. Needs custom-field flexibility (JSONB) so new attributes don't require migrations. |
+| **User's custom machines, rate cards, materials, settings** | **Browser localStorage** (`cnc.customMachines`, `cnc.rateCard…`, currency, costing model). One browser, one PC; clearing browser data destroys it; invisible to us for support. | Postgres, keyed to the account. Rate cards: global **defaults** managed by admin, each account's own rate card is theirs. This migration is mandatory for single-device licensing to make sense. |
+| **Per-part UI state** (feature exclusions, route steps, assembly mode) | localStorage keyed by filename (`cnc.excluded.<file>`, `cnc.customRouteSteps.byPart`, `cnc.assyMode.<file>`) | Postgres rows on the stored part/project, so it follows the login. |
+| **Users / devices / sessions / subscriptions / invite codes** | **Do not exist.** Tester gate is one shared nginx basic-auth password. | Postgres: users, orgs (a company may have several logins later), device bindings (R2), subscriptions + entitlements (R3/R8), invite codes (R1). |
+| **Operator history / audit log** | Does not exist. | Postgres append-only events: login, device change, upload, analysis, quote produced, admin action — timestamped (Goal 8). |
+| **Legacy** | `cnc_planner.db` (SQLite) — unused by the web API; Streamlit leftover. | Drop. Do not migrate. |
+
+## 5. Requirements — what I need designed
 
 ### R1. Accounts & authentication
 - Email + password login (no social login needed for launch).
-- **Phase 1 (now, testers):** an **admin panel** where I create/enable/disable accounts and hand credentials to testers. No self-service.
-- **Phase 2 (launch):** self-service signup from the public website, email verification, password reset.
+- **Phase 1 (now, ~10 trial companies):** two provisioning paths, both admin-initiated:
+  1. Admin creates the account with the company's email and hands over credentials.
+  2. Admin issues an **invite code**; the company self-registers with the code (sets their own password, email verified). Codes are single-use, expiring, tied to a plan (e.g. "trial-90-days").
+- **Phase 2 (launch):** open self-service signup from the public website, email verification, password reset.
 - Sessions must be server-side revocable (needed for R2).
 
 ### R2. Single-device licensing (per-seat enforcement) — key business rule
@@ -73,9 +103,13 @@ Planned tiers (INR, monthly; annual ≈ 2 months free):
 - Domain purchase pending brand-name finalization ("QuoteKar" leading candidate).
 
 ### R5. Admin panel
-- Create/enable/disable/suspend users; set plan manually (comped accounts for testers).
+- Create/enable/disable/suspend users; set plan manually (comped accounts for testers); issue/revoke invite codes (R1).
 - See device bindings (R2) and reset them.
-- See usage per account (quotes run, analyses run, AI calls) — this doubles as metering for quotas.
+- See usage per account (quotes run, analyses run, AI calls, storage used) — doubles as metering for quotas.
+- **Troubleshooting view:** an account's recent activity and errors (from the audit log + server logs) so I can support a stuck tester without screen-sharing; device reset; password reset.
+- **Global library management:** add/edit/version machine, tool, and material library entries that propagate to **all** subscribers (the scenario: Micromatic partners with us and supplies official machine data — I enter it once, every user worldwide gets it). Library edits are versioned/auditable.
+- **Custom fields:** I must be able to add new attributes to library entries without a schema migration (JSONB-style flexible columns) — e.g. a partner supplies "spindle taper" tomorrow.
+- **Rate-card defaults:** system default rate cards are admin-managed; each account's own rate card stays their private copy (they start from the default).
 - Basic revenue/subscription status view (or just link out to Razorpay dashboard).
 
 ### R6. Environments & release pipeline — my dev workflow
@@ -91,7 +125,23 @@ I develop continuously and need to ship safely while users are live:
 - Uploaded STEP files: where do they live (object storage? disk?), retention policy, and privacy — customers' CAD files are commercially sensitive; India data-residency preferences apply.
 - Backups + restore procedure.
 
-## 5. Constraints & preferences
+### R8. Module entitlements — the platform vision (design in from day one)
+The product is becoming a multi-discipline manufacturing quoting platform, expanding both vertically (deeper CNC features) and horizontally (new disciplines). The UI already ships a module launcher:
+
+| Module | Status | Engine reality |
+|---|---|---|
+| **CNC Machining** | Live | The current product (milling + turning) |
+| **Fabrication & Welding** | Coming soon (~3-4 mo) | Weldment analyzer largely exists (multi-body splitting, per-plate plans, welding route block) |
+| **Sheet Metal & Laser** | Coming soon (~4-6 mo) | Cut-length × thickness costing; DXF first, 3D unfold later |
+| **3D Printing** | Coming soon (~1-2 mo) | Mesh volume/support/machine-hour quoting |
+
+What this means for YOUR design:
+- **Entitlements are per-module**: a user may own one module, several, or the "full suite" bundle. Locked modules render grayed with a lock; purchase unlocks without redeploy.
+- The subscriptions schema (R3) must model `entitlements(account, module, plan, expiry)` from day one — adding a module later must be a data row, not a migration.
+- Pricing page must support per-module and bundle SKUs (exact prices TBD — my decision).
+- Do not build the other modules' backends now; just make sure nothing in auth/billing/DB assumes "one product".
+
+## 6. Constraints & preferences
 
 - **Budget-conscious:** pre-revenue, founder-funded. Prefer one or two VPS/droplets or modest cloud over anything with idle cost. GPU never needed. But size the analysis workers realistically (the current small droplet is too slow — testers complain about loading today).
 - **Hosting region:** India or nearby for launch-market latency (uploads are multi-MB, so proximity matters).
@@ -100,7 +150,7 @@ I develop continuously and need to ship safely while users are live:
 - Team = me alone for now. Ops burden must be low; managed services are welcome where cheap (managed Postgres, managed Redis).
 - Timeline: tester-phase hardening now; subscription + public site by **1 August 2026** launch.
 
-## 6. Open decisions (I own these — flag anything that blocks you)
+## 7. Open decisions (I own these — flag anything that blocks you)
 
 1. Final product/brand name + domain (blocks website, email sender, invoice header).
 2. Exact seat/add-on pricing and trial policy.
@@ -108,12 +158,13 @@ I develop continuously and need to ship safely while users are live:
 4. Legal entity on invoices: Datadelimited (India) — GST registration status to confirm.
 5. How much of the performance-fix list we complete before launch (gzip, parse cache, off-loop workers are committed; payload slimming may slip).
 
-## 7. What I'd like back from you
+## 8. What I'd like back from you
 
 1. Target architecture diagram (web tier, worker tier, queue, DB, storage, CDN if any) with sizing and monthly cost estimate at 10 / 50 / 200 users.
-2. Auth + single-device-enforcement design (R1/R2) with the token/session mechanics spelled out.
-3. Subscription/billing integration design (R3) including webhook flows and quota enforcement points.
-4. CI/CD + environment plan (R6) including how DB migrations and the conda-based image are handled.
-5. A phased rollout: what ships for the tester phase (admin-provisioned accounts) vs. what ships 1 Aug (self-service + payments).
+2. Auth + single-device-enforcement design (R1/R2) with the token/session mechanics spelled out, including the invite-code flow.
+3. Subscription/billing integration design (R3) including webhook flows, quota enforcement points, and the per-module entitlement model (R8).
+4. **Data architecture** matching Section 4: schema sketch (users/orgs/devices/entitlements/parts/quotes/audit/libraries), object-storage layout + quota/retention mechanics for STEP files, and the localStorage→server migration plan.
+5. CI/CD + environment plan (R6) including how DB migrations and the conda-based image are handled.
+6. A phased rollout: what ships for the 10-company trial (admin-provisioned accounts, storage, audit) vs. what ships 1 Aug (self-service + payments + module store).
 
 **Access I can give you:** GitHub repo (read), the current droplet (SSH), the performance audit findings, and a demo login.
