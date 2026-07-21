@@ -3481,9 +3481,13 @@ export default function App() {
             >
               {theme === "dark" ? "☀" : "☾"}
             </button>
-            <button className="btn" onClick={() => fileRef.current?.click()}>
-              Upload STEP
-            </button>
+            {/* Projects has its own upload card — the topbar button would
+                duplicate it there. It stays for the workspace/shop views. */}
+            {view !== "projects" && (
+              <button className="btn" onClick={() => fileRef.current?.click()}>
+                Upload STEP
+              </button>
+            )}
             {analysis && strategy && (
               <button
                 className="btn"
@@ -3685,13 +3689,41 @@ export default function App() {
               );
             })()}
 
+            {/* One files section: upload first (the real workflow), then this
+                session's uploads, then the demo parts — each demo card wears
+                its own "Sample" badge instead of a section heading. */}
             {activeModule === "machining" && (
             <div className="project-group">
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Samples</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Your files</div>
               <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 14 }}>
-                Bundled demo parts — click to analyse
+                Upload your STEP files here (one or many) to plan &amp; quote — or
+                try a sample part
               </div>
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                <div className="part-card upload" onClick={() => fileRef.current?.click()}>
+                  <div style={{ fontSize: 26, color: "var(--text-2)" }}>+</div>
+                  <div className="card-sub">Upload STEP (one or many)</div>
+                </div>
+                {uploadedParts.map((f, i) => (
+                  <div
+                    className="part-card"
+                    key={`${f.name}:${f.size}:${i}`}
+                    onClick={() => void runAnalysis(f)}
+                    title={f.name}
+                  >
+                    <div className="thumb">
+                      <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
+                        <polygon points="16,44 80,26 104,40 40,58" fill="#3a4048" stroke="#565e68" />
+                        <polygon points="16,44 40,58 40,66 16,52" fill="#2e343b" stroke="#565e68" />
+                        <polygon points="40,58 104,40 104,48 40,66" fill="#333940" stroke="#565e68" />
+                      </svg>
+                    </div>
+                    <div className="card-name">{f.name.replace(/\.(step|stp)$/i, "")}</div>
+                    <div className="card-sub">
+                      {(f.size / 1024).toFixed(0)} KB · click to analyse
+                    </div>
+                  </div>
+                ))}
                 {SAMPLES.map((s) => (
                   <div
                     className="part-card"
@@ -3700,6 +3732,7 @@ export default function App() {
                     onClick={() => void loadSample(s)}
                   >
                     <div className="thumb">
+                      <span className="sample-badge">Sample file</span>
                       {s.bodies > 1 && <span className="body-badge">{s.bodies} Bodies</span>}
                       <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
                         <polygon points="12,42 78,24 108,38 42,58" fill="#3a4048" stroke="#565e68" />
@@ -3711,52 +3744,8 @@ export default function App() {
                     <div className="card-sub">{s.sub}</div>
                   </div>
                 ))}
-                <div className="part-card upload" onClick={() => fileRef.current?.click()}>
-                  <div style={{ fontSize: 26, color: "var(--text-2)" }}>+</div>
-                  <div className="card-sub">Upload STEP (one or many)</div>
-                </div>
               </div>
             </div>
-            )}
-
-            {activeModule === "machining" && uploadedParts.length > 0 && (
-              <div className="project-group" style={{ marginTop: 18 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
-                  Your uploads ({uploadedParts.length})
-                </div>
-                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 14 }}>
-                  Uploaded this session — click a part to analyse it
-                </div>
-                <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-                  {uploadedParts.map((f, i) => (
-                    <div
-                      className="part-card"
-                      key={`${f.name}:${f.size}:${i}`}
-                      onClick={() => void runAnalysis(f)}
-                      title={f.name}
-                    >
-                      <div className="thumb">
-                        <svg viewBox="0 0 120 70" width="100" aria-hidden="true">
-                          <polygon points="16,44 80,26 104,40 40,58" fill="#3a4048" stroke="#565e68" />
-                          <polygon points="16,44 40,58 40,66 16,52" fill="#2e343b" stroke="#565e68" />
-                          <polygon points="40,58 104,40 104,48 40,66" fill="#333940" stroke="#565e68" />
-                        </svg>
-                      </div>
-                      <div className="card-name">{f.name.replace(/\.(step|stp)$/i, "")}</div>
-                      <div className="card-sub">
-                        {(f.size / 1024).toFixed(0)} KB · click to analyse
-                      </div>
-                    </div>
-                  ))}
-                  <div
-                    className="part-card upload"
-                    onClick={() => fileRef.current?.click()}
-                  >
-                    <div style={{ fontSize: 26, color: "var(--text-2)" }}>+</div>
-                    <div className="card-sub">Add more</div>
-                  </div>
-                </div>
-              </div>
             )}
           </div>
         )}
