@@ -84,15 +84,18 @@ The uncomfortable truth first: **today almost nothing is stored server-side.** T
 - Admin panel must show device bindings per account and allow me to reset them.
 
 ### R3. Subscription plans & payments
-Planned tiers (INR, monthly; annual ≈ 2 months free):
+**The commercial model is now specified in two companion documents:** the Product Specification v2.0 (DDL-CNC-SPEC-001, from the product team) as amended by **SPEC_AMENDMENTS_v2.1.md** (repo root — the amendments win on conflict). Summary of the amended model:
 
-| Tier | Price | What it gates |
-|---|---|---|
-| Free | ₹0 | 3 quotes/month, watermarked/limited export |
-| Workshop | ~₹1,999/mo | Unlimited quotes, no AI assistant |
-| Pro | ~₹4,999/mo | AI assistant (Claude) + everything |
+| Plan | Billing | Bonus | Trial |
+|---|---|---|---|
+| Monthly | ₹TBD / seat / month | none | 30 days |
+| 6-Month | one-time, per seat | +15 days free | 30 days |
+| 12-Month | one-time, per seat | +2 months free | 30 days |
 
-- Additional machine seat = paid add-on (price TBD).
+- **Individual AND company accounts**: a company holds N named seats under one billing relationship; 2+ seats earn volume pricing (defaults −10% / −15% / custom at 10+). New customer-side role: Company Admin (buys/assigns seats, org usage view).
+- **Shared company workspace**: projects/files/estimates belong to the org — any seat opens a colleague's stored estimate without regeneration; storage quota pools org-level; audit records which seat did what.
+- **AI Assistant is a priced add-on entitlement** (per seat), not part of the base plan — the estimation core is deterministic, no AI.
+- The spec's coupon mechanism doubles as the trial invite codes for the 10-company cohort (R1).
 - **India first:** UPI + cards → Razorpay is my assumption (validate; recurring UPI/e-mandate support matters at these price points).
 - Europe later via Antutive AB (Stripe presumably) — don't build it now, but don't design it out.
 - Trials: competitor uses paid trials; we may do a 14-day trial or the Free tier serves that purpose — recommend one.
