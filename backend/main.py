@@ -1715,18 +1715,9 @@ class AssistantRequest(BaseModel):
 async def assistant(body: AssistantRequest):
     """Answer a question about the CURRENT plan context. Never raises for a
     missing/misconfigured key — the panel degrades to a static message."""
-    if anthropic is None:
-        return {
-            "available": False,
-            "message": "The assistant package is not installed on the server. "
-                       "Run `pip install anthropic` in the server environment.",
-        }
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return {
-            "available": False,
-            "message": "Set ANTHROPIC_API_KEY on the server to enable the assistant.",
-        }
+    gate = _ai_gate()
+    if gate is not None:
+        return gate
     if not body.question or not body.question.strip():
         raise HTTPException(status_code=400, detail="Question is required.")
 
@@ -1855,6 +1846,40 @@ def _generate_tasks() -> dict:
     }
 
 
+def _ai_gate() -> dict | None:
+    """THE subscription seam for every AI feature. Returns None when the
+    caller may use AI; otherwise the degrade payload.
+
+    Today the check is deployment-level (env). When accounts land, this is
+    the ONE place that swaps to a per-user entitlement lookup (brief R8:
+    entitlements(account, module, plan, expiry)) — server-side by design;
+    a client-side switch would be bypassable via direct API calls.
+      - AI_FEATURES=off  → licensed:false (UI shows the Pro upsell)
+      - key missing      → config problem (distinct message, licensed:true)
+    """
+    if os.environ.get("AI_FEATURES", "on").strip().lower() in ("off", "false", "0"):
+        return {
+            "available": False,
+            "licensed": False,
+            "message": "The AI Assistant is a Pro add-on and is not enabled "
+                       "on this plan. Contact us to enable it.",
+        }
+    if anthropic is None:
+        return {
+            "available": False,
+            "licensed": True,
+            "message": "The assistant package is not installed on the server. "
+                       "Run `pip install anthropic` in the server environment.",
+        }
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return {
+            "available": False,
+            "licensed": True,
+            "message": "Set ANTHROPIC_API_KEY on the server to enable the assistant.",
+        }
+    return None
+
+
 class AssistantGenerateRequest(BaseModel):
     task: str
     context: dict
@@ -1866,17 +1891,9 @@ class AssistantGenerateRequest(BaseModel):
 async def assistant_generate(body: AssistantGenerateRequest):
     """One-shot document generation grounded in the current plan context.
     Same degrade-don't-crash contract as /api/assistant."""
-    if anthropic is None:
-        return {
-            "available": False,
-            "message": "The assistant package is not installed on the server. "
-                       "Run `pip install anthropic` in the server environment.",
-        }
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return {
-            "available": False,
-            "message": "Set ANTHROPIC_API_KEY on the server to enable the assistant.",
-        }
+    gate = _ai_gate()
+    if gate is not None:
+        return gate
     tasks = _generate_tasks()
     task = tasks.get(body.task)
     if task is None:
