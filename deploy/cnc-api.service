@@ -6,6 +6,9 @@ After=network.target
 Type=simple
 User=cnc
 WorkingDirectory=/home/cnc/app
+# Tester box: the AI Lab (provider keys, routing, test bench) is an
+# operator-only surface — hard-disabled here until real auth exists.
+Environment=ADMIN_UI=off
 # conda run gives CadQuery its OCCT DLL/so context (same rule as dev)
 ExecStart=/home/cnc/miniforge3/bin/conda run --no-capture-output -n cnc-cadquery \
   uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 2

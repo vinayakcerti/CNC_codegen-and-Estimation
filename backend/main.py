@@ -1985,6 +1985,16 @@ def _claude_complete(system: str, messages: list, model: str, max_tokens: int) -
 # the browser (GET returns set/last4 only).
 
 
+def _admin_guard() -> None:
+    """AI Lab access control. Until accounts exist this is deployment-level:
+    ADMIN_UI=off (set in deploy/cnc-api.service for the tester box) returns
+    403 from every /api/admin/* endpoint — server-side, so hiding the button
+    is cosmetic, not the security boundary. With accounts, this becomes the
+    platform-admin role check."""
+    if os.environ.get("ADMIN_UI", "on").strip().lower() in ("off", "false", "0"):
+        raise HTTPException(status_code=403, detail="Admin panel is disabled on this server.")
+
+
 class AiProviderUpdate(BaseModel):
     id: str
     base_url: str | None = None
@@ -2005,6 +2015,7 @@ class AiTestRequest(BaseModel):
 
 @app.get("/api/admin/ai/config")
 def ai_config():
+    _admin_guard()
     from backend import ai_providers as _ai_lab
 
     return _ai_lab.masked_config()
@@ -2012,6 +2023,7 @@ def ai_config():
 
 @app.post("/api/admin/ai/provider")
 def ai_provider_update(body: AiProviderUpdate):
+    _admin_guard()
     from backend import ai_providers as _ai_lab
 
     if body.id not in _ai_lab.PRESETS:
@@ -2022,6 +2034,7 @@ def ai_provider_update(body: AiProviderUpdate):
 
 @app.post("/api/admin/ai/routing")
 def ai_routing_update(body: AiRoutingUpdate):
+    _admin_guard()
     from backend import ai_providers as _ai_lab
 
     _ai_lab.update_routing(body.routing)
@@ -2037,6 +2050,7 @@ _AI_TEST_PROMPT = (
 
 @app.post("/api/admin/ai/test")
 def ai_test(body: AiTestRequest):
+    _admin_guard()
     """The test bench. 'chat' = canned CNC question on any provider.
     'extraction' = run the bundled D01 test drawing through the extraction
     contract and score it against ground truth."""
