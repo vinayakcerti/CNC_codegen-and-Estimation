@@ -465,6 +465,63 @@ export interface AssistantResult {
 // One-click generators (quote letter / DFM note) + the cost advisor.
 export type AssistantTask = "cover_letter" | "dfm_note" | "cost_advisor";
 
+// ---- Drawing-to-quote -----------------------------------------------------
+// Extraction contract (red-teamed): every numeric field is mm; null means
+// "not readable on the drawing", NEVER a default.
+export interface DrawingFeature {
+  kind: string;
+  diameter_mm: number | null;
+  through: boolean | null;
+  depth_mm: number | null;
+  count: number;
+  thread_spec: string | null;
+  positions_mm: { x: number; y: number }[] | null;
+  tolerance_note: string | null;
+  source_page: number;
+  confidence: "high" | "medium" | "low";
+}
+
+export interface DrawingExtraction {
+  part: {
+    name: string | null;
+    material: string | null;
+    envelope_mm: { length: number; width: number; height: number } | null;
+    quantity: number | null;
+    drawing_number: string | null;
+    revision: string | null;
+  };
+  features: DrawingFeature[];
+  general: {
+    tolerance_standard: string | null;
+    surface_finish: string | null;
+    source_units?: string;
+    datum_description?: string | null;
+    notes: string[];
+  };
+  pages: { page: number; type: string; summary: string }[];
+  overall_confidence: "high" | "medium" | "low";
+  caveats: string[];
+}
+
+export interface DrawingExtractResult {
+  available: boolean;
+  extraction?: DrawingExtraction;
+  message?: string;
+  fixture?: boolean;
+}
+
+export interface DrawingCompareReport {
+  verdict: "CONSISTENT" | "MINOR_MISMATCH" | "MAJOR_MISMATCH";
+  envelope: { drawing_mm: number[]; step_mm: number[]; status: string };
+  features: {
+    feature: DrawingFeature;
+    status: string;
+    detail: string;
+    step_candidates: { id: string | null; name: string | null; x: number; y: number }[];
+  }[];
+  extra_in_step: { group: unknown; status: string; detail: string }[];
+}
+
 export interface AssistantGenerateResult {
   available: boolean;
   text?: string;
@@ -583,5 +640,42 @@ export const api = {
     postJson<AssistantGenerateResult>("/api/assistant/generate", {
       task, context, language, notes: notes || null,
     }),
+  // Drawing-to-quote flow
+  drawingExtract: async (file: File): Promise<DrawingExtractResult> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${BASE}/api/drawing/extract`, { method: "POST", body: form });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(detail.detail ?? `Extraction failed: ${res.status}`);
+    }
+    return res.json();
+  },
+  drawingSynthesize: async (
+    extraction: DrawingExtraction,
+  ): Promise<{ file: File; warnings: string[] }> => {
+    const r = await postJson<{ step_base64: string; filename: string; warnings: string[] }>(
+      "/api/drawing/synthesize", { extraction },
+    );
+    const bytes = Uint8Array.from(atob(r.step_base64), (c) => c.charCodeAt(0));
+    return {
+      file: new File([bytes], r.filename, { type: "application/octet-stream" }),
+      warnings: r.warnings,
+    };
+  },
+  drawingCompare: async (
+    extraction: DrawingExtraction,
+    stepFile: File,
+  ): Promise<{ report: DrawingCompareReport }> => {
+    const form = new FormData();
+    form.append("file", stepFile);
+    form.append("extraction_json", JSON.stringify(extraction));
+    const res = await fetch(`${BASE}/api/drawing/compare`, { method: "POST", body: form });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(detail.detail ?? `Comparison failed: ${res.status}`);
+    }
+    return res.json();
+  },
   sampleFile,
 };

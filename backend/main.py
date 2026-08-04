@@ -1945,3 +1945,138 @@ def _claude_complete(system: str, messages: list, model: str, max_tokens: int) -
         block.text for block in resp.content if getattr(block, "type", None) == "text"
     ).strip()
     return {"available": True, "text": text}
+
+
+# ---- Drawing-to-quote: extract -> synthesize -> (existing pipeline) --------
+# The extraction contract (system prompt + structured-output JSON schema) was
+# designed and adversarially red-teamed by an agent workflow; it lives in a
+# readable resource file so the whole contract is reviewable without code.
+
+_DRAWING_CONTRACT_PATH = os.path.join(_BACKEND_DIR, "drawing_extraction_contract.json")
+
+
+def _drawing_contract() -> dict:
+    with open(_DRAWING_CONTRACT_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+@app.post("/api/drawing/extract")
+async def drawing_extract(file: UploadFile = File(...)):
+    """Vision-LLM extraction of a PDF engineering drawing (multi-page) into
+    the structured contract. AI_EXTRACT_FIXTURE=<path.json> serves a canned
+    extraction instead — the deterministic test/dev mode."""
+    fixture = os.environ.get("AI_EXTRACT_FIXTURE")
+    if fixture:
+        try:
+            with open(fixture, encoding="utf-8") as f:
+                return {"available": True, "extraction": json.load(f), "fixture": True}
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"Fixture unreadable: {e}")
+    gate = _ai_gate()
+    if gate is not None:
+        return gate
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Drawing PDF too large (20 MB max).")
+
+    import base64
+
+    contract = _drawing_contract()
+    model = os.environ.get("ANTHROPIC_MODEL") or _ANTHROPIC_MODEL_DEFAULT
+    try:
+        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        resp = client.messages.create(
+            model=model,
+            max_tokens=8000,
+            system=contract["prompt"],
+            output_config={"format": {"type": "json_schema", "schema": contract["schema"]}},
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": base64.standard_b64encode(data).decode(),
+                        },
+                    },
+                    {"type": "text", "text": "Extract this engineering drawing."},
+                ],
+            }],
+        )
+    except anthropic.AuthenticationError:
+        return {
+            "available": False,
+            "message": "ANTHROPIC_API_KEY on the server was rejected. Check the key.",
+        }
+    except anthropic.APIStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Extraction failed: {e.message}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Extraction failed: {e}")
+
+    text = "".join(
+        block.text for block in resp.content if getattr(block, "type", None) == "text"
+    ).strip()
+    try:
+        extraction = json.loads(text)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="Extraction returned malformed JSON.")
+    return {"available": True, "extraction": extraction, "fixture": False}
+
+
+class DrawingSynthesizeRequest(BaseModel):
+    extraction: dict
+
+
+@app.post("/api/drawing/synthesize")
+async def drawing_synthesize(body: DrawingSynthesizeRequest):
+    """Build a prismatic STEP from a (user-confirmed) extraction. The client
+    feeds the returned STEP through the NORMAL analyze/strategy/estimate
+    pipeline — the drawing path reuses the whole engine."""
+    from modules.drawing_quote import synthesize_step
+
+    import base64
+
+    try:
+        step_bytes, warnings = synthesize_step(body.extraction)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Synthesis failed: {e}")
+    name = (body.extraction.get("part") or {}).get("drawing_number") or "drawing_part"
+    safe = "".join(ch for ch in str(name) if ch.isalnum() or ch in "-_") or "drawing_part"
+    return {
+        "step_base64": base64.b64encode(step_bytes).decode(),
+        "filename": f"{safe}_from_drawing.step",
+        "warnings": warnings,
+    }
+
+
+@app.post("/api/drawing/compare")
+async def drawing_compare(
+    file: UploadFile = File(...),
+    extraction_json: str = Form(...),
+):
+    """Deterministic drawing-vs-STEP comparison: per-feature MATCHED /
+    COUNT_MISMATCH / DIM_MISMATCH / MISSING_IN_STEP (+ EXTRA_IN_STEP),
+    envelope check with axis permutation, overall verdict."""
+    from modules.drawing_quote import compare as compare_features
+
+    try:
+        extraction = json.loads(extraction_json)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="extraction_json is not valid JSON.")
+    data = await file.read()
+    parse = parse_step_auto(data)
+    if not parse.get("success"):
+        raise HTTPException(status_code=400, detail=parse.get("message", "STEP parse failed."))
+    step_dims = {
+        "length": parse.get("length_mm"),
+        "width": parse.get("width_mm"),
+        "height": parse.get("height_mm"),
+    }
+    report = compare_features(extraction, parse.get("candidate_features") or [], step_dims)
+    return {"report": report}

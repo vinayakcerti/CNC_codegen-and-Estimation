@@ -25,6 +25,7 @@ import type { CustomMachine } from "./MachineSelect";
 import { BottomPanel } from "./BottomPanel";
 import { QuoteModal } from "./QuoteModal";
 import { AssistantPanel } from "./AssistantPanel";
+import { DrawingQuote } from "./DrawingQuote";
 import { lsGet, lsSet } from "./storage";
 
 type Tab = "overview" | "strategy" | "estimate" | "route";
@@ -1253,7 +1254,11 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<"projects" | "part" | "shop">("projects");
+  const [view, setView] = useState<"projects" | "part" | "shop" | "drawing">("projects");
+  // A customer PDF drawing going through the drawing-to-quote flow.
+  const [drawingPdf, setDrawingPdf] = useState<File | null>(null);
+  // One-line context banner after arriving from the drawing flow.
+  const [flowNote, setFlowNote] = useState<string | null>(null);
   // Module launcher selection — machining is the only live module, so it's
   // the default (its samples/uploads render below the cards).
   const [activeModule, setActiveModule] = useState<ModuleKey>("machining");
@@ -3083,6 +3088,21 @@ export default function App() {
   function onFile(e: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     if (!files.length) return;
+    // PDF drawings route into the drawing-to-quote flow (first PDF wins);
+    // any STEP files picked alongside still land as part cards below.
+    const pdf = files.find((f) => /\.pdf$/i.test(f.name));
+    const steps = files.filter((f) => !/\.pdf$/i.test(f.name));
+    if (pdf) {
+      setDrawingPdf(pdf);
+      setView("drawing");
+    }
+    if (!steps.length) {
+      e.target.value = "";
+      return;
+    }
+    const files2 = steps;
+    files.length = 0;
+    files.push(...files2);
     // Add every selected file to the project (dedupe by name+size), so the
     // user can drop in 5–6 STEPs at once and browse them as cards.
     setUploadedParts((prev) => {
@@ -3101,8 +3121,9 @@ export default function App() {
         return next;
       });
     }
-    // Open the first one immediately so there's instant feedback.
-    void runAnalysis(files[0]);
+    // Open the first one immediately so there's instant feedback — unless a
+    // PDF routed us into the drawing flow; then STEPs just become cards.
+    if (!pdf) void runAnalysis(files[0]);
     e.target.value = ""; // let the same files be re-picked later
   }
 
@@ -3637,7 +3658,7 @@ export default function App() {
           <input
             ref={fileRef}
             type="file"
-            accept=".step,.stp"
+            accept=".step,.stp,.pdf"
             multiple
             style={{ display: "none" }}
             onChange={onFile}
@@ -3858,9 +3879,38 @@ export default function App() {
           </div>
         )}
 
+        {view === "drawing" && drawingPdf && (
+          <DrawingQuote
+            pdf={drawingPdf}
+            rateHr={rateHr}
+            setupCharge={setupCharge}
+            currency={sym}
+            onQuote={(file, note) => {
+              setFlowNote(note ?? null);
+              setDrawingPdf(null);
+              setView("part");
+              void runAnalysis(file);
+            }}
+            onClose={() => {
+              setDrawingPdf(null);
+              setView("projects");
+            }}
+          />
+        )}
+
         {view === "part" && (
         <div style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0 }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+            {flowNote && (
+              <div className="scope-note" style={{ margin: 0, borderRadius: 0, display: "flex", alignItems: "center" }}>
+                <span>📐 {flowNote}</span>
+                <button
+                  className="btn"
+                  style={{ marginLeft: "auto", padding: "0 8px", fontSize: 11 }}
+                  onClick={() => setFlowNote(null)}
+                >✕</button>
+              </div>
+            )}
             <div style={{ flex: 1, position: "relative", background: "var(--canvas-bg)", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
               {!analysis && !loading && (
                 <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
