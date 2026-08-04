@@ -1735,7 +1735,7 @@ async def assistant(body: AssistantRequest):
         ),
     })
 
-    result = _claude_complete(_ASSISTANT_SYSTEM_PROMPT, messages, model, 1000)
+    result = _routed_complete("copilot", _ASSISTANT_SYSTEM_PROMPT, messages, 1000, model)
     if not result["available"]:
         return result
     answer = result["text"] or (
@@ -1846,6 +1846,36 @@ def _generate_tasks() -> dict:
     }
 
 
+def _anthropic_key() -> str:
+    """Anthropic key: AI Lab stored key wins, env fallback."""
+    from backend import ai_providers as _ai_lab
+
+    return (
+        _ai_lab.provider_settings("anthropic").get("api_key")
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or ""
+    )
+
+
+def _routed_complete(task: str, system: str, messages: list, max_tokens: int,
+                     default_model: str) -> dict:
+    """Run a task on its AI-Lab-routed provider, else the Anthropic default.
+    Returns the panel contract: {available, text?/message?}."""
+    from backend import ai_providers as _ai_lab
+
+    route = _ai_lab.resolve_task(task)
+    if route is not None:
+        pid, model = route
+        r = _ai_lab.complete(pid, model, system, messages, max_tokens)
+        if not r["ok"]:
+            return {
+                "available": False,
+                "message": f"Routed provider '{pid}' failed: {r['error']}",
+            }
+        return {"available": True, "text": r["text"]}
+    return _claude_complete(system, messages, default_model, max_tokens)
+
+
 def _ai_gate() -> dict | None:
     """THE subscription seam for every AI feature. Returns None when the
     caller may use AI; otherwise the degrade payload.
@@ -1871,11 +1901,12 @@ def _ai_gate() -> dict | None:
             "message": "The assistant package is not installed on the server. "
                        "Run `pip install anthropic` in the server environment.",
         }
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not _anthropic_key():
         return {
             "available": False,
             "licensed": True,
-            "message": "Set ANTHROPIC_API_KEY on the server to enable the assistant.",
+            "message": "Add an Anthropic API key in the AI Lab (or set ANTHROPIC_API_KEY) "
+                       "to enable the assistant.",
         }
     return None
 
@@ -1905,9 +1936,10 @@ async def assistant_generate(body: AssistantGenerateRequest):
         f"Language: {language}\n"
         f"Notes from the shop owner: {notes or '(none)'}"
     )
-    result = _claude_complete(
-        task["system"], [{"role": "user", "content": user_msg}],
-        task["model"], task["max_tokens"],
+    routing_key = "advisor" if body.task == "cost_advisor" else "generate_light"
+    result = _routed_complete(
+        routing_key, task["system"], [{"role": "user", "content": user_msg}],
+        task["max_tokens"], task["model"],
     )
     if not result["available"]:
         return result
@@ -1923,7 +1955,7 @@ def _claude_complete(system: str, messages: list, model: str, max_tokens: int) -
     REJECT non-default values with a 400 (the old temperature=0.3 here was a
     latent bug that would have broken the assistant on first activation).
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = _anthropic_key()
     try:
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
@@ -1945,6 +1977,153 @@ def _claude_complete(system: str, messages: list, model: str, max_tokens: int) -
         block.text for block in resp.content if getattr(block, "type", None) == "text"
     ).strip()
     return {"available": True, "text": text}
+
+
+# ---- AI Lab: pluggable providers, keys, routing, test bench ----------------
+# Platform-admin surface (no auth yet — becomes admin-only with accounts).
+# Keys are stored server-side in a gitignored file and NEVER round-trip to
+# the browser (GET returns set/last4 only).
+
+
+class AiProviderUpdate(BaseModel):
+    id: str
+    base_url: str | None = None
+    model: str | None = None
+    # None = keep stored key; "" = clear; anything else = replace
+    api_key: str | None = None
+
+
+class AiRoutingUpdate(BaseModel):
+    routing: dict
+
+
+class AiTestRequest(BaseModel):
+    provider: str
+    model: str
+    test: str = "chat"  # chat | extraction
+
+
+@app.get("/api/admin/ai/config")
+def ai_config():
+    from backend import ai_providers as _ai_lab
+
+    return _ai_lab.masked_config()
+
+
+@app.post("/api/admin/ai/provider")
+def ai_provider_update(body: AiProviderUpdate):
+    from backend import ai_providers as _ai_lab
+
+    if body.id not in _ai_lab.PRESETS:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{body.id}'.")
+    _ai_lab.update_provider(body.id, body.base_url, body.model, body.api_key)
+    return _ai_lab.masked_config()
+
+
+@app.post("/api/admin/ai/routing")
+def ai_routing_update(body: AiRoutingUpdate):
+    from backend import ai_providers as _ai_lab
+
+    _ai_lab.update_routing(body.routing)
+    return _ai_lab.masked_config()
+
+
+_AI_TEST_PROMPT = (
+    "You are a CNC machining copilot. In 3 short bullet points: what decides "
+    "whether a Ø10 through hole in 30mm aluminium is drilled or bored, and "
+    "what spindle speed range would you start at with an HSS drill?"
+)
+
+
+@app.post("/api/admin/ai/test")
+def ai_test(body: AiTestRequest):
+    """The test bench. 'chat' = canned CNC question on any provider.
+    'extraction' = run the bundled D01 test drawing through the extraction
+    contract and score it against ground truth."""
+    from backend import ai_providers as _ai_lab
+
+    if body.test == "chat":
+        r = _ai_lab.complete(
+            body.provider, body.model, "You answer briefly and concretely.",
+            [{"role": "user", "content": _AI_TEST_PROMPT}], 500,
+        )
+        return {"test": "chat", **r}
+
+    if body.test != "extraction":
+        raise HTTPException(status_code=400, detail="test must be 'chat' or 'extraction'.")
+    settings = _ai_lab.provider_settings(body.provider)
+    if settings["type"] != "anthropic":
+        return {"test": "extraction", "ok": False, "latency_ms": 0,
+                "error": "Only Anthropic-protocol providers accept PDF input today."}
+    pdf_path = os.path.join(_SAMPLES_DIR, "D01_plate_drawing.pdf")
+    truth_path = os.path.join(_SAMPLES_DIR, "D01_plate_drawing.extract.json")
+    if not (os.path.isfile(pdf_path) and os.path.isfile(truth_path)):
+        raise HTTPException(status_code=500, detail="Test drawing fixtures missing.")
+
+    import base64
+    import time
+
+    contract = _drawing_contract()
+    t0 = time.monotonic()
+    try:
+        client = anthropic.Anthropic(api_key=settings["api_key"] or _anthropic_key())
+        with open(pdf_path, "rb") as f:
+            pdf_b64 = base64.standard_b64encode(f.read()).decode()
+        resp = client.messages.create(
+            model=body.model, max_tokens=8000,
+            system=contract["prompt"],
+            output_config={"format": {"type": "json_schema", "schema": contract["schema"]}},
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "document",
+                     "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64}},
+                    {"type": "text", "text": "Extract this engineering drawing."},
+                ],
+            }],
+        )
+        text = "".join(
+            b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+        extraction = json.loads(text)
+    except Exception as e:
+        return {"test": "extraction", "ok": False,
+                "latency_ms": int((time.monotonic() - t0) * 1000),
+                "error": f"{type(e).__name__}: {e}"}
+
+    truth = json.load(open(truth_path, encoding="utf-8"))
+    checks = []
+
+    def _chk(name, ok, got):
+        checks.append({"name": name, "ok": bool(ok), "got": str(got)[:120]})
+
+    env_t = truth["part"]["envelope_mm"]
+    env_e = (extraction.get("part") or {}).get("envelope_mm") or {}
+    _chk("envelope 100x60x30",
+         all(abs(float(env_e.get(k) or 0) - env_t[k]) <= 0.5 for k in ("length", "width", "height")),
+         env_e)
+    _chk("material AL 6061",
+         "6061" in str((extraction.get("part") or {}).get("material") or ""),
+         (extraction.get("part") or {}).get("material"))
+    holes = [f for f in extraction.get("features") or []
+             if str(f.get("kind", "")).lower() in ("hole", "tapped_hole")]
+    _chk("one Ø10 hole group, count 4",
+         any(abs(float(h.get("diameter_mm") or 0) - 10.0) <= 0.15
+             and int(h.get("count") or 0) == 4 for h in holes),
+         [(h.get("diameter_mm"), h.get("count")) for h in holes])
+    _chk("holes marked through",
+         any(h.get("through") is True for h in holes),
+         [h.get("through") for h in holes])
+    _chk("no invented depths",
+         all(h.get("depth_mm") in (None, 0) for h in holes if h.get("through")),
+         [h.get("depth_mm") for h in holes])
+    score = sum(1 for c in checks if c["ok"])
+    return {
+        "test": "extraction", "ok": True,
+        "latency_ms": int((time.monotonic() - t0) * 1000),
+        "score": f"{score}/{len(checks)}",
+        "checks": checks,
+        "extraction": extraction,
+    }
 
 
 # ---- Drawing-to-quote: extract -> synthesize -> (existing pipeline) --------
@@ -1984,9 +2163,27 @@ async def drawing_extract(file: UploadFile = File(...)):
     import base64
 
     contract = _drawing_contract()
+    # AI Lab routing: extraction may be pinned to a specific provider/model.
+    # Only Anthropic-protocol providers accept PDFs natively today — a route
+    # to any other provider degrades with an honest message.
+    from backend import ai_providers as _ai_lab
+
     model = os.environ.get("ANTHROPIC_MODEL") or _ANTHROPIC_MODEL_DEFAULT
+    _extract_key = ""
+    route = _ai_lab.resolve_task("extraction")
+    if route is not None:
+        pid, routed_model = route
+        settings = _ai_lab.provider_settings(pid)
+        if settings["type"] != "anthropic":
+            return {
+                "available": False,
+                "message": f"Provider '{pid}' cannot read PDF drawings yet — "
+                           "route extraction to an Anthropic model in the AI Lab.",
+            }
+        model = routed_model
+        _extract_key = settings["api_key"]
     try:
-        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        client = anthropic.Anthropic(api_key=_extract_key or _anthropic_key())
         resp = client.messages.create(
             model=model,
             max_tokens=8000,

@@ -26,6 +26,7 @@ import { BottomPanel } from "./BottomPanel";
 import { QuoteModal } from "./QuoteModal";
 import { AssistantPanel } from "./AssistantPanel";
 import { DrawingQuote } from "./DrawingQuote";
+import { AiLab } from "./AiLab";
 import { lsGet, lsSet } from "./storage";
 
 type Tab = "overview" | "strategy" | "estimate" | "route";
@@ -1254,7 +1255,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<"projects" | "part" | "shop" | "drawing">("projects");
+  const [view, setView] = useState<"projects" | "part" | "shop" | "drawing" | "ailab">("projects");
   // A customer PDF drawing going through the drawing-to-quote flow.
   const [drawingPdf, setDrawingPdf] = useState<File | null>(null);
   // One-line context banner after arriving from the drawing flow.
@@ -3519,6 +3520,11 @@ export default function App() {
           title="Shop Library — your machines & rate cards"
           onClick={() => setView("shop")}
         >▤</button>
+        <button
+          className={view === "ailab" ? "active" : ""}
+          title="AI Lab — providers, keys & test bench"
+          onClick={() => setView("ailab")}
+        >⚗</button>
         <button title="Team">◈</button>
       </div>
 
@@ -3878,6 +3884,8 @@ export default function App() {
             )}
           </div>
         )}
+
+        {view === "ailab" && <AiLab />}
 
         {view === "drawing" && drawingPdf && (
           <DrawingQuote

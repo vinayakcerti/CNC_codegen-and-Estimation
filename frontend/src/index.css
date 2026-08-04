@@ -840,6 +840,28 @@ td.conf-low { color: #d64545; font-weight: 600; }
   font-size: 12px; padding: 5px 8px; margin: 4px 0;
   border-left: 3px solid var(--text-2); background: var(--bg-2); border-radius: 4px;
 }
+
+/* ---- AI Lab ---- */
+.ai-provider {
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px;
+  background: var(--bg-2);
+}
+.ai-provider-grid {
+  display: grid; grid-template-columns: 1fr 240px; gap: 8px; margin-top: 8px;
+}
+.ai-provider .text-input {
+  background: var(--bg-1); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-0); font-size: 12px; padding: 6px 8px;
+}
+.ai-key-chip {
+  font-size: 10.5px; background: rgba(46, 158, 91, 0.14); color: #2e9e5b;
+  padding: 2px 8px; border-radius: 10px;
+}
+.ai-test-result {
+  margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--bg-1);
+  border-left: 3px solid #2e9e5b;
+}
+.ai-test-result.fail { border-left-color: #d64545; }
 .assistant-chip:disabled { opacity: 0.5; cursor: default; }
 .assistant-input-row {
   display: flex; align-items: flex-end; gap: 8px;
