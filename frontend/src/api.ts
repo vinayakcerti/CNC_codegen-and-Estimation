@@ -426,6 +426,12 @@ export interface AssistantContext {
   filename: string;
   material: string;
   machine: string | null;
+  // Display currency symbol (letters/advisor quote prices in it)
+  currency: string;
+  // Batch quantity of parts in the job
+  quantity: number;
+  // Part envelope L x W x H — null before dims are known
+  part_dims_mm: [number, number, number] | null;
   setups: {
     label: string;
     op_count: number;
@@ -443,12 +449,25 @@ export interface AssistantContext {
     setups: number;
     total: number;
   };
+  // Compact feature list (capped) — grounds the DFM note & letters
+  features: { type: string; name: string }[];
+  // Engine-detected machinability issues — the DFM note's source material
+  dfm_issues: { severity: string; feature: string; message: string }[];
   excluded_count: number;
 }
 
 export interface AssistantResult {
   available: boolean;
   answer?: string;
+  message?: string;
+}
+
+// One-click generators (quote letter / DFM note) + the cost advisor.
+export type AssistantTask = "cover_letter" | "dfm_note" | "cost_advisor";
+
+export interface AssistantGenerateResult {
+  available: boolean;
+  text?: string;
   message?: string;
 }
 
@@ -553,5 +572,16 @@ export const api = {
   },
   assistant: (question: string, context: AssistantContext, history?: AssistantChatMessage[]) =>
     postJson<AssistantResult>("/api/assistant", { question, context, history }),
+  // One-click generators: task-specific system prompt on the server; the
+  // context is the same compact plan summary the copilot sees.
+  assistantGenerate: (
+    task: AssistantTask,
+    context: AssistantContext,
+    language: string,
+    notes?: string,
+  ) =>
+    postJson<AssistantGenerateResult>("/api/assistant/generate", {
+      task, context, language, notes: notes || null,
+    }),
   sampleFile,
 };

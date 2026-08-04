@@ -2731,9 +2731,24 @@ export default function App() {
         setups: Math.round(estCore.setupsCost),
         total: Math.round(estCore.materialCost + estCore.machining + estCore.setupsCost),
       },
+      currency: sym,
+      quantity: qty,
+      part_dims_mm: analysis.dimensions_mm
+        ? [
+            Math.round(analysis.dimensions_mm.length * 10) / 10,
+            Math.round(analysis.dimensions_mm.width * 10) / 10,
+            Math.round(analysis.dimensions_mm.height * 10) / 10,
+          ]
+        : null,
+      // Compact + capped: the generators need names/types, not geometry.
+      features: (analysis.candidates ?? []).slice(0, 30).map((c) => ({
+        type: c.feature_type || "Feature",
+        name: c.feature_name || "Feature",
+      })),
+      dfm_issues: (analysis.dfm?.issues ?? []).slice(0, 20),
       excluded_count: excluded.size,
     };
-  }, [analysis, strategy, estCore, machineSel, excluded]);
+  }, [analysis, strategy, estCore, machineSel, excluded, sym, qty]);
 
   async function fetchWeldment(file: File) {
     setWmLoading(true);

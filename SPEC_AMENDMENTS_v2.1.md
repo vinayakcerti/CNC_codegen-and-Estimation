@@ -52,6 +52,13 @@ For company accounts, projects, STEP files and estimates belong to the **organis
 
 ## A5 — AI Assistant is a priced add-on (new; aligns with Architect Brief R8)
 
+- **What the add-on contains (implemented July 2026):**
+  1. *Plan copilot* — grounded Q&A about the current plan (setups, times, estimate).
+  2. *Quotation letter writer* — one click drafts the customer-facing quote email (English / Hindi / Kannada / Tamil), total price only, internal cost lines never leak, missing commercial facts become bracketed placeholders.
+  3. *DFM feedback note* — turns the engine's machinability findings into a polite design-improvement note the shop sends its customer.
+  4. *Cost advisor* — ranks the levers to hit a target price (material, batch size, tolerance, feature exclusions); suggests only, never computes prices — the engine recomputes.
+  - Roadmap (not in v1): batch RFQ triage across multiple uploads; tolerance/thread extraction from 2D PDF drawings.
+- Model tiering: light generation on the cheapest model tier, advisory reasoning on the mid tier — per-task, env-configurable; est. AI cost <₹50/seat/month at heavy usage, so add-on margin is pricing-driven, not cost-driven.
 - The conversational assistant is an **entitlement**, off by default, purchasable per seat (monthly add-on) or bundled into a higher-priced seat — Product Owner decision pending.
 - Requires a server-side LLM API key and per-seat usage metering (assistant calls appear in the admin usage metrics, §10.1).
 - The subscription schema must model this as an entitlement row, not a plan variant — consistent with the module-entitlement architecture (Architect Brief R8) so future modules (Fabrication & Welding, Sheet Metal & Laser, 3D Printing) plug into the same mechanism.
