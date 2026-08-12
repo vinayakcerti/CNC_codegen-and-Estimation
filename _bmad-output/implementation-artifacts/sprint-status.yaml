@@ -81,22 +81,56 @@ development_status:
   18-3-vmc-sign-off: backlog
   epic-18-retrospective: optional
 
-  epic-19: in-progress
-  19-1-axisymmetric-detection: in-progress
-  19-2-od-turning-region-detection: backlog
-  19-3-groove-detection-turning: backlog
-  19-4-id-bore-detection-turning: backlog
-  19-5-undercut-and-thread-region-flagging: backlog
-  19-6-long-shaft-tailstock-flag: backlog
-  19-7-false-positive-guard-milled-round-parts: backlog
-  19-8-turning-operation-planning: backlog
-  19-9-lathe-tool-selection: backlog
-  19-10-lathe-gcode-output: backlog
+  epic-19: done  # lathe turning shipped; all gates green (run_lathe_gcode_regression)
+  19-1-axisymmetric-detection: done
+  19-2-od-turning-region-detection: done
+  19-3-groove-detection-turning: done  # T08 ID groove PASS
+  19-4-id-bore-detection-turning: done
+  19-5-undercut-and-thread-region-flagging: backlog  # T11 passes but thread zone only region-detected
+  19-6-long-shaft-tailstock-flag: done  # T10 PASS
+  19-7-false-positive-guard-milled-round-parts: done  # T09 trap PASS
+  19-8-turning-operation-planning: done  # modules/turning_planner.py
+  19-9-lathe-tool-selection: done
+  19-10-lathe-gcode-output: done
   epic-19-retrospective: optional
 
-  epic-20: backlog
-  20-1-synthetic-lathe-step-pack-t04-t11: backlog
+  epic-20: in-progress
+  20-1-synthetic-lathe-step-pack-t04-t11: done  # T01-T11 + TM01 in test_samples
   20-2-operator-real-job-step-files: backlog
-  20-3-lathe-golden-regression-suite: backlog
+  20-3-lathe-golden-regression-suite: done  # run_lathe_gcode_regression + T-samples in feature detection goldens
   20-4-vmc-lathe-combined-smoke-test: backlog
   epic-20-retrospective: optional
+
+  # ---- July 21-22 launch-readiness sprints (docs at repo root:
+  # ARCHITECT_BRIEF.md, SPEC_AMENDMENTS_v2.1.md, DEMO_SCRIPT.md) ----
+
+  epic-21-ai-assistant-suite: done  # @545c5c0 + @5f06165
+  21-1-plan-copilot-activation-fix: done   # latent temperature=0.3 400 fixed
+  21-2-quote-letter-writer-multilingual: done
+  21-3-dfm-customer-note: done
+  21-4-cost-advisor: done
+  21-5-subscription-gate-seam: done        # _ai_gate(), AI_FEATURES env
+  21-6-real-model-validation: blocked      # awaiting ANTHROPIC_API_KEY
+
+  epic-22-drawing-to-quote: done  # @29383c6; fixture-verified end to end
+  22-1-extraction-contract-red-teamed: done
+  22-2-step-synthesis-cadquery: done       # holes+envelope v1; pockets/slots backlog
+  22-3-deterministic-compare-verdicts: done
+  22-4-drawing-flow-ui-mismatch-highlight: done
+  22-5-drawing-quote-regression-gate: done # tests/run_drawing_quote_regression.py
+  22-6-real-drawing-extraction-validation: blocked  # awaiting API key
+  22-7-pockets-slots-synthesis: backlog
+
+  epic-23-ai-lab: done  # @f6f9009 + @9808bba
+  23-1-provider-adapter-anthropic-openai-compat: done
+  23-2-key-vault-ui-masked: done
+  23-3-per-task-routing: done
+  23-4-test-bench-chat-and-drawing-score: done
+  23-5-operator-only-gate-admin-ui-env: done
+
+  epic-24-tester-launch-ux: done  # samples/launcher/thumbnails/topbar @2adc049..e2f32fc
+  24-1-confidential-sample-removed-allowlist: done
+  24-2-synthetic-weldment-sample: done
+  24-3-module-launcher-interactive: done
+  24-4-per-part-route-steps-fix: done
+  24-5-part-thumbnails-background-queue: done
